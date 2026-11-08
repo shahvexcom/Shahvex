@@ -1,0 +1,4 @@
+# Inventory only. Do NOT pip install or upgrade the working environment.
+# Reuse the faster-whisper version already installed in C:\Shahvex-AI\.venv.
+faster-whisper
+# All other Python imports in this package use the standard library.

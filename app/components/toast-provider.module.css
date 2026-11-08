@@ -1,0 +1,13 @@
+.toast [role="status"] {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+@media (max-width: 480px) {
+  .toast {
+    max-width: calc(100vw - 32px) !important;
+  }
+}

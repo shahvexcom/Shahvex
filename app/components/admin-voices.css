@@ -1,0 +1,308 @@
+.admin-voices-section {
+  margin-top: 28px;
+  padding-top: 26px;
+  border-top: 1px solid #f0e8e1;
+}
+
+.admin-voices-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 17px;
+}
+
+.admin-voices-heading p {
+  margin: 0 0 7px;
+  color: #a49c95;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 1.1px;
+}
+
+.admin-voices-heading h2 {
+  margin: 0;
+  color: #3e362f;
+  font-size: 22px;
+}
+
+.admin-voices-heading span {
+  display: block;
+  margin-top: 7px;
+  color: #9e968f;
+  font-size: 11px;
+}
+
+.admin-voice-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-voice-card {
+  min-width: 0;
+  padding: 17px;
+  border: 1px solid #f2eae3;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.admin-voice-card > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-voice-card > header > span {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  flex: none;
+  border-radius: 10px;
+  background: #fef6ef;
+  color: #e96016;
+  font-size: 17px;
+}
+
+.admin-voice-card > header > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-voice-card h3 {
+  overflow: hidden;
+  margin: 0;
+  color: #443c35;
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.admin-voice-card header p {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: #a79f98;
+  font-size: 9px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.admin-voice-card header em {
+  padding: 5px 7px;
+  border-radius: 99px;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.admin-voice-card header em.active { background: #e7f8f0; color: #138861; }
+.admin-voice-card header em.inactive { background: #f1f2f5; color: #989089; }
+
+.admin-voice-providers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 16px 0;
+}
+
+.admin-voice-providers > span {
+  position: relative;
+  min-width: 0;
+  padding: 10px 9px 10px 31px;
+  border-radius: 9px;
+  background: #f8f9fc;
+}
+
+.admin-voice-providers svg {
+  position: absolute;
+  top: 11px;
+  left: 9px;
+  color: #eb6216;
+}
+
+.admin-voice-providers small,
+.admin-voice-providers b {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.admin-voice-providers small { color: #a8a099; font-size: 8px; }
+.admin-voice-providers b { margin-top: 3px; color: #5f5750; font-size: 9px; }
+.admin-voice-providers .missing svg,
+.admin-voice-providers .missing b { color: #b5ada6; }
+
+.admin-voice-assigned {
+  display: flex;
+  min-height: 45px;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #f8f0e9;
+  border-radius: 9px;
+}
+
+.admin-voice-assigned > svg { flex: none; margin-top: 2px; color: #908881; }
+.admin-voice-assigned > div { min-width: 0; }
+.admin-voice-assigned small { display: block; color: #a59d96; font-size: 8px; }
+.admin-voice-assigned > div > b { display: block; margin-top: 5px; color: #938b84; font-size: 9px; }
+.admin-voice-assigned p { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
+.admin-voice-assigned p span { padding: 4px 6px; border-radius: 6px; background: #fef6ef; color: #e85f15; font-size: 8px; font-weight: 700; }
+
+.admin-voice-card > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 13px;
+}
+
+.admin-voice-card > footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #eee6df;
+  border-radius: 8px;
+  background: #fff;
+  color: #807871;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.admin-voice-card > footer button:hover { border-color: #efe7e0; background: #fff7f0; color: #e96016; }
+.admin-voice-card > footer button.danger { color: #c9505b; }
+.admin-voice-card > footer button.danger:hover { border-color: #f0d5d9; background: #fff1f2; }
+
+.admin-voice-skeleton { height: 245px; border-radius: 13px; }
+
+.admin-voices-empty {
+  display: grid;
+  min-height: 210px;
+  place-items: center;
+  align-content: center;
+  border: 1px dashed #ede5de;
+  border-radius: 13px;
+  background: #fff;
+  text-align: center;
+}
+
+.admin-voices-empty > svg { color: #eb6316; font-size: 29px; }
+.admin-voices-empty h3 { margin: 10px 0 4px; color: #49413a; font-size: 14px; }
+.admin-voices-empty p { margin: 0; color: #a59d96; font-size: 10px; }
+
+.admin-voice-modal { width: min(100%, 720px); }
+
+.admin-voice-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px;
+}
+
+.admin-voice-form-grid label,
+.admin-voice-bpo-picker legend {
+  color: #787069;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.admin-voice-form-grid input {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid #ede5de;
+  border-radius: 7px;
+  outline: 0;
+  background: #fff;
+  color: #463e37;
+  font-size: 10px;
+}
+
+.admin-voice-form-grid > label > .custom-dropdown { margin-top: 6px; }
+.admin-voice-form-grid input:focus { border-color: #eb6316; }
+
+.admin-voice-bpo-picker {
+  margin: 17px 0 0;
+  padding: 13px;
+  border: 1px solid #f2eae3;
+  border-radius: 10px;
+}
+
+.admin-voice-bpo-picker legend {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0;
+}
+
+.admin-voice-select-all {
+  flex: none;
+  padding: 6px 9px;
+  border: 1px solid #f4ece5;
+  border-radius: 7px;
+  background: #fff9f2;
+  color: #e96015;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.admin-voice-select-all:hover { border-color: #e0d8d1; background: #fdf5ee; }
+
+.admin-voice-bpo-picker > div {
+  display: grid;
+  margin-top: 10px;
+  max-height: 185px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.admin-voice-bpo-picker label {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #f7f8fb;
+  cursor: pointer;
+}
+
+.admin-voice-bpo-picker label.is-selected { border-color: #f2eae3; background: #fff7f0; }
+.admin-voice-bpo-picker label input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.admin-voice-bpo-switch { display: flex; width: 29px; height: 17px; flex: none; align-items: center; padding: 2px; border-radius: 99px; background: #d9d1ca; transition: background .18s ease; }
+.admin-voice-bpo-switch i { width: 13px; height: 13px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(42 50 72 / 25%); transition: transform .18s ease; }
+.admin-voice-bpo-picker label input:checked + .admin-voice-bpo-switch { background: #ea6016; }
+.admin-voice-bpo-picker label input:checked + .admin-voice-bpo-switch i { transform: translateX(12px); }
+.admin-voice-bpo-picker label input:focus-visible + .admin-voice-bpo-switch { outline: 2px solid #d2cac3; outline-offset: 2px; }
+.admin-voice-bpo-picker label > span:not(.admin-voice-bpo-switch) { min-width: 0; flex: 1; }
+.admin-voice-bpo-picker label b,
+.admin-voice-bpo-picker label small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.admin-voice-bpo-picker label b { color: #5e564f; font-size: 10px; }
+.admin-voice-bpo-picker label small { margin-top: 3px; color: #a9a19a; font-size: 8px; }
+.admin-voice-bpo-picker label em { color: #a29a93; font-size: 7px; font-style: normal; }
+.admin-voice-bpo-picker > p { color: #a69e97; font-size: 10px; }
+
+.admin-voice-delete > p { color: #968e87; font-size: 11px; }
+
+@media (max-width: 1080px) {
+  .admin-voice-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 680px) {
+  .admin-voices-heading { align-items: stretch; flex-direction: column; }
+  .admin-voices-heading .admin-primary { justify-content: center; }
+  .admin-voice-grid { grid-template-columns: 1fr; }
+  .admin-voice-form-grid,
+  .admin-voice-bpo-picker > div { grid-template-columns: 1fr; }
+}

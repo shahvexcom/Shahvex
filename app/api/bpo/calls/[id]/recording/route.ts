@@ -1,0 +1,53 @@
+import { cookies } from "next/headers";
+import { db } from "@/lib/database";
+import { BPO_SESSION_COOKIE, readSession } from "@/lib/session";
+import { decryptCredential } from "@/app/api/admin/credentials/route";
+
+export const runtime = "nodejs";
+
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const session = await readSession((await cookies()).get(BPO_SESSION_COOKIE)?.value);
+  if (session?.role !== "BPO") return Response.json({ message: "Unauthenticated" }, { status: 401 });
+
+  const { id } = await params;
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ message: "Invalid call ID." }, { status: 400 });
+  const result = await (await db()).query(`SELECT c.recording_id,c.recording_url,t.secret_ciphertext
+    FROM agent_calls c
+    LEFT JOIN bpo_created_agents b ON b.agent_id=c.agent_id
+    LEFT JOIN agent_credentials ac ON ac.agent_id=c.agent_id AND ac.provider='TELNYX'
+    LEFT JOIN ai_credentials t ON t.id=ac.credential_id
+    WHERE c.id=$1 AND ((b.bpo_id=$2) OR (c.agent_id=$2 AND c.call_type='QUICK_DIAL')) LIMIT 1`, [id, session.agentId]);
+  const call = result.rows[0];
+  if (!call) return Response.json({ message: "Call not found." }, { status: 404 });
+
+  let audioUrl = String(call.recording_url || "");
+  if (call.recording_id && call.secret_ciphertext) {
+    const metadata = await fetch(`https://api.telnyx.com/v2/recordings/${encodeURIComponent(call.recording_id)}`, {
+      headers: { Authorization: `Bearer ${decryptCredential(call.secret_ciphertext)}`, Accept: "application/json" },
+      cache: "no-store",
+    });
+    const body = await metadata.json().catch(() => ({}));
+    if (metadata.ok) audioUrl = String(body?.data?.download_urls?.mp3 || body?.data?.download_urls?.wav || audioUrl);
+  }
+  if (!audioUrl) return Response.json({ message: "Recording is not ready yet." }, { status: 404 });
+
+  const requestedRange = request.headers.get("range");
+  const audio = await fetch(audioUrl, { cache: "no-store", headers: requestedRange ? { Range: requestedRange } : undefined });
+  if (!audio.ok || !audio.body) return Response.json({ message: "Recording could not be downloaded." }, { status: 502 });
+  const contentType = audio.headers.get("content-type") || "audio/mpeg";
+  const extension = contentType.includes("webm") ? "webm" : contentType.includes("ogg") ? "ogg" : contentType.includes("wav") ? "wav" : "mp3";
+  const headers = new Headers({
+    "Content-Type": contentType,
+    "Content-Disposition": `${new URL(request.url).searchParams.get("inline") === "1" ? "inline" : "attachment"}; filename="call-${id.slice(0, 8)}.${extension}"`,
+    "Cache-Control": "private, no-store",
+    "Accept-Ranges": audio.headers.get("accept-ranges") || "bytes",
+  });
+  for (const name of ["content-length", "content-range"]) {
+    const value = audio.headers.get(name);
+    if (value) headers.set(name, value);
+  }
+  return new Response(audio.body, {
+    status: audio.status === 206 ? 206 : 200,
+    headers,
+  });
+}

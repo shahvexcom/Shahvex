@@ -1,0 +1,9 @@
+{
+  "name": "shahvex-physical-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Standalone local Shahvex engine bridge; no third-party Node dependencies",
+  "engines": { "node": ">=20.19.0" },
+  "scripts": { "start": "node server.cjs" },
+  "dependencies": {}
+}

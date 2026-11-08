@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Review only. Guest-local metadata; host use remains unauthorized. -->
+<WindowsPerformanceRecorder Version="1.0" Author="Shahvex isolated trace review">
+  <Profiles>
+    <EventCollector Id="GuestTcpCollector" Name="Shahvex guest TCP metadata">
+      <BufferSize Value="64"/><Buffers Value="128"/>
+    </EventCollector>
+    <EventProvider Id="GuestTcp" Name="2f07e2ee-15db-40f1-90ef-9d7ba282188a" Level="5">
+      <Keywords><Keyword Value="0xffffffffffffffff"/></Keywords>
+      <EventFilters FilterIn="true">
+        <EventId Value="1332"/><EventId Value="1074"/>
+        <EventId Value="1330"/><EventId Value="1331"/><EventId Value="1429"/><EventId Value="1550"/>
+        <EventId Value="1351"/><EventId Value="1176"/><EventId Value="1180"/>
+        <EventId Value="1184"/><EventId Value="1479"/>
+        <EventId Value="1071"/><EventId Value="1073"/><EventId Value="1333"/>
+      </EventFilters>
+    </EventProvider>
+    <Profile Id="ShahvexGuestTcp.Verbose.Memory" Name="ShahvexGuestTcp" Description="Guest TCP metadata only; review before capture" LoggingMode="Memory" DetailLevel="Verbose">
+      <Collectors><EventCollectorId Value="GuestTcpCollector"><EventProviders><EventProviderId Value="GuestTcp"/></EventProviders></EventCollectorId></Collectors>
+    </Profile>
+  </Profiles>
+</WindowsPerformanceRecorder>

@@ -1,0 +1,76 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum AgentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum AgentGender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum UserRole {
+  AGENT
+  ADMIN
+}
+
+enum AiCredentialProvider {
+  GROQ
+  TELNYX
+}
+
+model AiCredential {
+  id               String               @id
+  provider         AiCredentialProvider
+  label            String
+  secretCiphertext String               @map("secret_ciphertext")
+  config           Json                 @default("{}")
+  createdBy        String               @map("created_by")
+  updatedBy        String               @map("updated_by")
+  createdAt        DateTime             @default(now()) @map("created_at")
+  updatedAt        DateTime             @updatedAt @map("updated_at")
+  assignments      AgentCredential[]
+
+  @@map("ai_credentials")
+}
+
+model AgentCredential {
+  agentId      String               @map("agent_id")
+  provider     AiCredentialProvider
+  credentialId String               @map("credential_id")
+  assignedAt   DateTime             @default(now()) @map("assigned_at")
+  agent        Agent                @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  credential   AiCredential         @relation(fields: [credentialId], references: [id], onDelete: Restrict)
+
+  @@id([agentId, provider])
+  @@unique([agentId, credentialId])
+  @@map("agent_credentials")
+}
+
+model Agent {
+  id           String       @id @default(cuid())
+  name         String       @unique
+  username     String       @unique
+  passwordHash String
+  gender       AgentGender
+  accent       String
+  avatarUrl    String?
+  status       AgentStatus  @default(PENDING)
+  role         UserRole     @default(AGENT)
+  approvedAt   DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  credentials  AgentCredential[]
+}

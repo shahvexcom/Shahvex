@@ -1,0 +1,86 @@
+/* Live calls, reporting and account settings share warm, readable surfaces. */
+body .admin-page .ended-calls-card .ended-calls-table { display: block !important; width: 100% !important; min-width: 0 !important; overflow-x: auto !important; }
+body .admin-page .ended-calls-card :is(.ended-calls-head, .ended-calls-row) { grid-template-columns: 160px 75px 120px 145px 145px 145px 125px 170px !important; width: max(100%, 1240px) !important; min-width: 1240px !important; }
+body .ended-calls-card { min-width: 0; padding: 26px; border: 1px solid #fff9f2; border-radius: 20px; box-shadow: 5px 5px 14px #d2cac080, -5px -5px 14px #fffaf480 !important; }
+body .ended-calls-card .card-heading { align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+body .ended-calls-card .card-heading h2 { color: #422717; font-size: 21px; }
+body .ended-calls-card .card-heading p { color: #79604d; font-size: 13px; line-height: 1.7; }
+body .ended-calls-card .ended-count { display: inline-flex; align-items: center; gap: 7px; padding: 8px 12px; border-radius: 20px; color: #8c350c; background: #e8d9c8; font-size: 12px; white-space: nowrap; }
+body .ended-calls-card .ended-calls-table { width: 100%; min-width: 0; max-width: 100%; overflow-x: auto; border: 1px solid #dacec0; border-radius: 14px; scrollbar-color: #baa28b #eae2d8; }
+body .ended-calls-card :is(.ended-calls-head, .ended-calls-row) { display: grid; grid-template-columns: minmax(155px, 1.3fr) 78px minmax(115px, 1fr) 150px 145px 145px 125px 170px; gap: 16px; min-width: 1195px; padding: 18px; align-items: center; }
+body .ended-calls-card .ended-calls-head { background: #e6d9ca; color: #735039; border-radius: 0; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+body .ended-calls-card .ended-calls-row { border-bottom: 1px solid #ded1c2; background: #f1e9df; }
+body .ended-calls-card .ended-calls-row:nth-child(odd) { background: #ede3d7; }
+body .ended-calls-card .ended-calls-row:hover { background: #f6e5d4; }
+body .ended-calls-card .ended-calls-row:last-child { border-bottom: 0; }
+body .ended-calls-card .ended-call-cell { color: #654731; font-size: 12px; line-height: 1.6; min-width: 0; overflow-wrap: anywhere; }
+body .ended-calls-card .ended-call-lead b { color: #422717; font-size: 13px; }
+body .ended-calls-card .ended-call-lead small { color: #79604d; font-size: 11px; margin-top: 4px; }
+body .ended-calls-card .ended-call-duration { font-variant-numeric: tabular-nums; font-weight: 700; }
+body .ended-calls-card .call-status-pill { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 6px 9px; border-radius: 8px; font-style: normal; font-size: 11px; line-height: 1.5; white-space: normal; }
+body .ended-calls-card .ended-summary { display: inline-block; padding: 5px 9px; border-radius: 8px; font-size: 11px; }
+.ended-summary.is-ready { background: #deeee2; color: #23633f; }
+.ended-summary.is-pending { background: #f2e3c9; color: #805d22; }
+body .ended-calls-card .ended-call-action { display: flex; align-items: center; gap: 7px; overflow: visible; }
+body .ended-calls-card .ended-call-action .icon-only { display: grid; place-items: center; flex-shrink: 0; width: 34px; height: 34px; min-height: 34px; padding: 0; border: 1px solid #fff9f1; border-radius: 9px; background: #efe9e2; color: #9c3908; box-shadow: 2px 2px 5px #d2c5b6, -2px -2px 5px #fffaf4; }
+body .ended-calls-card .ended-call-action .icon-only svg { color: currentColor; width: 15px; height: 15px; }
+body .ended-calls-pagination { margin-top: 20px; gap: 14px; color: #79604d; font-size: 12px; }
+body .ended-calls-pagination button { width: 38px; height: 38px; border: 1px solid #fff9f1; border-radius: 11px; color: #8c350c; background: #efe9e2; box-shadow: 3px 3px 7px #d2cac0, -3px -3px 7px #fffaf4; }
+.ended-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 260px; padding: 34px 20px; text-align: center; }
+.ended-empty > div { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 22px; color: #b84006; box-shadow: var(--shahvex-inset); font-size: 28px; margin-bottom: 22px; }
+.ended-empty h3 { color: #422717; font-size: 22px; margin: 0 0 12px; }
+.ended-empty p { max-width: 420px; color: #79604d; font-size: 14px; line-height: 1.8; margin: 0; }
+@media (max-width: 600px) { body .ended-calls-card { padding: 20px; } }
+body :is(.ready-agents, .running-calls, .live-chart, .live-chart-card, .settings-card, .admin-table-card) { border: 1px solid #fff9f2; border-radius: 20px; padding: 26px; box-shadow: 5px 5px 14px #d2cac080, -5px -5px 14px #fffaf480 !important; }
+body :is(.live-kpi, .settings-kpis .admin-stat) { background: #f3ece4; border: 1px solid #fff9f2; border-radius: 17px; padding: 22px; box-shadow: 4px 4px 12px #d2cac080, -4px -4px 12px #fffaf480; }
+body :is(.live-kpi, .settings-kpis .admin-stat) :is(p, small) { color: #79604d; font-size: 12px; }
+body :is(.live-kpi, .settings-kpis .admin-stat) strong { color: #422717; font-size: 26px; }
+body :is(.ready-agents, .running-calls, .live-chart, .live-chart-card, .settings-card, .admin-table-card) .card-heading h2 { color: #422717; font-size: 20px; line-height: 1.4; }
+body :is(.ready-agents, .running-calls, .live-chart, .live-chart-card, .settings-card, .admin-table-card) .card-heading p { color: #79604d; font-size: 13px; line-height: 1.7; }
+body .live-pakistan-clock { color: #79604d; font-size: 12px; }
+body .ready-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+body :is(.view-switch, .agent-filter, .settings-tabs) { display: flex; gap: 6px; padding: 6px; border: 1px solid #fff9f1; border-radius: 13px; background: #e8ded3; }
+body :is(.view-switch, .agent-filter, .settings-tabs) button { min-height: 36px; border: 0; border-radius: 9px; padding: 9px 13px; background: transparent; color: #76553d; font-size: 12px; }
+body :is(.view-switch, .agent-filter, .settings-tabs) button.active { background: #efe9e2; color: #a23a08; box-shadow: 3px 3px 7px #cfc2b4, -3px -3px 7px #fff9f1; }
+body .agent-search { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 13px; background: #eae2d8; border: 1px solid #fff9f1; border-radius: 12px; box-shadow: var(--shahvex-inset); color: #80543a; }
+body .agent-search input { background: transparent !important; box-shadow: none !important; border: 0 !important; padding: 10px 0; min-width: 0; font-size: 13px; }
+body .ready-agents .agent-empty-state, body .empty-running { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 38px 24px; min-height: 240px; text-align: center; }
+body :is(.ready-agents .agent-empty-state, .empty-running) > svg { box-sizing: content-box; width: 30px; height: 30px; padding: 18px; margin-bottom: 20px; color: #b84006; border-radius: 21px; box-shadow: var(--shahvex-inset); }
+body :is(.ready-agents .agent-empty-state, .empty-running) :is(h3, strong) { color: #422717; font-size: 21px; margin: 0 0 12px; }
+body :is(.ready-agents .agent-empty-state, .empty-running) p { max-width: 410px; color: #79604d; font-size: 14px; line-height: 1.8; }
+body .running-call { background: #f3ece4; border-color: #fff9f2; border-radius: 16px; padding: 22px; }
+body .running-info { background: #e9dfd2; border-radius: 12px; }
+body .running-transcript { background: #eae2d8; border-color: #dacbbb; color: #654731; border-radius: 12px; }
+body .call-report-filters { display: grid; grid-template-columns: minmax(200px, 1.6fr) repeat(2, minmax(130px, 1fr)) repeat(2, minmax(145px, 1fr)) auto; gap: 12px; align-items: center; padding: 18px 0 24px; border: 0; background: transparent; }
+body .call-report-filters > label { display: flex; align-items: center; gap: 8px; min-width: 0; margin: 0; min-height: 44px; padding: 0 12px; background: #eae2d8; border: 1px solid #fff9f1; border-radius: 12px; box-shadow: var(--shahvex-inset); color: #80543a; }
+body .call-report-filters > label input { background: transparent !important; box-shadow: none !important; border: 0 !important; min-width: 0; width: 100%; padding: 10px 0; font-size: 12px; }
+body .call-report-filters > .shahvex-select { min-width: 0; width: 100%; }
+body .call-report-filters > button { color: #a23a08; font-size: 12px; min-height: 44px; }
+body .ended-calls-head { background: #e6d9ca; color: #654731; border-radius: 11px 11px 0 0; }
+body .ended-calls-row { border-color: #dacec0; color: #654731; padding-block: 17px; }
+body .ended-calls-row:hover { background: #f4e8db; }
+.report-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 260px; padding: 36px 24px; text-align: center; }
+.report-empty > svg { box-sizing: content-box; padding: 18px; width: 30px; height: 30px; border-radius: 21px; color: #b84006; box-shadow: var(--shahvex-inset); margin-bottom: 20px; }
+.report-empty h3 { color: #422717; font-size: 22px; margin: 0 0 12px; }
+.report-empty p { color: #79604d; font-size: 14px; line-height: 1.8; max-width: 420px; margin: 0; }
+body .settings-tabs { margin: 24px 0; flex-wrap: wrap; }
+body .settings-tabs button { font-size: 13px; min-height: 42px; padding: 11px 18px; }
+body .settings-card h2 { color: #422717; font-size: 21px; }
+body .settings-card label { color: #654731; font-size: 13px; line-height: 1.7; min-width: 0; }
+body .settings-card :is(input:not([type=checkbox]):not([type=file]), .custom-role-select > button) { min-height: 46px; padding: 12px 14px; border-radius: 12px; font-size: 13px; }
+body .settings-card :is(p, small) { color: #79604d; line-height: 1.7; }
+body .settings-card small { font-size: 12px; }
+body .settings-card .admin-primary, body .settings-card .admin-outline { min-height: 44px; padding: 12px 18px; font-size: 13px; }
+body .permission-list { gap: 12px; }
+body .permission-list label { background: #eae2d8; border: 1px solid #fff9f1; border-radius: 12px; padding: 13px; }
+body .settings-list-empty { padding: 30px 20px; color: #79604d !important; font-size: 13px !important; }
+body .settings-confirm { background: #efe9e2; border: 1px solid #fff9f2; border-radius: 20px; padding: 28px; color: #422717; }
+@media (max-width: 1250px) { body .call-report-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 850px) { body .ready-agents > .card-heading { flex-wrap: wrap; gap: 18px; } }
+@media (max-width: 600px) {
+  body :is(.ready-agents, .running-calls, .live-chart, .live-chart-card, .settings-card, .admin-table-card) { padding: 20px; }
+  body .call-report-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body .call-report-filters > label:first-child { grid-column: 1 / -1; }
+  body .call-report-filters > button { grid-column: 1 / -1; }
+  body .ready-tools { width: 100%; }
+}

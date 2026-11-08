@@ -1,0 +1,79 @@
+import { cookies } from "next/headers";
+import { randomUUID } from "crypto";
+import { hash } from "bcryptjs";
+import { z } from "zod";
+import { db } from "@/lib/database";
+import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
+
+const agentFields = z.object({
+  name: z.string().trim().min(2).max(80),
+  username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,30}$/),
+  gender: z.enum(["MALE", "FEMALE", "OTHER"]),
+  accent: z.string().trim().min(2).max(80),
+  avatar_url: z.string().url().max(500).or(z.literal("")),
+  status: z.enum(["PENDING", "APPROVED", "REJECTED", "SUSPENDED"]),
+  call_limit_minutes: z.number().int().min(0).max(100000),
+  daily_call_limit: z.number().int().min(1).max(100000),
+});
+const createSchema = agentFields.extend({ password: z.string().min(8).max(128) });
+const updateSchema = agentFields.extend({ id: z.string().min(1), password: z.string().min(8).max(128).optional().or(z.literal("")) });
+const bulkApproveSchema = z.object({ action: z.literal("bulk-approve"), ids: z.array(z.string().min(1)).min(1).max(1000) });
+
+async function requireAdmin() {
+  const session = await readSession((await cookies()).get(ADMIN_SESSION_COOKIE)?.value);
+  return session?.role === "ADMIN" ? session : null;
+}
+
+const agentQuery = `SELECT a.id,a.name,a.username,a.gender,a.accent,a.status,COALESCE(a.avatar_url,'') avatar_url,
+  COALESCE(a.call_limit_minutes,0) call_limit_minutes,a.daily_call_limit,a.created_at,
+  (SELECT c.label FROM agent_credentials ac JOIN ai_credentials c ON c.id=ac.credential_id WHERE ac.agent_id=a.id AND ac.provider='GROQ') groq_credential_label,
+  (SELECT c.label FROM agent_credentials ac JOIN ai_credentials c ON c.id=ac.credential_id WHERE ac.agent_id=a.id AND ac.provider='TELNYX') telnyx_credential_label,
+  (SELECT COUNT(*)::int FROM agent_calls c WHERE c.agent_id=a.id AND c.call_type='LEAD') dialed_calls,
+  (SELECT COUNT(*)::int FROM leads l WHERE l.agent_id=a.id) total_leads
+  FROM agents a
+  WHERE a.role='AGENT'
+    AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id)`;
+
+export async function GET() {
+  if (!await requireAdmin()) return Response.json({ message: "Unauthenticated" }, { status: 401 });
+  const result = await (await db()).query(`${agentQuery} ORDER BY a.created_at DESC`);
+  return Response.json({ agents: result.rows });
+}
+
+export async function POST(request: Request) {
+  if (!await requireAdmin()) return Response.json({ message: "Unauthenticated" }, { status: 401 });
+  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return Response.json({ message: parsed.error.issues[0]?.message ?? "Invalid agent details." }, { status: 400 });
+  const a = parsed.data, client = await db();
+  try {
+    const result = await client.query(`INSERT INTO agents (id,name,username,password_hash,gender,accent,avatar_url,status,role,call_limit_minutes,daily_call_limit,approved_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'AGENT',$9,$10,$11) RETURNING id`, [randomUUID(), a.name, a.username, await hash(a.password, 12), a.gender, a.accent, a.avatar_url || null, a.status, a.call_limit_minutes || null, a.daily_call_limit, a.status === "APPROVED" ? new Date() : null]);
+    const agent = await client.query(`${agentQuery} AND a.id=$1`, [result.rows[0].id]);
+    return Response.json({ message: "Agent created.", agent: agent.rows[0] }, { status: 201 });
+  } catch (error: unknown) {
+    return Response.json({ message: error instanceof Error && /unique/i.test(error.message) ? "Name or username is already in use." : "Unable to create agent." }, { status: 400 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  if (!await requireAdmin()) return Response.json({ message: "Unauthenticated" }, { status: 401 });
+  const body = await request.json().catch(() => null);
+  const bulk = bulkApproveSchema.safeParse(body);
+  if (bulk.success) {
+    const result = await (await db()).query("UPDATE agents a SET status='APPROVED',approved_at=COALESCE(approved_at,NOW()),updated_at=NOW() WHERE a.role='AGENT' AND a.id=ANY($1::text[]) AND a.status <> 'APPROVED' AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id) RETURNING id", [bulk.data.ids]);
+    return Response.json({ message: `${result.rowCount ?? 0} agent(s) approved.`, approvedIds: result.rows.map(row => row.id) });
+  }
+  const parsed = updateSchema.safeParse(body);
+  if (!parsed.success) return Response.json({ message: parsed.error.issues[0]?.message ?? "Invalid agent details." }, { status: 400 });
+  const a = parsed.data, client = await db();
+  try {
+    const existing = await client.query("SELECT password_hash FROM agents a WHERE id=$1 AND role='AGENT' AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id)", [a.id]);
+    if (!existing.rows[0]) return Response.json({ message: "Agent not found." }, { status: 404 });
+    const updated = await client.query(`UPDATE agents a SET name=$1,username=$2,gender=$3,accent=$4,avatar_url=$5,status=$6::varchar,call_limit_minutes=$7,daily_call_limit=$8,password_hash=$9,approved_at=CASE WHEN $6::varchar='APPROVED' THEN COALESCE(approved_at,NOW()) ELSE approved_at END,updated_at=NOW() WHERE id=$10 AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id) RETURNING id,name,username,gender,accent,status,COALESCE(avatar_url,'') avatar_url,COALESCE(call_limit_minutes,0) call_limit_minutes,daily_call_limit`, [a.name, a.username, a.gender, a.accent, a.avatar_url || null, a.status, a.call_limit_minutes || null, a.daily_call_limit, a.password ? await hash(a.password, 12) : existing.rows[0].password_hash, a.id]);
+    if (!updated.rows[0]) return Response.json({ message: "Agent not found." }, { status: 404 });
+    return Response.json({ message: "Agent updated.", agent: { ...updated.rows[0], dialed_calls: Number(body.dialed_calls ?? 0), total_leads: Number(body.total_leads ?? 0) } });
+  } catch (error: unknown) {
+    console.error("Agent update failed", error);
+    return Response.json({ message: error instanceof Error && /unique/i.test(error.message) ? "Name or username is already in use." : "Unable to update agent. Please try again." }, { status: 400 });
+  }
+}

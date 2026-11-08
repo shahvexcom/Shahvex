@@ -1,0 +1,7 @@
+{
+  "agentName": "Shahvex Test Agent",
+  "campaignId": "local-e2e-no-calls",
+  "direction": "inbound",
+  "voiceId": "existing-chatterbox-default",
+  "script": "Identify yourself as an automated Shahvex AI assistant. Briefly answer questions about this audio integration test. Do not invent benefits or eligibility."
+}

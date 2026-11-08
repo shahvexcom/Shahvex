@@ -1,0 +1,22 @@
+.agent-multi > button > i {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  border-radius: 8px;
+  background: #fbf3ec;
+  color: transparent;
+  font-size: 0;
+}
+
+.agent-multi > button > i::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  left: 10px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid #e96016;
+  border-bottom: 2px solid #e96016;
+  transform: rotate(45deg);
+}

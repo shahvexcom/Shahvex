@@ -1,0 +1,90 @@
+/* Customer plan catalogue: comparable cards, quiet surfaces, clear actions. */
+body .bpo-plans-page .bpo-public-plan-card dl { display: flex; flex-direction: column; gap: 0; width: 100%; }
+body .bpo-plans-page .bpo-public-plan-card dl > div { width: 100%; min-width: 0; }
+body .bpo-plans-page .bpo-public-plan-card dl dt { flex: 1; }
+body .bpo-plans-page .bpo-public-plan-card dl dd { flex: 1; text-align: right; }
+body .bpo-plans-page .bpo-plans-heading { display: grid; grid-template-columns: minmax(0, 1fr) 310px; align-items: start; }
+body .bpo-plans-page .bpo-plan-balance { display: flex; flex-direction: column; align-items: stretch; gap: 18px; width: 100%; min-width: 0; }
+.plan-balance-top, .plan-balance-bottom { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+body .plan-balance-top .currency-selector { margin: 0; width: 100px; }
+body .plan-balance-top > small { font-size: 12px; }
+body .plan-balance-bottom > strong { margin: 0; color: #422717; font-size: 26px; overflow-wrap: anywhere; }
+body .bpo-plans-page .bpo-plans-refresh { display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex-shrink: 0; min-height: 40px; padding: 10px 14px; border: 1px solid #ff9f64; border-radius: 11px; color: white; background: #e65b12; box-shadow: 4px 4px 9px #cdbdad, -4px -4px 9px #fffaf4; font-size: 12px; font-weight: 700; }
+body .bpo-plans-refresh svg { color: white; }
+body .bpo-plans-page .bpo-plan-category-tabs { width: 100%; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 9px; margin-bottom: 28px; border: 1px solid #fff9f2; border-radius: 17px; background: #e8ded3; box-shadow: inset 3px 3px 7px #d2c5b7, inset -3px -3px 7px #fff7ed; }
+body .bpo-plans-page .bpo-plan-category-tabs button { display: flex; align-items: center; justify-content: center; min-height: 46px; padding: 12px 10px; border: 1px solid transparent; border-radius: 12px; font-size: 13px; font-weight: 600; color: #76543d; background: transparent; white-space: normal; line-height: 1.4; }
+body .bpo-plans-page .bpo-plan-category-tabs button.active { background: #f3ece4; color: #a23a08; border-color: #fff9f2; box-shadow: 4px 4px 9px #cdbdab, -4px -4px 9px #fff9f0; }
+body .bpo-plans-page .bpo-plan-category-tabs button:hover:not(.active) { color: #a23a08; background: #efe3d5; }
+@media (max-width: 850px) { body .bpo-plans-page .bpo-plans-heading { grid-template-columns: 1fr; } body .bpo-plans-page .bpo-plan-balance { width: min(100%, 400px); } }
+@media (max-width: 600px) { body .bpo-plans-page .bpo-plan-category-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } body .bpo-plans-page .bpo-plan-category-tabs button:first-child { grid-column: 1 / -1; } body .bpo-plans-page .bpo-plan-balance { width: 100%; } }
+body .bpo-plans-page { padding-top: 36px; padding-bottom: 44px; min-width: 0; }
+body .bpo-plans-heading { align-items: center; gap: 28px; margin-bottom: 28px; }
+body .bpo-plans-heading h1 { color: #422717; font-size: 31px; line-height: 1.25; letter-spacing: -.8px; }
+body .bpo-plans-heading > div > p:last-of-type { color: #79604d; font-size: 14px; line-height: 1.8; max-width: 660px; }
+body .bpo-plan-balance { min-width: 190px; padding: 20px; border: 1px solid #fff9f2; border-radius: 17px; background: #f3ece4; box-shadow: 4px 4px 12px #d2cac080, -4px -4px 12px #fffaf480; }
+body .bpo-plan-balance small { color: #79604d; font-size: 12px; }
+body .bpo-plan-balance strong { color: #422717; font-size: 24px; margin-top: 7px; }
+body .bpo-plans-refresh { color: #a23a08; font-size: 12px; padding: 8px 0; }
+body .bpo-plan-usage-kpis { gap: 16px; margin-bottom: 32px; }
+body .bpo-plan-usage-kpis > article { background: #f3ece4 !important; border: 1px solid #fff9f2; border-radius: 17px; padding: 20px; min-width: 0; box-shadow: 4px 4px 12px #d2cac080, -4px -4px 12px #fffaf480 !important; }
+body .bpo-plan-usage-kpis small { color: #79604d; font-size: 12px; }
+body .bpo-plan-usage-kpis strong { color: #422717; font-size: 19px; overflow-wrap: anywhere; }
+body .bpo-plan-usage-kpis em { color: #79604d; font-size: 11px; }
+body .bpo-plan-usage-kpis article > i { background: #dacec0; height: 5px; border-radius: 8px; }
+body .bpo-plan-usage-kpis article > i > b { background: #d94c08; border-radius: 8px; }
+body .bpo-kpi-add { background: #efe9e2; color: #a23a08; border: 1px solid #fff9f1; border-radius: 9px; }
+body .bpo-published-plans { background: transparent; border: 0; padding: 0; box-shadow: none; }
+body .bpo-published-plans-head { align-items: center; gap: 20px; margin-bottom: 22px; }
+body .bpo-published-plans-head h2 { color: #422717; font-size: 23px; }
+body .bpo-published-plans-head p { color: #79604d; font-size: 13px; line-height: 1.8; }
+body .bpo-published-plans-head > span { padding: 8px 12px; color: #795238; background: #e6d9ca; border-radius: 20px; font-size: 11px; }
+body .bpo-plan-category-tabs { display: flex; flex-wrap: wrap; gap: 7px; width: fit-content; max-width: 100%; margin-bottom: 26px; padding: 7px; border: 1px solid #fff9f1; border-radius: 14px; background: #e1d5c7; }
+body .bpo-plan-category-tabs button { min-height: 40px; padding: 10px 16px; border: 0; border-radius: 10px; color: #735039; background: transparent; font-size: 13px; }
+body .bpo-plan-category-tabs button.active { background: #efe9e2; color: #a23a08; box-shadow: 3px 3px 7px #cdbdab, -3px -3px 7px #fff9f0; }
+body .bpo-public-plan-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; align-items: stretch; }
+body .bpo-plans-page .bpo-public-plan-card { position: relative; display: flex; flex-direction: column; min-width: 0; padding: 26px; border: 1px solid #fff9f2; border-radius: 22px; background: #f3ece4 !important; color: #513625; box-shadow: 5px 5px 14px #d2cac080, -5px -5px 14px #fffaf480 !important; transform: none; }
+body .bpo-plans-page .bpo-public-plan-card.is-recommended { border: 2px solid #d87942; padding: 25px; }
+body .bpo-public-plan-card > header { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+body .bpo-public-plan-card > header > div { flex: 1; min-width: 120px; }
+body .bpo-public-plan-card > header p { color: #9c3908; font-size: 10px; letter-spacing: 1.5px; }
+body .bpo-public-plan-card h3 { color: #422717; font-size: 23px; line-height: 1.3; overflow-wrap: anywhere; margin: 8px 0 0; }
+body .bpo-public-plan-card > header > span { display: inline-flex; align-items: center; gap: 5px; padding: 6px 9px; color: #963507; background: #f0dcc8; border-radius: 8px; font-size: 10px; }
+body .bpo-public-plan-description { color: #79604d; font-size: 13px; line-height: 1.8; margin: 18px 0; min-height: 48px; }
+body .bpo-public-plan-price { color: #422717; font-size: 35px; line-height: 1.3; letter-spacing: -1px; padding-bottom: 22px; margin-bottom: 22px; border-bottom: 1px solid #dacec0; overflow-wrap: anywhere; }
+body .bpo-public-plan-price small { color: #79604d; font-size: 13px; letter-spacing: 0; }
+body .bpo-public-plan-price.is-custom { font-size: 30px; }
+body .bpo-public-plan-price.is-custom small { display: block; margin-top: 7px; }
+body .bpo-public-plan-card dl { margin: 0 0 24px; }
+body .bpo-public-plan-card dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 12px 0; border-bottom: 1px solid #dfd2c3; }
+body .bpo-public-plan-card dt { color: #79604d; font-size: 12px; }
+body .bpo-public-plan-card dd { margin: 0; color: #513625; font-size: 13px; font-weight: 700; text-align: right; }
+body .bpo-public-plan-benefits { margin-bottom: 24px; }
+body .bpo-public-plan-benefits > small { color: #795238; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+body .bpo-public-plan-benefits ul { display: grid; gap: 12px; margin-top: 15px; padding: 0; list-style: none; }
+body .bpo-public-plan-benefits li { display: flex; align-items: flex-start; gap: 9px; color: #654731; font-size: 13px; line-height: 1.7; }
+body .bpo-public-plan-benefits li svg { color: #a23a08; flex-shrink: 0; margin-top: 4px; }
+body .bpo-public-plan-card .bpo-buy-plan { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; min-height: 46px; padding: 13px 16px; margin-top: auto; border: 1px solid #ff9f64; border-radius: 12px; background: linear-gradient(135deg, #ef651b, #c74609); color: white; font-size: 13px; box-shadow: 4px 4px 10px #cdbdad, -4px -4px 10px #fffaf4; }
+body .bpo-public-plan-card .bpo-buy-plan svg { color: white; }
+body .bpo-public-plan-card .bpo-custom-plan-contact { background: #e8ded3; border-color: #fff9f1; color: #a23a08; }
+body .bpo-public-plan-card .bpo-custom-plan-contact svg { color: #a23a08; }
+body .bpo-plan-buy-backdrop { background: #30201665; backdrop-filter: blur(5px); padding: 20px; }
+body .bpo-plan-buy-modal { background: #efe9e2; border: 1px solid #fff9f2; border-radius: 24px; padding: 32px; max-height: calc(100svh - 40px); overflow-y: auto; }
+body .bpo-plan-buy-modal h2 { color: #422717; font-size: 26px; line-height: 1.3; }
+body .bpo-plan-buy-modal > p:not(.bpo-eyebrow) { color: #79604d; font-size: 14px; line-height: 1.8; }
+body .bpo-plan-buy-modal > div > button { min-height: 44px; border-radius: 12px; padding: 12px 18px; font-size: 13px; }
+body .bpo-plan-buy-modal .bpo-addon-quantity { font-size: 13px; color: #654731; }
+body .bpo-addon-quantity input { min-height: 46px; padding: 12px 14px; margin-top: 8px; }
+.bpo-category-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 240px; padding: 32px; border: 1px solid #fff9f2; border-radius: 20px; text-align: center; }
+.bpo-category-empty h3 { color: #422717; font-size: 22px; }
+.bpo-category-empty p { color: #79604d; font-size: 14px; line-height: 1.8; }
+.bpo-category-empty button { min-height: 44px; padding: 12px 18px; color: #a23a08; background: #efe9e2; border: 1px solid #fff9f1; border-radius: 12px; margin-top: 18px; }
+@media (max-width: 1050px) { body .bpo-public-plan-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } body .bpo-plan-usage-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 650px) {
+  body .bpo-plans-heading, body .bpo-published-plans-head { flex-wrap: wrap; }
+  body .bpo-plan-balance { width: 100%; }
+  body .bpo-public-plan-grid { grid-template-columns: 1fr; }
+  body .bpo-plan-usage-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  body .bpo-plan-usage-kpis > article { padding: 17px; }
+  body .bpo-plan-category-tabs button { padding: 10px 12px; font-size: 12px; }
+  body .bpo-plan-buy-modal { padding: 26px 22px; }
+}

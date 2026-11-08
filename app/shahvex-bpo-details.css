@@ -1,0 +1,54 @@
+/* Shared presentation for the BPO Voices, Plans and Finance workspaces. */
+body .bpo-admin-workspace :is(.admin-voices-section, .bpo-plan-section, .bpo-finance-section) { margin-top: 24px; padding-top: 0; border-top: 0; min-width: 0; }
+body .bpo-admin-workspace :is(.admin-voices-heading, .bpo-section-heading) { align-items: center; gap: 20px; margin-bottom: 26px; }
+body .bpo-admin-workspace :is(.admin-voices-heading, .bpo-section-heading) > div > p { color: #9c3908; font-size: 11px; letter-spacing: 1.5px; }
+body .bpo-admin-workspace :is(.admin-voices-heading h2, .bpo-section-heading h1) { color: #422717; font-size: 28px; letter-spacing: -.7px; line-height: 1.25; }
+body .bpo-admin-workspace :is(.admin-voices-heading, .bpo-section-heading) > div > span { color: #79604d; font-size: 14px; line-height: 1.8; max-width: 650px; }
+body .bpo-admin-workspace :is(.admin-voices-heading, .bpo-section-heading) button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 11px 16px; font-size: 13px; }
+body .bpo-section-heading > div:last-child:has(button) { display: flex; flex-wrap: wrap; gap: 10px; }
+body .bpo-admin-workspace :is(.bpo-usage-pricing, .bpo-credit-contact-card, .admin-voice-card, .bpo-plan-card) {
+  background: #f3ece4 !important; border: 1px solid #fff9f2; border-radius: 20px;
+  padding: 24px; box-shadow: 4px 4px 12px #d2cac080, -4px -4px 12px #fffaf480 !important;
+}
+body .bpo-admin-workspace :is(.admin-voice-card h3, .bpo-plan-card h2, .bpo-usage-pricing h2, .bpo-credit-contact-card h2) { color: #422717; font-size: 20px; line-height: 1.4; }
+body .bpo-admin-workspace :is(.admin-voice-card p, .bpo-plan-description, .bpo-plan-card dt, .bpo-credit-contact-card > header span, .bpo-usage-pricing > div > span) { color: #79604d; font-size: 13px; line-height: 1.8; }
+body .bpo-admin-workspace :is(.admin-voice-providers > span, .admin-voice-assigned, .bpo-plan-card dl) { background: #ece2d7; border-color: #decebc; border-radius: 12px; padding: 14px; }
+body .bpo-admin-workspace :is(.admin-voice-providers small, .admin-voice-assigned small) { color: #79604d; font-size: 11px; }
+body .bpo-admin-workspace :is(.admin-voice-providers b, .admin-voice-assigned b, .bpo-plan-card dd) { color: #513625; font-size: 13px; }
+body .bpo-admin-workspace :is(.admin-voice-card, .bpo-plan-card) footer { border-top-color: #dacec0; padding-top: 18px; gap: 10px; }
+body .bpo-admin-workspace :is(.admin-voice-card, .bpo-plan-card) footer button { min-height: 42px; padding: 10px 14px; border-radius: 11px; background: #efe9e2; color: #8c350c; border: 1px solid #fff9f1; font-size: 13px; }
+body .bpo-admin-workspace :is(.admin-voice-card, .bpo-plan-card) footer button.danger { color: #b13636; }
+body .bpo-admin-workspace .bpo-usage-pricing { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; margin-bottom: 28px; align-items: end; }
+body .bpo-usage-pricing > div:first-child { grid-column: 1 / -1; }
+body .bpo-admin-workspace :is(.bpo-usage-pricing, .bpo-credit-contact-grid) label { min-width: 0; color: #654731; font-size: 13px; line-height: 1.6; }
+body .bpo-usage-pricing label small { color: #79604d; font-size: 11px; }
+body .bpo-usage-pricing input { width: 100%; margin-top: 8px; padding: 12px 14px; min-height: 46px; }
+body .bpo-storage-price { display: grid; grid-template-columns: minmax(0, 1fr) 80px; align-items: end; gap: 10px; }
+body .bpo-storage-price .custom-dropdown-trigger { min-height: 46px; }
+body .bpo-usage-pricing > button { min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 13px; }
+body .bpo-credit-contact-card > header { align-items: flex-start; gap: 24px; }
+body .bpo-credit-contact-card > header button { min-height: 44px; padding: 11px 16px; font-size: 13px; }
+body .bpo-credit-contact-grid { gap: 18px; margin-top: 28px; }
+body .bpo-credit-contact-grid input { min-height: 46px; padding: 12px 14px; font-size: 13px; }
+body .bpo-admin-workspace :is(.admin-voices-empty, .bpo-plans-empty) { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 310px; padding: 36px 24px; text-align: center; border: 1px solid #fff9f2; border-radius: 20px; background: #efe9e2; box-shadow: 5px 5px 14px #d2cac080, -5px -5px 14px #fffaf480; }
+body .bpo-admin-workspace :is(.admin-voices-empty, .bpo-plans-empty) > svg { box-sizing: content-box; padding: 20px; width: 30px; height: 30px; color: #b84006; border-radius: 22px; box-shadow: var(--shahvex-inset); margin-bottom: 20px; }
+body .bpo-admin-workspace :is(.admin-voices-empty, .bpo-plans-empty) :is(h2, h3) { color: #422717; font-size: 23px; margin: 0 0 12px; }
+body .bpo-admin-workspace :is(.admin-voices-empty, .bpo-plans-empty) p { color: #79604d; font-size: 14px; max-width: 420px; line-height: 1.8; margin: 0 0 22px; }
+body .bpo-admin-workspace .admin-voices-empty button { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 12px 18px; }
+body :is(.admin-voice-form-grid, .bpo-plan-form-grid) { gap: 20px; }
+body :is(.admin-voice-form-grid, .bpo-plan-form-grid) label { min-width: 0; color: #654731; font-size: 12px; line-height: 1.6; }
+body :is(.admin-voice-form-grid, .bpo-plan-form-grid) input { min-height: 46px; padding: 12px 14px; margin-top: 8px; }
+body :is(.admin-voice-form-grid, .bpo-plan-form-grid) .custom-dropdown { margin-top: 8px; }
+body .admin-voice-bpo-picker { border: 1px solid #d8c8b7; border-radius: 14px; padding: 18px; color: #654731; }
+body .admin-voice-bpo-picker > p { color: #79604d; font-size: 13px; }
+@media (max-width: 850px) {
+  body .bpo-admin-workspace :is(.admin-voices-heading, .bpo-section-heading) { flex-wrap: wrap; align-items: flex-start; }
+  body .bpo-admin-workspace .bpo-usage-pricing { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body .bpo-credit-contact-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  body .bpo-admin-workspace .bpo-usage-pricing { grid-template-columns: 1fr; }
+  body .bpo-admin-workspace :is(.bpo-usage-pricing, .bpo-credit-contact-card, .admin-voice-card, .bpo-plan-card) { padding: 20px; }
+  body .bpo-credit-contact-card > header { flex-direction: column; }
+  body :is(.admin-voice-form-grid, .bpo-plan-form-grid) { grid-template-columns: 1fr; }
+}

@@ -1,0 +1,5 @@
+{
+  "ollamaUrl": "http://127.0.0.1:11434",
+  "voices": [],
+  "_instructions": "No STT/TTS endpoints are assumed. Add the objects documented in gateway/README.md only when the existing service or a separate bridge implements that contract. An empty voice inventory blocks sessions."
+}
