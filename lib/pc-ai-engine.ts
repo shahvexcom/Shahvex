@@ -30,8 +30,16 @@ export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: 
     const value = new Headers(init.headers).get(name);
     if (value && /^[a-zA-Z0-9_-]{1,80}$/.test(value)) headers.set(name, value);
   }
-  return fetch(new URL(path, base), {
+  const upstream = await fetch(new URL(path, base), {
     ...init, headers, redirect: "error", cache: "no-store",
     signal: AbortSignal.any([init.signal || new AbortController().signal, AbortSignal.timeout(120_000)]),
   });
+  // fetch decodes Cloudflare gzip/br bodies but retains wire-format headers.
+  // Reusing those headers makes the browser decode the already decoded body again.
+  const responseHeaders = new Headers({ "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
+  for (const name of ["content-type", "x-audio-format", "x-sample-rate", "x-channels"]) {
+    const value = upstream.headers.get(name);
+    if (value) responseHeaders.set(name, value);
+  }
+  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }

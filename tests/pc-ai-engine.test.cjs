@@ -23,3 +23,27 @@ test('PC transport restricts destinations and operations and strips caller crede
     assert.equal(calls,1);
   } finally {global.fetch=previous;for(const n of names)if(before[n]===undefined)delete process.env[n];else process.env[n]=before[n];}
 });
+test('compressed upstream JSON is forwarded decoded without stale encoding or length headers',async()=>{
+  const http=require('node:http'),zlib=require('node:zlib');
+  const names=['SHAHVEX_PC_AI_URL','SHAHVEX_PC_AI_SECRET','SHAHVEX_CF_CLIENT_ID','SHAHVEX_CF_CLIENT_SECRET'];
+  const before=Object.fromEntries(names.map(n=>[n,process.env[n]]));
+  const original=global.fetch;
+  const body=JSON.stringify({id:'test-session'}),compressed=zlib.gzipSync(body);
+  const server=http.createServer((req,res)=>{res.writeHead(200,{'content-type':'application/json','content-encoding':'gzip','content-length':String(compressed.length),'set-cookie':'upstream-private=1'});res.end(compressed);});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    process.env.SHAHVEX_PC_AI_URL='https://ai.example.com';process.env.SHAHVEX_PC_AI_SECRET='s'.repeat(32);
+    process.env.SHAHVEX_CF_CLIENT_ID='client';process.env.SHAHVEX_CF_CLIENT_SECRET='private';
+    global.fetch=(_url,init)=>original(`http://127.0.0.1:${server.address().port}/`,init);
+    const response=await mod.exports.pcAiRequest('/tester/start',{method:'POST',body:'{}'},'owner');
+    assert.equal(response.headers.get('content-encoding'),null);
+    assert.equal(response.headers.get('content-length'),null);
+    assert.equal(response.headers.get('set-cookie'),null);
+    assert.equal(response.headers.get('content-type'),'application/json');
+    assert.equal(response.headers.get('cache-control'),'no-store');
+    assert.deepEqual(await response.json(),{id:'test-session'});
+  } finally {
+    global.fetch=original;for(const n of names)if(before[n]===undefined)delete process.env[n];else process.env[n]=before[n];
+    server.closeAllConnections();await new Promise(resolve=>server.close(resolve));
+  }
+});
