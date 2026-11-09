@@ -25,6 +25,7 @@ export function newTest(owner: string, agentId: string, config: TestConfig) {
   return id;
 }
 export async function engine(port: number, path: string, init: RequestInit = {}) {
+  if (process.env.SHAHVEX_PC_AI_URL) return (await import("./pc-ai-engine")).pcAiEngine(port, path, init);
   return fetch(`http://127.0.0.1:${port}${path}`, { ...init, redirect: "error", cache: "no-store", signal: AbortSignal.any([init.signal || new AbortController().signal, AbortSignal.timeout(120_000)]) });
 }
 export async function localVoices(owner?: string) {

@@ -1,0 +1,107 @@
+'use strict';
+// Standalone AI-only Node service. Reuses the existing tester; never loads DB/auth.
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const ts = require('typescript');
+const root = path.resolve(__dirname, '..');
+const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio']);
+function loader() {
+  const cache = new Map();
+  function load(name) {
+    const key = name.replace(/^@\/lib\//, '').replace(/^\.\//, '');
+    if (name === 'server-only') return {};
+    if (!allowed.has(key)) return require(name);
+    if (cache.has(key)) return cache.get(key).exports;
+    const mod = { exports: {} }; cache.set(key, mod);
+    const source = fs.readFileSync(path.join(root, 'lib', key + '.ts'), 'utf8');
+    const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
+    new Function('require', 'module', 'exports', code)(load, mod, mod.exports);
+    return mod.exports;
+  }
+  return load;
+}
+function createTesterService({ secret, maxSessions = 1, load = loader() } = {}) {
+  if (typeof secret !== 'string' || secret.length < 32) throw Error('PC AI secret of at least 32 characters required');
+  maxSessions = Math.max(1, Math.min(10, Number(maxSessions) || 1));
+  const ai = load('agent-test');
+  const { handleTestSession } = load('agent-test-session');
+  const json = (status, body) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+  async function dispatch(request) {
+    const got = Buffer.from(request.headers.get('x-shahvex-ai-key') || '');
+    const expected = Buffer.from(secret);
+    if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
+    const url = new URL(request.url);
+    const match = /^\/tester\/(start|turn|interrupt|stop)$/.exec(url.pathname);
+    const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
+    if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
+    if (engineMatch) {
+      const operation = engineMatch[1];
+      const method = /8767\/(voices|health)$/.test(operation) ? 'GET' : 'POST';
+      if (request.method !== method) return json(404, { error: 'Unsupported operation' });
+      const chunks = []; let size = 0;
+      if (request.body) for await (const chunk of request.body) {
+        size += chunk.length; if (size > 2_100_000) return json(413, { error: 'Request too large' }); chunks.push(chunk);
+      }
+      const slash = operation.indexOf('/');
+      let upstream;
+      try { upstream = await ai.engine(Number(operation.slice(0, slash)), operation.slice(slash), {
+        method, signal: request.signal,
+        headers: request.headers.has('content-type') ? { 'content-type': request.headers.get('content-type') } : {},
+        ...(method === 'POST' ? { body: Buffer.concat(chunks) } : {}),
+      }); } catch { return json(503, { error: 'AI service unavailable' }); }
+      if (!upstream.ok) { await upstream.body?.cancel(); return json([400,404,409,413,422,429].includes(upstream.status) ? upstream.status : 502, { error: 'AI operation failed' }); }
+      const headers = new Headers({ 'cache-control': 'no-store' });
+      for (const name of ['content-type','x-audio-format','x-sample-rate','x-channels']) if(upstream.headers.has(name))headers.set(name,upstream.headers.get(name));
+      return new Response(upstream.body, {headers});
+    }
+    if (request.method !== 'POST') return json(404, { error: 'Unsupported operation' });
+    const owner = request.headers.get('x-shahvex-owner');
+    if (!owner || !/^[a-zA-Z0-9_-]{1,128}$/.test(owner)) return json(400, { error: 'Invalid owner' });
+    const chunks = []; let size = 0;
+    if (request.body) for await (const chunk of request.body) {
+      size += chunk.length; if (size > 2_000_000) return json(413, { error: 'Request too large' }); chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks);
+    ai.pruneSessions();
+    if (match[1] === 'start') {
+      if (body.length > 70000) return json(413, { error: 'Configuration too large' });
+      let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }
+      const parsed = ai.testConfig.safeParse(input.config);
+      if (!parsed.success || typeof input.agentId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.agentId)) return json(400, { error: 'Invalid configuration' });
+      // No awaits between admission and allocation; single-process admission is atomic.
+      const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
+      if (others >= maxSessions) return json(429, { error: 'AI sessions are busy' });
+      return json(200, { id: ai.newTest(owner, input.agentId, parsed.data) });
+    }
+    const id = request.headers.get('x-shahvex-session') || '';
+    const turn = request.headers.get('x-shahvex-turn') || crypto.randomUUID();
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || !/^[a-zA-Z0-9_-]{1,80}$/.test(turn)) return json(400, { error: 'Invalid session or turn' });
+    const target = new URL('http://127.0.0.1/tester');
+    target.searchParams.set('action', match[1]); target.searchParams.set('id', id); target.searchParams.set('turnId', turn);
+    return handleTestSession(new Request(target, { method: 'POST', headers: { 'content-type': request.headers.get('content-type') || 'application/json' }, body, signal: request.signal }), owner, true);
+  }
+  const server = http.createServer(async (req, res) => {
+    const abort = new AbortController();
+    res.once('close', () => { if (!res.writableFinished) abort.abort(); });
+    try {
+      const request = new Request(new URL(req.url, 'http://127.0.0.1'), { method: req.method, headers: req.headers,
+        ...(req.method !== 'GET' && req.method !== 'HEAD' ? { body: Readable.toWeb(req), duplex: 'half' } : {}), signal: abort.signal });
+      const response = await dispatch(request);
+      res.writeHead(response.status, Object.fromEntries(response.headers));
+      if (response.body) await pipeline(Readable.fromWeb(response.body), res); else res.end();
+    } catch { if (!res.headersSent) res.writeHead(503, { 'cache-control': 'no-store' }); res.end(); }
+  });
+  server.requestTimeout = 130000;
+  return { server, dispatch };
+}
+if (require.main === module) {
+  // A transport flag on this process would recursively send inference upstream.
+  if (process.env.SHAHVEX_PC_AI_URL) throw Error('Unset SHAHVEX_PC_AI_URL on the PC tester service');
+  const { server } = createTesterService({ secret: process.env.SHAHVEX_PC_AI_SECRET, maxSessions: process.env.SHAHVEX_PC_AI_MAX_SESSIONS });
+  server.listen(Number(process.env.SHAHVEX_PC_TESTER_PORT || 8774), '127.0.0.1', () => process.stdout.write('PC AI adapter listening on loopback\n'));
+}
+module.exports = { createTesterService };

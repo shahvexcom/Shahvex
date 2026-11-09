@@ -4,7 +4,7 @@ import { conversationStyles } from "@/lib/agent-script-details";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
 import { db } from "@/lib/database";
-import { engine, localVoices, newTest, pruneSessions, sessions, testConfig, warmSelectedVoice } from "@/lib/agent-test";
+import { engine, localVoices, newTest, pruneSessions, testConfig, warmSelectedVoice } from "@/lib/agent-test";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,12 +53,25 @@ export async function POST(request: Request) {
       await warmSelectedVoice(parsed.data.voice);
       const details = await extractAgentScript(owner, parsed.data.script, request.signal);
       request.signal.throwIfAborted();
-      return json({ id: newTest(owner, body.agentId, { ...parsed.data, name: found.rows[0].name,
+      const config = { ...parsed.data, name: found.rows[0].name,
         goal: details.goals.join("\n"), task: details.tasks.join("\n"),
         instructions: [...details.instructions, ...details.conversationFlow, ...details.restrictions].join("\n"),
         knowledge: [...details.knowledge, ...details.faqs].join("\n"),
         style: conversationStyles.includes(parsed.data.style as typeof conversationStyles[number]) ? parsed.data.style : "Professional",
-      }) });
+      };
+      if (process.env.SHAHVEX_PC_AI_URL) {
+        const { pcAiRequest } = await import("@/lib/pc-ai-engine");
+        return pcAiRequest("/tester/start", { method: "POST", signal: request.signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: body.agentId, config }) }, owner);
+      }
+      return json({ id: newTest(owner, body.agentId, config) });
+    }
+    if (process.env.SHAHVEX_PC_AI_URL && ["turn", "interrupt", "stop"].includes(action || "")) {
+      if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return json({ error: "Invalid session" }, 400);
+      const parts: Uint8Array[] = []; let size = 0;
+      if (request.body) for await (const part of request.body as unknown as AsyncIterable<Uint8Array>) { size += part.length; if (size > 2_000_000) return json({ error: "Request too large" }, 413); parts.push(part); }
+      const { pcAiRequest } = await import("@/lib/pc-ai-engine");
+      return pcAiRequest(`/tester/${action}`, { method: "POST", signal: request.signal,
+        headers: { "content-type": request.headers.get("content-type") || "application/json", "x-shahvex-session": id, "x-shahvex-turn": url.searchParams.get("turnId") || crypto.randomUUID() }, body: Buffer.concat(parts) }, owner);
     }
     return handleTestSession(request, owner);
   } catch { return json({ error: "Local agent test request failed. Check the local services and try again." }, 503); }
