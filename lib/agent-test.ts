@@ -10,7 +10,7 @@ export const testConfig = z.object({
 });
 export type TestConfig = z.infer<typeof testConfig>;
 type Message = { role: "system" | "user" | "assistant"; content: string };
-type Session = { turns?: Set<string>; recordingHashes?: Set<string>; owner: string; agentId: string; config: TestConfig; messages: Message[]; expires: number; busy: boolean; abort?: AbortController };
+type Session = { turns?: Set<string>; recordingHashes?: Set<string>; owner: string; agentId: string; config: TestConfig; messages: Message[]; expires: number; busy: boolean; abort?: AbortController; finished?: Promise<void> };
 const state = globalThis as unknown as { agentTestSessions?: Map<string, Session> };
 export const sessions = state.agentTestSessions ??= new Map<string, Session>();
 export function pruneSessions() {

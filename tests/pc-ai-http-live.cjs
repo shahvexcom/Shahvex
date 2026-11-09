@@ -9,8 +9,8 @@ async function main() {
   if (process.env.SHAHVEX_LIVE_PC_HTTP !== '1') throw Error('Set SHAHVEX_LIVE_PC_HTTP=1 to run live engines');
   const key = crypto.randomBytes(32).toString('hex');
   const {server} = createTesterService({secret:key});
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(8774,'127.0.0.1',resolve);});
-  const base='http://127.0.0.1:8774';
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
+  const base=`http://127.0.0.1:${server.address().port}`;
   async function call(path,body,extra={}) {
     const response=await fetch(base+path,{method:body===undefined?'GET':'POST',headers:{'x-shahvex-ai-key':key,...extra},body,signal:AbortSignal.timeout(120000)});
     assert.equal(response.status,200,`HTTP ${response.status} on ${path}`);return response;

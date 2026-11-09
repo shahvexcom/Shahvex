@@ -9,7 +9,17 @@ export async function handleTestSession(request: Request, owner: string, publicD
   try {
     const session = sessions.get(id); if (!session || session.owner !== owner) return json({ error: "Test session expired. Start again." }, 404);
     if (action === "stop") { session.abort?.abort(); sessions.delete(id); return json({ stopped: true }); }
-    if (action === "interrupt") { session.abort?.abort(); return json({ interrupted: true }); }
+    if (action === "interrupt") {
+      session.abort?.abort();
+      // Acknowledge only after the old worker has released its session, not just
+      // after requesting cancellation. Remote cleanup can outlast a browser retry.
+      if (session.busy && session.finished) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([session.finished, new Promise<void>(resolve => { timer = setTimeout(resolve, 10000); })]); }
+        finally { clearTimeout(timer); }
+      }
+      return session.busy ? json({ error: "Previous turn is finishing; try again.", code: "BUSY" }, 409) : json({ interrupted: true });
+    }
     if (action !== "turn") return json({ error: "Unknown action" }, 400);
     if (session.busy) return json({ error: "Previous turn is finishing; try again.", code: "BUSY" }, 409);
     const turnId = url.searchParams.get("turnId") || crypto.randomUUID();
@@ -18,7 +28,12 @@ export async function handleTestSession(request: Request, owner: string, publicD
     if (session.turns.has(turnId)) return json({ error: "This turn has already been handled", code: "DUPLICATE_TURN" }, 409);
     session.turns.add(turnId); if (session.turns.size > 200) session.turns.delete(session.turns.values().next().value!);
     const abort = new AbortController(); session.busy = true; session.abort = abort;
-    request.signal.addEventListener("abort", () => abort.abort(), { once: true });
+    let release!: () => void;
+    session.finished = new Promise<void>(resolve => { release = resolve; });
+    const cancel = () => abort.abort();
+    request.signal.addEventListener("abort", cancel, { once: true });
+    if (request.signal.aborted) abort.abort();
+    const deadline = setTimeout(() => abort.abort(), 110000);
     const enc = new TextEncoder();
     const stream = new ReadableStream({
       async start(controller) {
@@ -72,6 +87,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
           }
           if (session.messages.length > 41) session.messages.splice(3, session.messages.length - 41);
           session.busy = false; session.expires = Date.now() + 30 * 60_000;
+          clearTimeout(deadline); request.signal.removeEventListener("abort", cancel); release();
           try { controller.close(); } catch { /* The browser may already have cancelled the stream. */ }
         }
       }, cancel() { abort.abort(); },

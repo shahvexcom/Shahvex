@@ -168,8 +168,8 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       let r: Response;
       for (let attempt = 0; ; attempt++) {
         r = await fetch(`${base}?action=turn&id=${session.current}&turnId=${turnId}`, { method: "POST", signal: control.signal, headers: { "Content-Type": audio ? "audio/wav" : "application/json" }, body: audio || JSON.stringify({ text: message, opening }) });
-        if (r.status !== 409 || attempt >= 10) break;
-        const rejection = await r.json(); if (rejection.code !== "BUSY") throw Error(rejection.error); await new Promise(resolve => setTimeout(resolve, 100)); control.signal.throwIfAborted();
+        if (r.status !== 409 || attempt >= 40) break;
+        const rejection = await r.json(); if (rejection.code !== "BUSY") throw Error(rejection.error); await new Promise(resolve => setTimeout(resolve, 250)); control.signal.throwIfAborted();
       }
       if (!r.ok) throw Error((await r.json()).error); if (!r.body) throw Error("Missing response stream");
       const reader = r.body.getReader(), decoder = new TextDecoder(); let pending = "";

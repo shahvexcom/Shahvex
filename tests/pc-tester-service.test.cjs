@@ -69,14 +69,16 @@ test('interrupt aborts in-flight inference and permits a subsequent turn',async(
   const previous=global.fetch;
   let observedAbort=false;
   global.fetch=async(url,init)=>new Promise((resolve,reject)=>{
-    init.signal.addEventListener('abort',()=>{observedAbort=true;reject(Error('cancelled'));},{once:true});
+    init.signal.addEventListener('abort',()=>{observedAbort=true;setTimeout(()=>reject(Error('cancelled')),50);},{once:true});
   });
   const {dispatch}=createTesterService({secret});
   const {id}=await (await dispatch(request('start','cancel-owner',{agentId:'a',config}))).json();
   try {
     const pending=await dispatch(request('turn','cancel-owner',{text:'hello'},id));
     assert.equal((await dispatch(request('turn','cancel-owner',{text:'overlap'},id))).status,409);
+    const cancelStarted=Date.now();
     assert.equal((await dispatch(request('interrupt','cancel-owner',{},id))).status,200);
+    assert.ok(Date.now()-cancelStarted>=40,'Interrupt must wait for inference cleanup before acknowledging');
     await pending.text();assert.equal(observedAbort,true);
     const next=await dispatch(request('turn','cancel-owner',{text:'again'},id));assert.equal(next.status,200);
     await dispatch(request('stop','cancel-owner',{},id));await next.text();
