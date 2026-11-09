@@ -60,6 +60,11 @@ model AgentCredential {
 }
 
 model Agent {
+  localVoiceId String? @map("local_voice_id")
+  agentScript String @default("") @map("agent_script")
+  conversationStyle String @default("Professional") @map("conversation_style")
+  speaksFirst String @default("customer") @map("speaks_first")
+  language String @default("English")
   id           String       @id @default(cuid())
   name         String       @unique
   username     String       @unique
@@ -73,4 +78,75 @@ model Agent {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
   credentials  AgentCredential[]
+}
+
+// Additive tables also bootstrapped by the existing SQL schema initializer.
+// Do not run a destructive schema reset against the older application tables.
+model AdminAgentOwner {
+  verified  Boolean @default(false)
+  agentId   String   @id @map("agent_id")
+  ownerId   String   @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  @@index([ownerId], map: "admin_agent_owners_owner_idx")
+  @@map("admin_agent_owners")
+}
+
+model VoipConnection {
+  id               String   @id
+  ownerId          String   @map("owner_id")
+  name             String   @db.VarChar(80)
+  serverUrl        String   @map("server_url")
+  username         String   @db.VarChar(80)
+  secretCiphertext String   @map("secret_ciphertext")
+  method           String   @default("NON_AGENT_API")
+  enabled          Boolean  @default(true)
+  status           String   @default("NOT_TESTED")
+  lastTestedAt     DateTime? @map("last_tested_at")
+  statusMessage    String   @default("") @map("status_message")
+  revision         Int      @default(1)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @map("updated_at")
+  assignments      VoipAgentAssignment[]
+  @@unique([id, ownerId])
+  @@index([ownerId], map: "voip_connections_owner_idx")
+  @@map("voip_connections")
+}
+
+model VoipAgentAssignment {
+  id                 String @id
+  ownerId            String @map("owner_id")
+  agentId            String @map("agent_id")
+  connectionId       String @map("connection_id")
+  direction          String
+  campaignId         String @default("") @map("campaign_id") @db.VarChar(80)
+  inboundDid         String @default("") @map("inbound_did") @db.VarChar(80)
+  inGroup            String @default("") @map("in_group") @db.VarChar(80)
+  routingDestination String @default("") @map("routing_destination") @db.VarChar(160)
+  updatedAt          DateTime @default(now()) @map("updated_at")
+  connection         VoipConnection @relation(fields: [connectionId, ownerId], references: [id, ownerId], onDelete: Restrict)
+  @@unique([ownerId, agentId])
+  @@map("voip_agent_assignments")
+}
+
+model LocalVoiceRegistry {
+ id String @id
+ name String @db.VarChar(80)
+ gender String
+ language String @default("English")
+ accent String @default("") @db.VarChar(100)
+ ownerId String? @map("owner_id")
+ isGlobal Boolean @default(false) @map("is_global")
+ referencePath String? @map("reference_path")
+ referenceTranscript String @default("") @map("reference_transcript")
+ status String @default("PENDING")
+ rightsVerified Boolean @default(false) @map("rights_verified")
+ transcriptVerified Boolean @default(false) @map("transcript_verified")
+ serviceTrusted Boolean @default(false) @map("service_trusted")
+ createdAt DateTime @default(now()) @map("created_at")
+ updatedAt DateTime @default(now()) @map("updated_at")
+ @@map("local_voice_registry")
+}
+model LocalVoiceBootstrap {
+ id String @id
+ @@map("local_voice_bootstrap")
 }

@@ -1,12 +1,12 @@
 "use client";
+import { CustomDropdown } from "./custom-dropdown";
 import { ResendOtp } from "./resend-otp";
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   FiUser,
   FiAtSign,
   FiLock,
-  FiChevronDown,
   FiEye,
   FiEyeOff,
   FiMic,
@@ -27,7 +27,6 @@ export function AuthForm({ mode, portal = "agent" }: { mode: "login" | "register
   const [confirmed, setConfirmed] = useState(false);
   const [accent, setAccent] = useState("");
   const [gender, setGender] = useState("");
-  const [menu, setMenu] = useState<"accent" | "gender" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -39,14 +38,6 @@ export function AuthForm({ mode, portal = "agent" }: { mode: "login" | "register
   const [verificationToken, setVerificationToken] = useState("");
   const [loginOtp, setLoginOtp] = useState("");
   const [requiresTwoFactor, setRequiresTwoFactor] = useState(false);
-  useEffect(() => {
-    const close = (event: MouseEvent) => {
-      const target = event.target as Element;
-      if (!target.closest(".custom-picker")) setMenu(null);
-    };
-    document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, []);
   async function check(field: "name" | "username", value: string) {
     if (value.trim().length < 3) return;
     try {
@@ -212,13 +203,8 @@ export function AuthForm({ mode, portal = "agent" }: { mode: "login" | "register
                     <Picker
                       value={gender || "Select gender"}
                       options={genders}
-                      open={menu === "gender"}
-                      onOpen={() =>
-                        setMenu(menu === "gender" ? null : "gender")
-                      }
                       onSelect={(v) => {
                         setGender(v);
-                        setMenu(null);
                       }}
                     />
                   </Field>
@@ -226,13 +212,8 @@ export function AuthForm({ mode, portal = "agent" }: { mode: "login" | "register
                     <Picker
                       value={accent || "Choose accent"}
                       options={accents}
-                      open={menu === "accent"}
-                      onOpen={() =>
-                        setMenu(menu === "accent" ? null : "accent")
-                      }
                       onSelect={(v) => {
                         setAccent(v);
-                        setMenu(null);
                       }}
                     />
                   </Field>
@@ -320,51 +301,6 @@ function Field({
     </label>
   );
 }
-function Picker({
-  value,
-  options,
-  open,
-  onOpen,
-  onSelect,
-}: {
-  value: string;
-  options: string[];
-  open: boolean;
-  onOpen: () => void;
-  onSelect: (v: string) => void;
-}) {
-  return (
-    <div className="custom-picker">
-      <button
-        type="button"
-        className="custom-select"
-        onMouseDown={(e) => e.stopPropagation()}
-        onClick={onOpen}
-      >
-        {value}
-        <FiChevronDown />
-      </button>
-      {open && (
-        <div className="select-menu" onMouseDown={(e) => e.stopPropagation()}>
-          {options.map((o) => (
-            <button type="button" key={o} onClick={() => onSelect(o)}>
-              {o}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+function Picker({value,options,onSelect}:{value:string;options:string[];onSelect:(v:string)=>void}) {
+  return <CustomDropdown className="custom-picker" triggerClassName="custom-select" value={value} placeholder={value} options={options.map(option=>({value:option,label:option}))} onChange={onSelect} ariaLabel={options.includes("Male")?"Voice gender":"Accent"}/>;
 }
-
-
-
-
-
-
-
-
-
-
-
-

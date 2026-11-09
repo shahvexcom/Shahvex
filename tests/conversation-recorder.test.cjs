@@ -1,0 +1,6 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const ts=require('typescript');
+test('recorder preserves chunk order, rejects duplicate start, finalizes once and reports its actual MIME',async()=>{
+  let instance;class FakeRecorder{static isTypeSupported(type){return type==='audio/webm;codecs=opus';}constructor(stream,options){this.state='inactive';this.options=options;instance=this;}start(){this.state='recording';}stop(){this.state='inactive';queueMicrotask(()=>{this.ondataavailable({data:new Blob(['customer;'])});this.ondataavailable({data:new Blob(['ai;'])});this.onstop();});}}
+  const m={exports:{}};new Function('module','exports','MediaRecorder',ts.transpileModule(fs.readFileSync('lib/browser-conversation-recorder.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(m,m.exports,FakeRecorder);
+  const r=new m.exports.ConversationRecorder();let done=0,recorded;r.start({},blob=>{done++;recorded=blob;},e=>assert.fail(e));assert.throws(()=>r.start({},()=>{},()=>{}),/already/);assert.equal(instance.options.mimeType,'audio/webm;codecs=opus');r.stop();r.stop();await new Promise(resolve=>setImmediate(resolve));assert.equal(done,1);assert.equal(await recorded.text(),'customer;ai;');assert.equal(recorded.type,'audio/webm;codecs=opus');
+});

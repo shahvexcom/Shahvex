@@ -65,6 +65,13 @@ export async function startAgentCall(agentId: string, options: BpoCallOptions = 
     await client.query("BEGIN");
     const locked = await client.query("SELECT id FROM agents WHERE id=$1 FOR UPDATE", [agentId]);
     if (!locked.rowCount) throw new CallStartError("Agent not found.", 404);
+    if (!options.bpoId) {
+      const setup = await client.query(`SELECT a.id FROM agents a WHERE a.id=$1
+        AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id)
+        AND EXISTS (SELECT 1 FROM script_assignments s WHERE s.agent_id=a.id AND BTRIM(s.script_text)<>'')
+        AND EXISTS (SELECT 1 FROM voip_agent_assignments va JOIN voip_connections vc ON vc.id=va.connection_id AND vc.owner_id=va.owner_id WHERE va.agent_id=a.id AND vc.enabled=TRUE AND vc.status='CONNECTED')`, [agentId]);
+      if (!setup.rowCount) throw new CallStartError("Assign a script and an enabled, API-verified VoIP connection before starting this controller agent.", 400);
+    }
     if (options.bpoId) {
       // Serialise BPO starts on the workspace row. This prevents two browser
       // requests (manual or auto) from both consuming the final plan call.

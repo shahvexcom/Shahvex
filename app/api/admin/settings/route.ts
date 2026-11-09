@@ -5,7 +5,7 @@ import { z } from "zod";
 import { db } from "@/lib/database";
 import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
 
-const permissions = ["dashboard", "quickdial", "agents", "scripts", "documents", "credentials", "queue", "reports", "live", "settings"] as const;
+const permissions = ["dashboard", "quickdial", "agents", "scripts", "documents", "credentials", "voip", "queue", "reports", "live", "settings"] as const;
 const permissionSchema = z.array(z.enum(permissions)).min(1);
 const profileSchema = z.object({ action: z.literal("profile"), name: z.string().trim().min(2).max(80), username: z.string().trim().toLowerCase().regex(/^[a-z0-9._-]{3,30}$/), email: z.string().trim().toLowerCase().email().max(254).or(z.literal("")), avatar_url: z.string().trim().url().max(2048).or(z.literal("")), currentPassword: z.string().optional().default(""), newPassword: z.preprocess(value => value === "" ? undefined : value, z.string().min(8).max(128).optional()) }).refine(v => !v.newPassword || !!v.currentPassword, { message: "Enter your current password to set a new password." });
 const roleSchema = z.object({ action: z.literal("role"), name: z.string().trim().min(2).max(80), permissions: permissionSchema });
@@ -41,4 +41,30 @@ export async function POST(request: Request) {
     const result = await client.query("INSERT INTO agents (id,name,username,email,avatar_url,password_hash,gender,accent,status,role,admin_role,admin_permissions,approved_at) VALUES ($1,$2,$3,$4,$5,$6,'OTHER','Professional','APPROVED','ADMIN',$7,$8::jsonb,NOW()) RETURNING id,name,username,email,COALESCE(avatar_url,'') avatar_url,admin_role,admin_permissions", [randomUUID(), parsed.data.name, parsed.data.username, parsed.data.email || null, parsed.data.avatar_url, await hash(parsed.data.password, 12), role.rows[0].name, JSON.stringify(role.rows[0].permissions)]); return Response.json({ message: "Sub-admin created.", admin: result.rows[0] }, { status: 201 });
   } catch (error: unknown) { if (typeof error === "object" && error && "code" in error && (error as { code?: string }).code === "23505") return Response.json({ message: "That email, username or role already exists." }, { status: 409 }); return Response.json({ message: "Unable to save changes." }, { status: 503 }); }
 }
-export async function DELETE(request: Request) { const admin = await currentAdmin(); if (!admin || !isSuper(admin)) return Response.json({ message: "Only the super admin can delete this." }, { status: 403 }); const url = new URL(request.url); const roleId = url.searchParams.get("roleId"), adminId = url.searchParams.get("adminId"), client = await db(); if (adminId) { const result = await client.query("DELETE FROM agents WHERE id=$1 AND role='ADMIN' AND admin_role <> 'SUPER_ADMIN' RETURNING id", [adminId]); return result.rows[0] ? Response.json({ message: "Sub-admin deleted." }) : Response.json({ message: "Sub-admin not found." }, { status: 404 }); } if (!roleId) return Response.json({ message: "Role is required." }, { status: 400 }); const role = await client.query("SELECT name FROM admin_roles WHERE id=$1", [roleId]); if (!role.rows[0]) return Response.json({ message: "Role not found." }, { status: 404 }); const inUse = await client.query("SELECT id FROM agents WHERE role='ADMIN' AND admin_role=$1 LIMIT 1", [role.rows[0].name]); if (inUse.rows[0]) return Response.json({ message: "Reassign admins before deleting this role." }, { status: 409 }); await client.query("DELETE FROM admin_roles WHERE id=$1", [roleId]); return Response.json({ message: "Role deleted." }); }
+export async function DELETE(request: Request) {
+ const admin=await currentAdmin();
+ if(!admin||!isSuper(admin))return Response.json({message:"Only the super admin can delete this."},{status:403});
+ if(request.headers.get("origin")!==new URL(request.url).origin)return Response.json({message:"Same-origin request required."},{status:403});
+ const url=new URL(request.url),adminId=url.searchParams.get("adminId"),roleId=url.searchParams.get("roleId"),pool=await db();
+ if(adminId===admin.id)return Response.json({message:"You cannot delete your own signed-in account."},{status:409});
+ const tx=await pool.connect();
+ try{
+  await tx.query("BEGIN");
+  if(adminId){
+   const target=await tx.query("SELECT id FROM agents WHERE id=$1 AND role='ADMIN' FOR UPDATE",[adminId]);
+   if(!target.rows[0]){await tx.query("ROLLBACK");return Response.json({message:"Admin not found."},{status:404});}
+   // Preserve audit and role records that would otherwise block deletion or cascade away.
+   const refs=await tx.query(`SELECT ns.nspname schema_name,t.relname table_name,a.attname column_name FROM pg_constraint c JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace ns ON ns.oid=t.relnamespace JOIN pg_attribute a ON a.attrelid=t.oid AND a.attnum=c.conkey[1] WHERE c.contype='f' AND c.confrelid='agents'::regclass AND array_length(c.conkey,1)=1 AND (c.confdeltype IN ('a','r') OR a.attname='created_by')`);
+   const quote=(name:string)=>'"'+name.replaceAll('"','""')+'"';
+   for(const ref of refs.rows)await tx.query(`UPDATE ${quote(ref.schema_name)}.${quote(ref.table_name)} SET ${quote(ref.column_name)}=$1 WHERE ${quote(ref.column_name)}=$2`,[admin.id,adminId]);
+   await tx.query("DELETE FROM agents WHERE id=$1 AND role='ADMIN'",[adminId]);
+   await tx.query("COMMIT");return Response.json({message:"Admin deleted. Shared records have been retained."});
+  }
+  if(!roleId){await tx.query("ROLLBACK");return Response.json({message:"Role is required."},{status:400});}
+  const role=await tx.query("SELECT name FROM admin_roles WHERE id=$1 FOR UPDATE",[roleId]);
+  if(!role.rows[0]){await tx.query("ROLLBACK");return Response.json({message:"Role not found."},{status:404});}
+  const used=await tx.query("SELECT id FROM agents WHERE role='ADMIN' AND admin_role=$1 LIMIT 1",[role.rows[0].name]);
+  if(used.rows[0]){await tx.query("ROLLBACK");return Response.json({message:"Reassign admins before deleting this role."},{status:409});}
+  await tx.query("DELETE FROM admin_roles WHERE id=$1",[roleId]);await tx.query("COMMIT");return Response.json({message:"Role deleted."});
+ }catch(error){await tx.query("ROLLBACK");return Response.json({message:typeof error==='object'&&error&&'code' in error&&error.code==='23503'?"This admin still owns linked records. Reassign them before deleting.":"Unable to delete. Please try again."},{status:409});}finally{tx.release();}
+}

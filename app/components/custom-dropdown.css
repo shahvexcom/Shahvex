@@ -46,16 +46,45 @@
 .custom-dropdown-menu {
   position: fixed;
   z-index: 10000;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   max-height: 220px;
-  gap: 2px;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 5px;
   border: 1px solid #ece4dd;
   border-radius: 10px;
   background: #fff;
   box-shadow: 0 12px 28px rgba(232, 82, 10, .16);
 }
+
+.custom-dropdown-options {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.custom-dropdown-options::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.custom-dropdown-options-content { display: grid; gap: 2px; }
+.custom-dropdown-menu .custom-dropdown-scroll {
+  display: flex;
+  flex: 0 0 25px;
+  height: 25px;
+  min-height: 25px;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border-radius: 6px;
+  background: #fff7f0;
+  color: #e85f15;
+  cursor: pointer;
+  touch-action: none;
+}
+.custom-dropdown-menu .custom-dropdown-scroll svg { display: block; width: 16px; height: 16px; }
+.custom-dropdown-menu .custom-dropdown-scroll:disabled { opacity: .3; cursor: default; }
+.custom-dropdown-menu [role="option"]:focus-visible { outline: 2px solid #eb6316; outline-offset: -2px; }
 
 .custom-dropdown-menu button {
   width: 100%;
@@ -78,3 +107,5 @@
 @media (max-width: 620px) {
   .custom-dropdown-menu { max-height: 180px; }
 }
+
+.agent-multi-summary{display:flex;align-items:center;gap:10px;min-width:0}.agent-multi-summary>span:last-child{display:grid;gap:4px;min-width:0}.agent-multi-summary b{font-size:11px}.agent-multi-summary small{font-size:9px;color:#9b8d80}.agent-multi-dropdown .custom-dropdown-trigger{min-height:58px;padding:11px 13px}.agent-multi-options [role=option]{display:flex;align-items:center;gap:10px}.agent-multi-options [role=option]>span:not(.script-avatar){display:grid;gap:4px;min-width:0}.agent-multi-options small{font-size:9px;color:#9b8d80}.agent-multi-options em{margin-left:auto;color:#e85f15;font-style:normal}.custom-picker .custom-dropdown-trigger{font-size:inherit}

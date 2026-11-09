@@ -22,7 +22,10 @@ import {
   FiX,
 } from "react-icons/fi";
 import { FaFacebookMessenger, FaInstagram, FaWhatsapp } from "react-icons/fa6";
-import { AdminVoices } from "./admin-voices";
+
+import "./voip-manager.css";
+import "./bpo-card-polish.css";
+
 import { BpoPlans } from "./bpo-plans";
 import { CustomDropdown } from "./custom-dropdown";
 import "./bpo-management.css";
@@ -74,11 +77,10 @@ function joined(value: string) {
 
 const PAGE_SIZE = 8;
 
-type BpoTab = "users" | "voices" | "plans" | "finance";
+type BpoTab = "users" | "plans" | "finance";
 
 const bpoTabs: { id: BpoTab; label: string; icon: React.ReactNode }[] = [
   { id: "users", label: "BPO Users", icon: <FiUsers /> },
-  { id: "voices", label: "Voices", icon: <FiShield /> },
   { id: "plans", label: "Plans", icon: <FiCreditCard /> },
   { id: "finance", label: "Finance", icon: <FiCreditCard /> },
 ];
@@ -106,7 +108,6 @@ export function BpoManagement({ query, setQuery, onAction }: { query: string; se
     </div>
     <div className="bpo-admin-tab-panel" role="tabpanel">
       {activeTab === "users" && <BpoUsers query={query} setQuery={setQuery} onAction={onAction} />}
-      {activeTab === "voices" && <AdminVoices onAction={onAction} />}
       {activeTab === "plans" && <BpoPlans onAction={onAction} />}
       {activeTab === "finance" && <BpoFinance onAction={onAction} />}
     </div>
@@ -284,7 +285,7 @@ function BpoUsers({ query, setQuery, onAction }: { query: string; setQuery: (val
             <div><h2>{user.name}</h2><p><FiMail /> {user.email || "No email provided"}</p></div>
           </div>
           <div className="bpo-user-action">
-            <button type="button" className="bpo-action-trigger" aria-haspopup="menu" aria-expanded={menuId === user.id} onClick={() => setMenuId(current => current === user.id ? null : user.id)}><FiEdit3 /></button>
+            <button type="button" className="bpo-action-trigger" aria-label={`Manage ${user.name}`} aria-haspopup="menu" aria-expanded={menuId === user.id} onClick={() => setMenuId(current => current === user.id ? null : user.id)}><FiEdit3 /></button>
             {menuId === user.id && <><button type="button" className="bpo-action-menu-backdrop" onClick={() => setMenuId(null)} /><div className="bpo-action-menu" role="menu">
               <button type="button" role="menuitem" onClick={() => openAction("credits", user)}><FiCreditCard /> Load credit</button>
               <button type="button" role="menuitem" className="reduce" onClick={() => openAction("reduce", user)}><FiMinusCircle /> Reduce credit</button>
@@ -304,7 +305,7 @@ function BpoUsers({ query, setQuery, onAction }: { query: string; setQuery: (val
         <dl className="bpo-user-details">
           <div><dt><FiCalendar /> Joining date</dt><dd>{joined(user.created_at)}</dd></div>
           <div><dt>Overall credits</dt><dd>{credits(user.overall_credits)}</dd></div>
-          <div><dt>Remaining credits</dt><dd>{credits(user.remaining_credits)}</dd></div>
+          <div className="bpo-credit-balance"><dt>Remaining credits</dt><dd>{credits(user.remaining_credits)}</dd></div>
           <div><dt>Active agents</dt><dd>{Number(user.active_agents || 0).toLocaleString()}</dd></div>
           <div><dt>Total calls</dt><dd>{Number(user.total_calls || 0).toLocaleString()}</dd></div>
           <div><dt>Spend amount</dt><dd>{credits(user.spend_amount)}</dd></div>
@@ -314,7 +315,8 @@ function BpoUsers({ query, setQuery, onAction }: { query: string; setQuery: (val
       </article>)}</div>
       : <section className="admin-card bpo-admin-empty"><div className="bpo-empty-symbol">{query.trim() || status !== "ALL" ? <FiSearch /> : <FiUsers />}</div><h2>{query.trim() || status !== "ALL" ? "No matching BPO users" : "Your BPO network starts here"}</h2><p>{query.trim() || status !== "ALL" ? "Try another name or clear your filters to see all registered accounts." : "Registered teams will appear here. Manage their access, credits and calling operations in one place."}</p>{query.trim() || status !== "ALL" ? <button className="admin-outline" type="button" onClick={() => { setQuery(""); setStatus("ALL"); setPage(1); }}><FiRefreshCw /> Clear filters</button> : <a className="bpo-empty-register" href="/bpo/register" target="_blank" rel="noopener noreferrer"><FiUsers /> Open BPO registration</a>}</section>}
 
-    {!loadError && filtered.length > 0 && <div className="bpo-admin-pagination"><small>Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length}</small><div><button aria-label="Previous BPO page" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}><FiChevronLeft /></button>{Array.from({ length: pageCount }, (_, index) => index + 1).map(number => <button key={number} className={number === currentPage ? "active" : ""} onClick={() => setPage(number)}>{number}</button>)}<button aria-label="Next BPO page" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}><FiChevronRight /></button></div></div>}
+    {!loadError && filtered.length > 0 && <nav className="bpo-admin-pagination" aria-label="BPO user pages"><div className="bpo-page-summary"><b>{(currentPage - 1) * PAGE_SIZE + 1}&ndash;{Math.min(currentPage * PAGE_SIZE, filtered.length)} <span>of {filtered.length} BPO users</span></b><small>Page {currentPage} of {pageCount}</small></div><div className="bpo-page-controls"><button className="bpo-page-direction" aria-label="Previous BPO page" disabled={currentPage === 1} onClick={() => setPage(currentPage - 1)}><FiChevronLeft/><span>Previous</span></button>{Array.from({length:pageCount},(_,i)=>i+1).filter(n=>n===1||n===pageCount||Math.abs(n-currentPage)<=1).map((number,index,list)=><span className="bpo-page-number-wrap" key={number}>{index>0&&number-list[index-1]>1&&<span className="bpo-page-gap" aria-hidden="true">&hellip;</span>}<button aria-label={`BPO page ${number}`} aria-current={number===currentPage?'page':undefined} className={number===currentPage?'active':''} onClick={()=>setPage(number)}>{number}</button></span>)}<button className="bpo-page-direction" aria-label="Next BPO page" disabled={currentPage === pageCount} onClick={() => setPage(currentPage + 1)}><span>Next</span><FiChevronRight/></button></div></nav>}
+
 
     {action && <div className="agent-modal-backdrop bpo-action-backdrop" onMouseDown={event => event.target === event.currentTarget && !busy && setAction(null)}>
       <section className="agent-modal bpo-action-modal" role="dialog" aria-modal="true" aria-labelledby="bpo-action-title">

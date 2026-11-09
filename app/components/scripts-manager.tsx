@@ -1,4 +1,5 @@
 "use client";
+import { AdminSkeleton } from "./admin-skeleton";
 import { CustomDropdown } from "./custom-dropdown";
 import { useEffect, useState } from "react";
 import {
@@ -62,60 +63,14 @@ function AgentMultiSelect({
   value: string[];
   onChange: (x: string[]) => void;
 }) {
-  const [open, setOpen] = useState(false),
-    selected = agents.filter((a) => value.includes(a.id));
-  return (
-    <div className="agent-multi">
-      <button type="button" onClick={() => setOpen(!open)}>
-        <span className="agent-picker-avatars">
-          {selected.length ? (
-            selected
-              .slice(0, 3)
-              .map((a) => (
-                <Avatar key={a.id} src={a.avatar_url} name={a.name} />
-              ))
-          ) : (
-            <span className="script-avatar">?</span>
-          )}
-        </span>
-        <span>
-          <b>
-            {selected.length
-              ? `${selected.length} agent${selected.length > 1 ? "s" : ""} selected`
-              : "Select approved agents"}
-          </b>
-          <small>Minimum 1 agent required</small>
-        </span>
-        <i>⌄</i>
-      </button>
-      {open && (
-        <div>
-          {agents.map((a) => (
-            <button
-              className={value.includes(a.id) ? "selected" : ""}
-              type="button"
-              key={a.id}
-              onClick={() =>
-                onChange(
-                  value.includes(a.id)
-                    ? value.filter((x) => x !== a.id)
-                    : [...value, a.id],
-                )
-              }
-            >
-              <Avatar src={a.avatar_url} name={a.name} />
-              <span>
-                <b>{a.name}</b>
-                <small>@{a.username} · Approved</small>
-              </span>
-              {value.includes(a.id) && <em>✓</em>}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const selected = agents.filter(a=>value.includes(a.id));
+  return <CustomDropdown className="agent-multi-dropdown" menuClassName="agent-multi-options" multiple
+    value={value[0]||""} ariaLabel="Select approved agents"
+    triggerContent={<span className="agent-multi-summary"><span className="agent-picker-avatars">{selected.length?selected.slice(0,3).map(a=><Avatar key={a.id} src={a.avatar_url} name={a.name}/>):<span className="script-avatar">?</span>}</span><span><b>{selected.length?`${selected.length} agent${selected.length>1?"s":""} selected`:"Select approved agents"}</b><small>Minimum 1 agent required</small></span></span>}
+    options={agents.map(a=>({value:a.id,label:`${a.name} @${a.username}`,selected:value.includes(a.id),content:<><Avatar src={a.avatar_url} name={a.name}/><span><b>{a.name}</b><small>@{a.username} &#183; Approved</small></span>{value.includes(a.id)&&<em>&#10003;</em>}</>}))}
+    onChange={id=>onChange(value.includes(id)?value.filter(v=>v!==id):[...value,id])}/>;
 }
+
 const responseData = async (r: Response) => {
   const text = await r.text();
   try {
@@ -140,6 +95,7 @@ export function ScriptsManager({
     [script, setScript] = useState<FileData | null>(null),
     [items, setItems] = useState<Assignment[]>([]),
     [busy, setBusy] = useState(""),
+    [loadError, setLoadError] = useState(""),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [editId, setEditId] = useState(""),
@@ -150,9 +106,10 @@ export function ScriptsManager({
     selected = approved.find((a) => a.id === id),
     load = () => {
       setLoading(true);
-      fetch("/api/admin/scripts")
-        .then(async (r) => (r.ok ? responseData(r) : null))
-        .then((d) => setItems(d?.assignments ?? []))
+      fetch("/api/admin/scripts",{signal:AbortSignal.timeout(15000)})
+        .then(async (r) => { if(!r.ok)throw Error("Unable to load scripts");return responseData(r);})
+        .then((d) => {setLoadError("");setItems(d?.assignments ?? []);})
+        .catch(e=>setLoadError(e.message||"Unable to load scripts"))
         .finally(() => setLoading(false));
     };
   useEffect(() => {
@@ -395,12 +352,9 @@ export function ScriptsManager({
             </button>
           </div>
         </div>
+        {loadError&&<p role="alert">{loadError}<button onClick={load}>Retry</button></p>}
         {loading ? (
-          <div className="script-assignment-grid">
-            {[1, 2, 3].map((x) => (
-              <div className="script-skeleton" key={x} />
-            ))}
-          </div>
+          <AdminSkeleton rows={3} label="Loading script assignments"/>
         ) : (
           <Cards a={items} view={view} edit={edit} askDelete={setDeleteItem} />
         )}

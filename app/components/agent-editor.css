@@ -1,0 +1,30 @@
+body .agent-modal.sv-agent-editor{width:min(760px,calc(100vw - 32px));max-height:90dvh;padding:0;display:flex;flex-direction:column;overflow:hidden;background:#fff9f1;border:1px solid #e7d6c3;border-radius:24px;box-shadow:0 28px 90px #38261733}
+body .sv-agent-editor>header{padding:24px 28px 20px;border-bottom:1px solid #ecdfcf;background:linear-gradient(120deg,#fffaf3,#f6e8d7);flex:none;align-items:flex-start;gap:16px}
+body .sv-agent-editor>header p{font-size:10px;letter-spacing:1.8px;color:#b46732;margin:0 0 8px;font-weight:750}
+body .sv-agent-editor>header h2{font-size:25px;letter-spacing:-.6px;margin:0 0 8px;color:#503e30;overflow-wrap:anywhere}
+body .sv-agent-editor .agent-editor-intro{font-size:12px;line-height:1.6;color:#8b7663}
+body .sv-agent-editor>header>button{display:grid;place-items:center;flex:none;width:34px;height:34px;padding:0;border:1px solid #e8d7c5;border-radius:11px;background:#fff8ef;color:#866c55}
+body .sv-agent-editor .agent-form-grid{padding:8px 28px 26px;margin:0;overflow:auto;min-height:0;gap:18px;overscroll-behavior:contain;grid-template-columns:repeat(2,minmax(0,1fr))}
+body .sv-agent-editor .agent-form-section{grid-column:1/-1;margin:12px 0 0;padding:16px 0 0;border-top:1px solid #eddfcf;display:flex;gap:12px;align-items:center;color:#604b38}
+body .sv-agent-editor .agent-form-section:first-child{border:0}
+body .sv-agent-editor .agent-form-section>svg{box-sizing:content-box;width:18px;height:18px;padding:10px;background:#f4e5d3;border-radius:12px;color:#bd6b30;flex:none}
+body .sv-agent-editor .agent-form-section span{font-size:13px;font-weight:750}
+body .sv-agent-editor .agent-form-section small{display:block;font-size:11px;font-weight:400;color:#917d69;margin-top:4px;line-height:1.5}
+body .sv-agent-editor label{min-width:0;display:flex;flex-direction:column;gap:8px;font-size:11px;font-weight:650;color:#6b5541}
+body .sv-agent-editor label>small{font-size:10px;color:#9b826a;font-weight:400}
+body .sv-agent-editor input:not([type=file]),body .sv-agent-editor .custom-dropdown-trigger{box-sizing:border-box;width:100%;min-width:0;min-height:44px;border:1px solid #e6d6c2;background:#fffcf7;border-radius:11px;padding:11px 12px;font-size:12px;color:#584431;box-shadow:0 2px 5px #67452205}
+body .sv-agent-editor input:focus-visible{outline:2px solid #df8b4f;outline-offset:2px}
+body .sv-agent-editor .password-field{width:100%;position:relative}body .sv-agent-editor .password-field input{padding-right:36px}
+body .sv-agent-editor .sv-agent-ai-fields{display:grid;grid-column:1/-1;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;align-items:end}
+body .sv-agent-editor .sv-agent-preview{display:flex;align-items:center;justify-content:center;gap:8px;min-height:44px;border:1px solid #dfc4a8;border-radius:11px;background:#f5e5d2;color:#a35d2a;font-size:12px;box-shadow:none}
+body .sv-agent-editor .sv-agent-preview svg{width:16px;height:16px;flex:none}
+body .sv-agent-editor .agent-avatar-upload>span{position:relative;display:flex;align-items:center;gap:10px;min-height:44px;border:1px dashed #d9bea1;border-radius:11px;padding:8px 12px;background:#fcf3e8;box-sizing:border-box}
+body .sv-agent-editor .agent-avatar-upload input{position:absolute;inset:0;opacity:0;width:100%;cursor:pointer}
+body .sv-agent-editor .agent-avatar-upload b{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:500;color:#9b683e}
+body .sv-agent-editor .agent-avatar-upload img{width:30px;height:30px;object-fit:cover;border-radius:9px}
+body .sv-agent-editor>footer{flex:none;display:flex;justify-content:flex-end;gap:10px;margin:0;padding:16px 28px;background:#f8eddf;border-top:1px solid #e8d7c4}
+body .sv-agent-editor>footer button{min-height:42px;border-radius:11px;padding:11px 20px;font-size:12px}
+body .sv-agent-editor .agent-form-error{flex:none;margin:0;padding:10px 28px;background:#fff0e8;font-size:12px;color:#a34430}
+@media(max-width:600px){body .agent-modal.sv-agent-editor{max-height:92dvh;border-radius:19px}body .sv-agent-editor>header{padding:20px}body .sv-agent-editor .agent-form-grid{padding:4px 20px 20px;grid-template-columns:minmax(0,1fr);gap:14px}body .sv-agent-editor .sv-agent-ai-fields{grid-template-columns:minmax(0,1fr);gap:14px}body .sv-agent-editor>footer{padding:14px 20px}body .sv-agent-editor>header h2{font-size:22px}}
+body .sv-agent-editor .agent-field-heading{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;min-height:14px}body .sv-agent-editor .agent-field-heading small{display:inline;font-size:10px;font-weight:400;color:#9b826a;margin:0}
+.sv-agent-section-tabs{display:flex;gap:6px;width:fit-content;padding:5px;margin:0 0 22px;border:1px solid #e8d7c3;border-radius:14px;background:#f5eadc}.sv-agent-section-tabs button{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 20px;border:1px solid transparent;border-radius:10px;background:transparent;color:#92765e;font:inherit;font-size:12px;font-weight:650;cursor:pointer}.sv-agent-section-tabs button[aria-selected=true]{background:#fff9f1;border-color:#e3ccb1;color:#a85b28;box-shadow:0 2px 6px #81502412}.sv-agent-section-tabs button:focus-visible{outline:2px solid #ce7c3e;outline-offset:2px}.sv-agent-section-tabs svg{width:15px;height:15px}

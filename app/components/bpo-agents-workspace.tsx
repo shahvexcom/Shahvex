@@ -1,16 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { FiBarChart2, FiCamera, FiCheck, FiEdit3, FiFileText, FiKey, FiMic, FiPause, FiPhoneCall, FiPlay, FiRefreshCw, FiUserPlus, FiUsers, FiX } from "react-icons/fi";
+import { useCallback, useEffect, useState, useRef } from "react";
+import { FiVolume2, FiBarChart2, FiCamera, FiCheck, FiEdit3, FiFileText, FiKey, FiMic, FiPause, FiPhoneCall, FiPlay, FiRefreshCw, FiUserPlus, FiUsers, FiX } from "react-icons/fi";
 import { CustomDropdown } from "./custom-dropdown";
 import "./bpo-agents-workspace.css";
 import "./bpo-agent-form-polish.css";
 import "./bpo-agent-activity.css";
 import "./bpo-agent-progress.css";
 
-type Voice = { id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
+type Voice = { selectable?:boolean; id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
 type Script = { id: string; script_file_name: string; lead_file_name: string; created_at: string };
-type CallingAgent = {
+type CallingAgent = { connection_id?:string;campaign_id?:string;
   id: string;
   name: string;
   gender: "MALE" | "FEMALE" | "OTHER";
@@ -31,14 +31,19 @@ type CallingAgent = {
   groq_label: string | null;
   progress: { calls: number; leadsCompleted: number; leadsTotal: number; leadsPercent: number; tasksCompleted: number; tasksTotal: number; tasksPercent: number };
 };
-type Form = { name: string; gender: "MALE" | "FEMALE" | "OTHER"; voiceId: string; scriptId: string; leadSheetId: string; dialingMode: "AUTO" | "MANUAL" | "BOTH"; avatarUrl: string };
+type Form = { connectionId:string;campaignId:string; name: string; gender: "MALE" | "FEMALE" | "OTHER"; voiceId: string; scriptId: string; leadSheetId: string; dialingMode: "AUTO" | "MANUAL" | "BOTH"; avatarUrl: string };
 
 const genderLabel = (gender: string) => gender.charAt(0) + gender.slice(1).toLowerCase();
-const initialForm: Form = { name: "", gender: "OTHER", voiceId: "", scriptId: "", leadSheetId: "", dialingMode: "BOTH", avatarUrl: "" };
+const initialForm: Form = {connectionId:"",campaignId:"", name: "", gender: "OTHER", voiceId: "", scriptId: "", leadSheetId: "", dialingMode: "BOTH", avatarUrl: "" };
 const dialingLabel = (mode: CallingAgent["dialing_mode"]) => mode === "AUTO" ? "Auto dialing" : mode === "MANUAL" ? "Manual dialing" : "Auto + manual";
 
 export default function BpoAgentsWorkspace() {
   const [agents, setAgents] = useState<CallingAgent[]>([]);
+  const [previewing,setPreviewing]=useState(false);const previewAudio=useRef<HTMLAudioElement|null>(null),previewURL=useRef(''),previewAbort=useRef<AbortController|null>(null);
+  const stopPreview=useCallback(()=>{previewAbort.current?.abort();previewAudio.current?.pause();previewAudio.current=null;if(previewURL.current)URL.revokeObjectURL(previewURL.current);previewURL.current='';setPreviewing(false);},[]);
+  useEffect(()=>()=>{previewAbort.current?.abort();previewAudio.current?.pause();if(previewURL.current)URL.revokeObjectURL(previewURL.current);},[]);
+  const previewVoice=async()=>{stopPreview();setPreviewing(true);const abort=new AbortController();previewAbort.current=abort;try{const r=await fetch('/api/bpo/voice-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice:form.voiceId}),signal:abort.signal});if(!r.ok)throw Error((await r.json()).error);const blob=await r.blob();if(abort.signal.aborted)return;previewURL.current=URL.createObjectURL(blob);const audio=new Audio(previewURL.current);previewAudio.current=audio;audio.onended=stopPreview;audio.onerror=stopPreview;await audio.play();}catch(e){if(!abort.signal.aborted){stopPreview();setError(e instanceof Error?e.message:'Preview unavailable');}}};
+  const [connections,setConnections]=useState<{id:string;name:string;enabled:boolean;status:string}[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [agentLimit, setAgentLimit] = useState(0);
@@ -61,6 +66,7 @@ export default function BpoAgentsWorkspace() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || "Unable to load calling agents.");
       setAgents(Array.isArray(data.agents) ? data.agents : []);
+      setConnections(Array.isArray(data.connections)?data.connections:[]);
       setVoices(Array.isArray(data.voices) ? data.voices : []);
       setScripts(Array.isArray(data.scripts) ? data.scripts : []);
       setAgentLimit(Number(data.agentLimit || 0));
@@ -77,13 +83,13 @@ export default function BpoAgentsWorkspace() {
   const remainingSlots = Math.max(0, agentLimit - agents.length);
   const readyAgents = agents.filter(agent => agent.telnyx_label || agent.groq_label).length;
   const assignedScripts = agents.filter(agent => Boolean(agent.script_name)).length;
-  const canCreate = remainingSlots > 0 && voices.length > 0 && scripts.length > 0;
-  const blocker = !agentLimit
+  const canCreate = connections.some(c=>c.enabled) && remainingSlots > 0 && voices.length > 0 && scripts.length > 0;
+  const blocker = !connections.some(c=>c.enabled) ? "Add an enabled connection in Dialing > VoIP before creating an agent." : !agentLimit
     ? "Buy a plan with agent slots to create a calling agent."
     : !remainingSlots
       ? "All plan agent slots are in use."
       : !voices.length
-        ? "Activate a controller-assigned AI voice in the Voices tab first."
+        ? "No approved voices are currently available. Please retry shortly."
         : !scripts.length
           ? "Upload a script and customer sheet first."
           : "";
@@ -92,7 +98,7 @@ export default function BpoAgentsWorkspace() {
     if (!canCreate) return;
     setMessage("");
     setEditingAgent(null);
-    setForm({ ...initialForm, voiceId: voices[0]?.id || "", scriptId: scripts[0]?.id || "", leadSheetId: scripts[0]?.id || "" });
+    setForm({ ...initialForm, connectionId:connections.find(c=>c.enabled)?.id||"",voiceId: voices[0]?.id || "", scriptId: scripts[0]?.id || "", leadSheetId: scripts[0]?.id || "" });
     setAvatarPreview("");
     setShowForm(true);
   };
@@ -101,12 +107,13 @@ export default function BpoAgentsWorkspace() {
     setMessage("");
     setError("");
     setEditingAgent(agent);
-    setForm({ name: agent.name, gender: agent.gender, voiceId: agent.voice_id, scriptId: agent.source_script_id, leadSheetId: agent.source_lead_id || agent.source_script_id, dialingMode: agent.dialing_mode, avatarUrl: agent.avatar_url || "" });
+    setForm({ connectionId:agent.connection_id||"",campaignId:agent.campaign_id||"",name: agent.name, gender: agent.gender, voiceId: agent.voice_id, scriptId: agent.source_script_id, leadSheetId: agent.source_lead_id || agent.source_script_id, dialingMode: agent.dialing_mode, avatarUrl: agent.avatar_url || "" });
     setAvatarPreview(agent.avatar_url || "");
     setShowForm(true);
   };
 
   const closeForm = () => {
+    stopPreview();
     if (busy || avatarUploading) return;
     setShowForm(false);
     setEditingAgent(null);
@@ -180,7 +187,7 @@ export default function BpoAgentsWorkspace() {
 
   return <main className="bpo-agent-page">
     <div className="bpo-agent-heading">
-      <div><p className="bpo-eyebrow">DIALING TEAM</p><h1>Create calling agents</h1><p>Create an AI calling agent with one controller-assigned voice and an uploaded script from your workspace.</p></div>
+      <div><p className="bpo-eyebrow">DIALING TEAM</p><h1>Create calling agents</h1><p>Create an AI calling agent with a selected voice and an uploaded script from your workspace.</p></div>
       <div className="bpo-agent-heading-actions"><button type="button" className="bpo-agent-refresh" onClick={() => void load()}><FiRefreshCw /> Refresh</button><button type="button" className="bpo-agent-create" disabled={!canCreate} data-tooltip={blocker} onClick={openForm}><FiUserPlus /> Create agent</button></div>
     </div>
 
@@ -214,7 +221,7 @@ export default function BpoAgentsWorkspace() {
     {showForm && <div className="bpo-agent-modal-backdrop" onMouseDown={event => event.target === event.currentTarget && closeForm()}>
       <form className="bpo-agent-modal" onSubmit={saveAgent}>
         <button type="button" className="bpo-agent-modal-close" disabled={busy || avatarUploading} onClick={closeForm} aria-label="Close"><FiX /></button>
-        <p className="bpo-eyebrow">{editingAgent ? "EDIT CALLING AGENT" : "NEW CALLING AGENT"}</p><h2>{editingAgent ? `Edit ${editingAgent.name}` : "Set up your agent"}</h2><p>Pick a profile picture if you want—then link an assigned AI voice and your uploaded campaign script.</p>
+        <p className="bpo-eyebrow">{editingAgent ? "EDIT CALLING AGENT" : "NEW CALLING AGENT"}</p><h2>{editingAgent ? `Edit ${editingAgent.name}` : "Set up your agent"}</h2><p>Pick a profile picture if you want—then select an AI voice and your uploaded campaign script.</p>
         <div className="bpo-agent-photo-picker">
           <div>{avatarPreview ? <img src={avatarPreview} alt="Agent preview" /> : <span>{form.name.trim().slice(0, 2).toUpperCase() || "AI"}</span>}</div>
           <label><input type="file" accept="image/*" onChange={event => void uploadAvatar(event.target.files?.[0])} /><FiCamera /><span>{avatarUploading ? "Uploading picture..." : form.avatarUrl ? "Change picture" : "Add a picture"}</span><small>Optional · JPG, PNG or WEBP · max 5 MB</small></label>
@@ -223,11 +230,14 @@ export default function BpoAgentsWorkspace() {
           <label>Agent name<input required minLength={2} maxLength={80} value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="e.g. Sarah Collections" /></label>
           <label>Gender<CustomDropdown value={form.gender} onChange={value => setForm(current => ({ ...current, gender: value as Form["gender"] }))} ariaLabel="Agent gender" options={[{ value: "FEMALE", label: "Female" }, { value: "MALE", label: "Male" }, { value: "OTHER", label: "Other" }]} /></label>
         </div>
-        <label>AI voice &amp; credentials<CustomDropdown value={form.voiceId} onChange={value => setForm(current => ({ ...current, voiceId: value }))} ariaLabel="AI voice and credentials" options={voices.map(voice => ({ value: voice.id, label: `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
+        <label>Agent voice<CustomDropdown value={form.voiceId} onChange={value => {stopPreview();setForm(current => ({ ...current, voiceId: value }));}} ariaLabel="Agent voice" options={voices.map(voice => ({ value: voice.id, label: `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
+        <button type="button" className="bpo-agent-preview" disabled={previewing||!voices.find(v=>v.id===form.voiceId)?.selectable} onClick={()=>void previewVoice()}><FiVolume2/>{previewing?'Playing preview...':'Preview voice'}</button>
+        <label>VoIP connection<CustomDropdown value={form.connectionId} ariaLabel="VoIP connection" onChange={value=>setForm(current=>({...current,connectionId:value}))} placeholder="Select your connection" options={connections.filter(c=>c.enabled).map(c=>({value:c.id,label:`${c.name}${c.status==='CONNECTED'?' - API verified':''}`}))}/></label>
+        <label>VICIdial outbound campaign ID<input required maxLength={80} value={form.campaignId} onChange={e=>setForm(current=>({...current,campaignId:e.target.value}))}/></label>
         <label>Dialing access<CustomDropdown value={form.dialingMode} onChange={value => setForm(current => ({ ...current, dialingMode: value as Form["dialingMode"] }))} ariaLabel="Dialing access" options={[{ value: "AUTO", label: "Auto dialing only" }, { value: "MANUAL", label: "Manual dialing only" }, { value: "BOTH", label: "Auto + manual dialing" }]} /></label>
         <label>Uploaded script<CustomDropdown value={form.scriptId} onChange={value => setForm(current => ({ ...current, scriptId: value }))} ariaLabel="Uploaded script" options={scripts.map(script => ({ value: script.id, label: script.script_file_name }))} /></label>
         <label>Customer sheet<CustomDropdown value={form.leadSheetId} onChange={value => setForm(current => ({ ...current, leadSheetId: value }))} ariaLabel="Customer sheet" options={scripts.map(script => ({ value: script.id, label: script.lead_file_name }))} /></label>
-        <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>
+        <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading || !connections.some(c=>c.enabled&&c.id===form.connectionId)}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>
       </form>
     </div>}
   </main>;

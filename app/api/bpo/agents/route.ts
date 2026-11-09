@@ -1,3 +1,4 @@
+import { localVoices } from "@/lib/agent-test";
 import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
 import { z } from "zod";
@@ -8,7 +9,9 @@ import { requireApprovedBpo } from "@/lib/bpo-session";
 const agentFormSchema = z.object({
   name: z.string().trim().min(2).max(80),
   gender: z.enum(["MALE", "FEMALE", "OTHER"]),
-  voiceId: z.string().uuid(),
+  connectionId: z.string().uuid(),
+  campaignId: z.string().trim().min(1).max(80),
+  voiceId: z.string().min(1).max(64),
   scriptId: z.string().uuid(),
   leadSheetId: z.string().uuid(),
   dialingMode: z.enum(["AUTO", "MANUAL", "BOTH"]),
@@ -19,8 +22,8 @@ const activitySchema = z.object({ action: z.literal("activity"), agentId: z.stri
 const editSchema = agentFormSchema.extend({ action: z.literal("edit"), agentId: z.string().uuid() });
 
 const agentFields = `a.id,a.name,a.gender,a.accent,a.status,a.created_at,COALESCE(a.avatar_url,'') avatar_url,
-  b.voice_id,b.voice_name,b.source_script_id,b.script_name,b.source_lead_id,b.lead_file_name,b.is_active,b.dialing_mode,
-  COALESCE(v.status,'INACTIVE') voice_status,
+  COALESCE(a.local_voice_id,b.voice_id) voice_id,b.voice_name,b.source_script_id,b.script_name,b.source_lead_id,b.lead_file_name,b.is_active,b.dialing_mode,
+  COALESCE(lv.status,v.status,'INACTIVE') voice_status,
   tc.label telnyx_label,gc.label groq_label,
   COALESCE((SELECT COUNT(*)::int FROM agent_calls c WHERE c.agent_id=a.id AND c.call_type IN ('LEAD','QUICK_DIAL')),0) calls_total,
   COALESCE((SELECT COUNT(DISTINCT c.lead_number)::int FROM agent_calls c WHERE c.agent_id=a.id AND c.call_type IN ('LEAD','QUICK_DIAL') AND c.status='COMPLETED' AND c.lead_number<>''),0) leads_completed,
@@ -79,6 +82,7 @@ export async function GET() {
         FROM bpo_created_agents b
         JOIN agents a ON a.id=b.agent_id
         LEFT JOIN admin_voices v ON v.id=b.voice_id
+        LEFT JOIN local_voice_registry lv ON lv.id=a.local_voice_id AND (lv.is_global=TRUE OR lv.owner_id=b.bpo_id)
         LEFT JOIN agent_credentials at ON at.agent_id=a.id AND at.provider='TELNYX'
         LEFT JOIN ai_credentials tc ON tc.id=at.credential_id
         LEFT JOIN agent_credentials ag ON ag.agent_id=a.id AND ag.provider='GROQ'
@@ -99,12 +103,16 @@ export async function GET() {
       bpoEntitlements(client, session.agentId),
     ]);
 
+    const local=await localVoices(session.agentId);
+    const [connections,voipAssignments]=await Promise.all([client.query("SELECT id,name,enabled,status FROM voip_connections WHERE owner_id=$1 ORDER BY name",[session.agentId]),client.query("SELECT va.agent_id,va.connection_id,va.campaign_id FROM voip_agent_assignments va JOIN bpo_created_agents b ON b.agent_id=va.agent_id AND b.bpo_id=va.owner_id WHERE va.owner_id=$1",[session.agentId])]);
+    voices.rows.push(...local.voices.map(v=>({...v,telnyx_label:null,groq_label:null})));
     return Response.json({
       agents: agents.rows.map(row => {
         const { script_text, task_evidence, customer_transcripts, ...agent } = row;
-        return { ...agent, progress: progressFrom(row) };
+        const voip=voipAssignments.rows.find(v=>v.agent_id===row.id); return { ...agent,connection_id:voip?.connection_id||"",campaign_id:voip?.campaign_id||"", progress: progressFrom(row) };
       }),
       voices: voices.rows,
+      connections:connections.rows,
       scripts: scripts.rows,
       agentLimit: plan.agents,
     }, { headers: { "Cache-Control": "private, no-store" } });
@@ -132,14 +140,16 @@ export async function POST(request: Request) {
       return Response.json({ message: "Your BPO account is not approved." }, { status: 403 });
     }
 
+    const voip=await client.query("SELECT id FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[parsed.data.connectionId,session.agentId]);
+    if(!voip.rows[0]){await client.query("ROLLBACK");return Response.json({message:"Save an enabled VoIP connection in your BPO workspace before creating an agent."},{status:400});}
     const [plan, existing, voice, sourceScript, sourceLeads, duplicateName] = await Promise.all([
       bpoEntitlements(client, session.agentId),
       client.query("SELECT COUNT(*)::int agents FROM bpo_created_agents WHERE bpo_id=$1", [session.agentId]),
-      client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id
-        FROM bpo_voice_assignments x
-        JOIN admin_voices v ON v.id=x.voice_id
+      client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id,FALSE is_local
+        FROM bpo_voice_assignments x JOIN admin_voices v ON v.id=x.voice_id
         WHERE x.bpo_id=$1 AND x.is_active=TRUE AND v.id=$2 AND v.status='ACTIVE'
-        FOR UPDATE OF v`, [session.agentId, parsed.data.voiceId]),
+        UNION ALL SELECT id,name,accent,NULL,NULL,TRUE FROM local_voice_registry
+        WHERE id=$2 AND status='ACTIVE' AND (is_global=TRUE OR owner_id=$1)`, [session.agentId, parsed.data.voiceId]),
       client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
         FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [parsed.data.scriptId, session.agentId]),
       client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
@@ -180,6 +190,7 @@ export async function POST(request: Request) {
       VALUES ($1,$2,$3,$4,$5,$6,$7,'APPROVED','AGENT',NOW())`,
     [agentId, parsed.data.name, username, passwordHash, parsed.data.gender, selectedVoice.accent || "Professional", parsed.data.avatarUrl || null]);
 
+    await client.query("UPDATE agents SET local_voice_id=$1 WHERE id=$2",[selectedVoice.is_local?selectedVoice.id:null, agentId]);
     const credentials = [["TELNYX", selectedVoice.telnyx_credential_id], ["GROQ", selectedVoice.groq_credential_id]] as const;
     for (const [provider, credentialId] of credentials) {
       if (credentialId) await client.query("INSERT INTO agent_credentials (agent_id,provider,credential_id) VALUES ($1,$2,$3)", [agentId, provider, credentialId]);
@@ -192,8 +203,9 @@ export async function POST(request: Request) {
       script.script_text || "", number(leads.lead_file_size), number(script.script_file_size), session.agentId,
     ]);
     await client.query(`INSERT INTO bpo_created_agents (agent_id,bpo_id,voice_id,voice_name,source_script_id,script_name,source_lead_id,lead_file_name,dialing_mode)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [agentId, session.agentId, selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, parsed.data.dialingMode]);
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [agentId, session.agentId, selectedVoice.is_local?null:selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, parsed.data.dialingMode]);
 
+    await client.query("INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id) VALUES($1,$2,$3,$4,'OUTBOUND',$5)",[randomUUID(),session.agentId,agentId,parsed.data.connectionId,parsed.data.campaignId]);
     await client.query("COMMIT");
     return Response.json({ message: `${parsed.data.name} is ready for your calling team.`, agentId }, { status: 201 });
   } catch (error) {
@@ -239,12 +251,14 @@ export async function PATCH(request: Request) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Calling agent not found." }, { status: 404 });
     }
+    const voip=await client.query("SELECT id FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[data.connectionId,session.agentId]);
+    if(!voip.rows[0]){await client.query("ROLLBACK");return Response.json({message:"Choose an enabled VoIP connection from your workspace."},{status:400});}
     const [voice, sourceScript, sourceLeads, duplicateName] = await Promise.all([
-      client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id
-        FROM bpo_voice_assignments x
-        JOIN admin_voices v ON v.id=x.voice_id
+      client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id,FALSE is_local
+        FROM bpo_voice_assignments x JOIN admin_voices v ON v.id=x.voice_id
         WHERE x.bpo_id=$1 AND x.is_active=TRUE AND v.id=$2 AND v.status='ACTIVE'
-        FOR UPDATE OF v`, [session.agentId, data.voiceId]),
+        UNION ALL SELECT id,name,accent,NULL,NULL,TRUE FROM local_voice_registry
+        WHERE id=$2 AND status='ACTIVE' AND (is_global=TRUE OR owner_id=$1)`, [session.agentId, data.voiceId]),
       client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
         FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [data.scriptId, session.agentId]),
       client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
@@ -266,7 +280,8 @@ export async function PATCH(request: Request) {
       return Response.json({ message: "Choose a script and customer sheet uploaded in your BPO workspace." }, { status: 403 });
     }
     await client.query("UPDATE agents SET name=$1,gender=$2,accent=$3,avatar_url=$4,updated_at=NOW() WHERE id=$5 AND role='AGENT'", [data.name, data.gender, selectedVoice.accent || "Professional", data.avatarUrl || null, data.agentId]);
-    await client.query("DELETE FROM agent_credentials WHERE agent_id=$1", [data.agentId]);
+    await client.query("UPDATE agents SET local_voice_id=$1 WHERE id=$2",[selectedVoice.is_local?selectedVoice.id:null,data.agentId]);
+    if(!selectedVoice.is_local) await client.query("DELETE FROM agent_credentials WHERE agent_id=$1", [data.agentId]);
     const credentials = [["TELNYX", selectedVoice.telnyx_credential_id], ["GROQ", selectedVoice.groq_credential_id]] as const;
     for (const [provider, credentialId] of credentials) {
       if (credentialId) await client.query("INSERT INTO agent_credentials (agent_id,provider,credential_id) VALUES ($1,$2,$3)", [data.agentId, provider, credentialId]);
@@ -279,7 +294,8 @@ export async function PATCH(request: Request) {
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14)`, [randomUUID(), data.agentId, leads.lead_file_name, script.script_file_name, leads.lead_file_url || null, script.script_file_url || null, leads.lead_file_type || null, script.script_file_type || null, JSON.stringify(leads.lead_headers || []), JSON.stringify(leads.lead_rows || []), script.script_text || "", number(leads.lead_file_size), number(script.script_file_size), session.agentId]);
     }
     await client.query(`UPDATE bpo_created_agents SET voice_id=$1,voice_name=$2,source_script_id=$3,script_name=$4,source_lead_id=$5,lead_file_name=$6,dialing_mode=$7
-      WHERE agent_id=$8 AND bpo_id=$9`, [selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, data.dialingMode, data.agentId, session.agentId]);
+      WHERE agent_id=$8 AND bpo_id=$9`, [selectedVoice.is_local?null:selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, data.dialingMode, data.agentId, session.agentId]);
+    await client.query("INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id) VALUES($1,$2,$3,$4,'OUTBOUND',$5) ON CONFLICT(owner_id,agent_id) DO UPDATE SET connection_id=EXCLUDED.connection_id,direction='OUTBOUND',campaign_id=EXCLUDED.campaign_id,updated_at=NOW()",[randomUUID(),session.agentId,data.agentId,data.connectionId,data.campaignId]);
     await client.query("COMMIT");
     return Response.json({ message: `${data.name} has been updated.` });
   } catch (error) {

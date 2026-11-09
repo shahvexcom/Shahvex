@@ -1,6 +1,7 @@
 import { Pool } from "pg";
+import { ensureVoipSchema } from "./voip-schema";
 
-const SCHEMA_VERSION = 24;
+const SCHEMA_VERSION = 27;
 const globalForDb = globalThis as unknown as { pool?: Pool; schemaReady?: Promise<void>; schemaVersion?: number };
 // pg v8 warns for `sslmode=require`; `verify-full` preserves its current
 // behaviour and is the explicit mode required by the upcoming pg release.
@@ -337,6 +338,7 @@ async function ensureSchema() {
   )`);
   // The initial owner is provisioned once. Passwords are stored as bcrypt hashes,
   // never as plaintext values.
+  await ensureVoipSchema(pool);
   await pool.query(`INSERT INTO agents (id, name, username, password_hash, gender, accent, status, role, approved_at)
     VALUES ('super-admin-zafar99', 'Zafar', 'zafar99', '$2b$12$2Jm8ZDqQRML7lkwjSLgxyuY5IrxLH6u3O1aGuaMOA7.isKrx6ybpa', 'OTHER', 'Professional', 'APPROVED', 'ADMIN', NOW())
     ON CONFLICT DO NOTHING`);

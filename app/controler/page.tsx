@@ -16,7 +16,7 @@ export default async function ControlerPage() {
   if (!session || session.role !== "ADMIN") redirect("/controler/login");
   const client = await db();
   const result =
-    await client.query(`SELECT a.id, a.name, a.username, a.gender, a.accent, a.status, COALESCE(a.avatar_url, '') avatar_url,
+    await client.query(`SELECT a.id, a.name, a.username, a.gender, a.accent,a.local_voice_id,COALESCE((SELECT name FROM local_voice_registry v WHERE v.id=a.local_voice_id),'') local_voice_name,COALESCE(NULLIF(a.agent_script,''),(SELECT script_text FROM script_assignments WHERE agent_id=a.id ORDER BY created_at DESC LIMIT 1),'') agent_script,a.conversation_style,a.speaks_first,a.language, a.status, COALESCE(a.avatar_url, '') avatar_url,
     COALESCE(a.call_limit_minutes, 0) call_limit_minutes, a.daily_call_limit, a.created_at,
     (SELECT c.label FROM agent_credentials ac JOIN ai_credentials c ON c.id = ac.credential_id WHERE ac.agent_id = a.id AND ac.provider = 'GROQ') groq_credential_label,
     (SELECT c.label FROM agent_credentials ac JOIN ai_credentials c ON c.id = ac.credential_id WHERE ac.agent_id = a.id AND ac.provider = 'TELNYX') telnyx_credential_label,

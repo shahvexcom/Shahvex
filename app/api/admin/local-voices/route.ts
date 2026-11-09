@@ -1,0 +1,39 @@
+import { referenceTranscriptMatches } from "@/lib/voice-reference-validation";
+import { cookies } from "next/headers";
+import { ADMIN_SESSION_COOKIE,readSession } from "@/lib/session";
+import { db } from "@/lib/database";
+import { engine,localVoices } from "@/lib/agent-test";
+import { z } from "zod";
+import { mkdir,writeFile,readFile,unlink } from "node:fs/promises";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { decodeWav,resample } from "../../../../gateway/wav.cjs";
+import { speechWav } from "@/lib/agent-test-audio";
+export const runtime="nodejs";
+export const dynamic="force-dynamic";
+const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{"Cache-Control":"no-store"}});
+async function admin(){const s=await readSession((await cookies()).get(ADMIN_SESSION_COOKIE)?.value);if(s?.role!=="ADMIN")return null;const r=await(await db()).query("SELECT id,admin_role,admin_permissions FROM agents WHERE id=$1 AND role='ADMIN' AND status='APPROVED'",[s.agentId]);return r.rows[0]||null;}
+const fields=z.object({id:z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/),name:z.string().trim().min(2).max(80),gender:z.enum(["male","female","other"]),accent:z.string().trim().max(100),language:z.literal("English"),transcript:z.string().trim().min(10).max(4000),rights:z.literal("true"),global:z.enum(["true","false"])});
+export async function GET(request:Request){const a=await admin();if(!a)return json({error:"Unauthenticated"},401);try{const url=new URL(request.url),voices=await localVoices(a.id);
+  if(url.searchParams.get("reference")){const r=await(await db()).query("SELECT reference_path,owner_id,is_global FROM local_voice_registry WHERE id=$1",[url.searchParams.get("reference")]);const v=r.rows[0];if(!v?.reference_path||(v.owner_id!==a.id&&a.admin_role!=="SUPER_ADMIN"))return json({error:"Reference not found"},404);const root=path.resolve(process.cwd(),".data/local-voices"),file=path.resolve(root,v.reference_path);if(path.dirname(file)!==root)return json({error:"Invalid reference"},400);return new Response(await readFile(file),{headers:{"Content-Type":"audio/wav","X-Content-Type-Options":"nosniff","Cache-Control":"private, no-store"}});}
+  if(url.searchParams.get("manage")!=="1")return json(voices);
+  const records=await(await db()).query("SELECT id,name,gender,language,accent,status,owner_id,is_global,rights_verified,transcript_verified,service_trusted,(reference_path IS NOT NULL) has_reference,updated_at FROM local_voice_registry WHERE owner_id=$1 OR (is_global=TRUE AND status='ACTIVE') OR $2=TRUE ORDER BY name",[a.id,a.admin_role==="SUPER_ADMIN"]);
+  return json({...voices,records:records.rows.map(v=>({...v,can_manage:v.owner_id===a.id||a.admin_role==="SUPER_ADMIN"})),isSuper:a.admin_role==="SUPER_ADMIN"});
+}catch{return json({error:"Local voice registry unavailable"},503);}}
+export async function POST(request:Request){const a=await admin();if(!a)return json({error:"Unauthenticated"},401);if(request.headers.get("origin")!==new URL(request.url).origin)return json({error:"Same-origin request required"},403);
+  if(a.admin_role!=="SUPER_ADMIN"&&!a.admin_permissions?.some((p:string)=>["agents","voip","settings","credentials"].includes(p)))return json({error:"Voice library access denied"},403);
+  try{const pool=await db();if(request.headers.get("content-type")?.includes("application/json")){const body=await request.json();if(!["approve","deactivate"].includes(body.action)||typeof body.id!=="string")return json({error:"Invalid action"},400);const r=await pool.query("SELECT * FROM local_voice_registry WHERE id=$1 AND (owner_id=$2 OR $3=TRUE)",[body.id,a.id,a.admin_role==="SUPER_ADMIN"]);const v=r.rows[0];if(!v)return json({error:"Voice not found"},404);
+    if(body.action==="approve"){if(!v.service_trusted&&(!v.rights_verified||!v.transcript_verified))return json({error:"Verified reference and rights declaration required"},409);if(!(await localVoices()).voices.some(x=>x.id===v.id))return json({error:"This voice ID is not provisioned in the existing CosyVoice backend. Provision it there before approval."},409);}
+    await pool.query("UPDATE local_voice_registry SET status=$1,updated_at=NOW() WHERE id=$2",[body.action==="approve"?"ACTIVE":"INACTIVE",v.id]);return json({saved:true});
+  }
+  const chunks:Uint8Array[]=[];let size=0;if(request.body)for await(const c of request.body as unknown as AsyncIterable<Uint8Array>){size+=c.length;if(size>11000000)return json({error:"Reference upload exceeds 10 MB"},413);chunks.push(c);}
+  const form=await new Response(Buffer.concat(chunks),{headers:{"Content-Type":request.headers.get("content-type")||""}}).formData();const p=fields.safeParse(Object.fromEntries(form));if(!p.success)return json({error:p.error.issues[0].message},400);const v=p.data,file=form.get("reference");if(!(file instanceof File)||file.size>10000000||!file.name.toLowerCase().endsWith(".wav"))return json({error:"Upload a PCM WAV reference up to 10 MB"},400);if(v.global==="true"&&a.admin_role!=="SUPER_ADMIN")return json({error:"Only system administrators can publish global voices"},403);
+  const existing=await pool.query("SELECT owner_id,reference_path FROM local_voice_registry WHERE id=$1",[v.id]);if(existing.rows[0]&&existing.rows[0].owner_id!==a.id&&a.admin_role!=="SUPER_ADMIN")return json({error:"This voice ID belongs to another administrator"},403);
+  const bytes=Buffer.from(await file.arrayBuffer()),wav=decodeWav(bytes),pcm=resample(wav.audio,wav.sampleRate,16000),duration=pcm.length/32000;if(duration<1||duration>30)return json({error:"Reference must be 1–30 seconds of mono PCM speech"},400);
+  const audioForm=new FormData();audioForm.append("audio",speechWav([new Int16Array(pcm.buffer,pcm.byteOffset,pcm.byteLength/2)]),"reference.wav");const stt=await engine(8766,"/transcribe",{method:"POST",body:audioForm,signal:request.signal});if(!stt.ok)return json({error:"Reference transcript verification failed"},502);const actual=String((await stt.json()).text||"");if(!referenceTranscriptMatches(v.transcript,actual))return json({error:"The spoken reference does not sufficiently match the provided transcript"},400);
+  const root=path.resolve(process.cwd(),".data/local-voices"),filename=`${randomUUID()}.wav`;await mkdir(root,{recursive:true});await writeFile(path.join(root,filename),bytes,{flag:"wx",mode:0o600});
+  try{const saved=await pool.query(`INSERT INTO local_voice_registry(id,name,gender,language,accent,owner_id,is_global,reference_path,reference_transcript,status,rights_verified,transcript_verified)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'PENDING',TRUE,TRUE) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,gender=EXCLUDED.gender,language=EXCLUDED.language,accent=EXCLUDED.accent,is_global=EXCLUDED.is_global,owner_id=COALESCE(local_voice_registry.owner_id,EXCLUDED.owner_id),reference_path=EXCLUDED.reference_path,reference_transcript=EXCLUDED.reference_transcript,status='PENDING',rights_verified=TRUE,transcript_verified=TRUE,service_trusted=FALSE,updated_at=NOW()
+    WHERE local_voice_registry.owner_id=$6 OR $10=TRUE RETURNING id`,[v.id,v.name,v.gender,v.language,v.accent,a.id,v.global==="true",filename,v.transcript,a.admin_role==="SUPER_ADMIN"]);if(!saved.rows[0]){await unlink(path.join(root,filename));return json({error:"Voice ownership changed during upload"},409);}const previous=existing.rows[0]?.reference_path;if(previous&&/^[a-f0-9-]+\.wav$/i.test(previous))await unlink(path.join(root,previous)).catch(()=>{});}catch(error){await unlink(path.join(root,filename));throw error;}
+  return json({saved:true,status:"PENDING",message:"Reference verified and stored privately. Backend provisioning and explicit approval are required before synthesis."},201);
+}catch{return json({error:"Voice reference or configuration could not be validated"},400);}}

@@ -19,6 +19,7 @@ import "./shahvex-bpo-plans.css";
 import "./shahvex-dialing.css";
 import "./shahvex-landing-cards.css";
 import "./landing-redesign.css";
+import "./toggle-switches.css";
 import { ToastProvider } from "@/app/components/toast-provider";
 import { TooltipProvider } from "@/app/components/tooltip-provider";
 import { CurrencyProvider } from "@/app/components/currency-provider";

@@ -1,4 +1,5 @@
 "use client";
+import { AdminSkeleton } from "./admin-skeleton";
 import { useEffect, useState } from "react";
 import {
   FiArchive,
@@ -47,7 +48,7 @@ type Data = {
     created_this_month: number;
   } | null;
 };
-const pages = ["dashboard", "quickdial", "agents", "scripts", "documents", "credentials", "queue", "reports", "live", "settings"],
+const pages = ["dashboard", "agents", "scripts", "documents", "voip", "queue", "reports", "live", "settings"],
   blank = {
     name: "",
     username: "",
@@ -58,6 +59,7 @@ const pages = ["dashboard", "quickdial", "agents", "scripts", "documents", "cred
   };
 export function AdminSettings({ onAction }: { onAction: (m: string) => void }) {
   const [data, setData] = useState<Data | null>(null),
+    [loadError,setLoadError] = useState(""),
     [profile, setProfile] = useState({ name: "", username: "", email: "", avatar_url: "" }),
     [tab, setTab] = useState<"profile" | "rabc" | "preferences">("profile"),
     [busy, setBusy] = useState(false),
@@ -75,10 +77,10 @@ export function AdminSettings({ onAction }: { onAction: (m: string) => void }) {
       name: string;
     } | null>(null);
   const load = () =>
-    fetch("/api/admin/settings")
+    fetch("/api/admin/settings",{signal:AbortSignal.timeout(15000)})
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((next: Data) => { setData(next); window.dispatchEvent(new CustomEvent("admin-profile-updated", { detail: next.profile })); setProfile({ name: next.profile.name ?? "", username: next.profile.username ?? "", email: next.profile.email ?? "", avatar_url: next.profile.avatar_url ?? "" }); })
-      .catch(() => onAction("Unable to load settings."));
+      .catch(() => {setLoadError("Unable to load settings.");onAction("Unable to load settings.");});
   useEffect(() => {
     load();
   }, []);
@@ -141,25 +143,15 @@ export function AdminSettings({ onAction }: { onAction: (m: string) => void }) {
     } catch (e) { onAction(e instanceof Error ? e.message : "Avatar upload failed."); }
     finally { setBusy(false); }
   };
-  if (!data)
-    return (
-      <>
-        <div className="settings-skeleton heading" />
-        <div className="settings-kpis skeleton-kpis">
-          {[1, 2, 3, 4].map((x) => (
-            <div className="settings-skeleton" key={x} />
-          ))}
-        </div>
-        <div className="settings-skeleton settings-page-skeleton" />
-      </>
-    );
+  if (!data && loadError) return <section className="admin-card"><p role="alert">{loadError}</p><button className="admin-outline" onClick={()=>{setLoadError("");void load();}}>Retry</button></section>;
+  if (!data) return <AdminSkeleton rows={6} label="Loading admin settings"/>;
   const p = data.profile,
     superAdmin = data.isSuperAdmin,
     toggle = (x: string) =>
       setRole((r) => ({
         ...r,
-        permissions: r.permissions.includes(x)
-          ? r.permissions.filter((y) => y !== x)
+        permissions: (r.permissions.includes(x) || (x === "voip" && r.permissions.includes("credentials")))
+          ? r.permissions.filter((y) => y !== x && !(x === "voip" && y === "credentials"))
           : [...r.permissions, x],
       }));
   return (
@@ -349,9 +341,9 @@ export function AdminSettings({ onAction }: { onAction: (m: string) => void }) {
               {pages.map((x) => (
                 <Switch
                   key={x}
-                  label={x === "credentials" ? "AI Credentials" : x === "quickdial" ? "Quick Dial" : x.replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                  label={x === "voip" ? "VoIP" : x === "quickdial" ? "Quick Dial" : x.replace(/\b\w/g, (letter) => letter.toUpperCase())}
                   text=""
-                  value={role.permissions.includes(x)}
+                  value={role.permissions.includes(x) || (x === "voip" && role.permissions.includes("credentials"))}
                   onChange={() => toggle(x)}
                 />
               ))}
@@ -657,20 +649,20 @@ function List<T extends Role | Admin>({
 }) {
   return (
     <section className="admin-card settings-card settings-list">
-      <h2>{title}</h2>
+      <header className="settings-list-heading"><div><small>ACCESS MANAGEMENT</small><h2>{title}</h2></div><b>{items.length}</b></header>
       {!items.length ? <div className="settings-list-empty"><FiUsers /><span>No {title.toLowerCase()} available yet.</span></div> : items.map((x) => (
-        <div key={x.id}>
-          {"avatar_url" in x && (x.avatar_url ? <img className="settings-list-avatar" src={x.avatar_url} alt="" /> : <i className="settings-list-avatar settings-list-initials">{x.name.slice(0, 2).toUpperCase()}</i>)}
-          <span>
+        <div className="settings-access-row" key={x.id}>
+          {"permissions" in x && <i className="settings-role-icon"><FiShield/></i>}{"avatar_url" in x && (x.avatar_url ? <img className="settings-list-avatar" src={x.avatar_url} alt="" /> : <i className="settings-list-avatar settings-list-initials">{x.name.slice(0, 2).toUpperCase()}</i>)}
+          <span className="settings-access-copy">
             <b>{x.name}</b>
             <small>
-              {"permissions" in x ? x.permissions.join(", ") : x.admin_role}
+              {"permissions" in x ? `${x.permissions.length} permissions` : x.admin_role.replaceAll("_", " ")}
             </small>
           </span>
-          <button onClick={() => onEdit(x)}>
+          <button className="settings-access-edit" aria-label={`Edit ${x.name}`} onClick={() => onEdit(x)}>
             <FiEdit2 />
           </button>
-          <button onClick={() => onDelete(x)}>
+          <button className="settings-access-delete" aria-label={`Delete ${x.name}`} onClick={() => onDelete(x)}>
             <FiTrash2 />
           </button>
         </div>

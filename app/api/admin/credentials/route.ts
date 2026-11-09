@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { encryptCredential as encrypt } from "@/lib/credential-crypto";
 import { cookies } from "next/headers";
 import { z } from "zod";
 import { db } from "@/lib/database";
@@ -23,22 +24,7 @@ const updateSchema = detailsSchema.extend({ id: z.string().min(1) });
 
 type CredentialConfig = { ttsModel?: string; sttModel?: string; chatModel?: string; connectionId?: string; outboundNumber?: string; assistantId?: string };
 
-function encryptionKey() {
-  return createHash("sha256").update(process.env.CREDENTIAL_ENCRYPTION_KEY || process.env.AUTH_SECRET || "development-only-credential-key").digest();
-}
-function encrypt(value: string) {
-  const iv = randomBytes(12), cipher = createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const ciphertext = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
-  return `${iv.toString("base64")}.${cipher.getAuthTag().toString("base64")}.${ciphertext.toString("base64")}`;
-}
-// Retained here for the server-only call integration layer; never return the secret to clients.
-export function decryptCredential(ciphertext: string) {
-  const [iv, tag, data] = ciphertext.split(".");
-  if (!iv || !tag || !data) throw new Error("Invalid encrypted credential.");
-  const decipher = createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64"));
-  decipher.setAuthTag(Buffer.from(tag, "base64"));
-  return Buffer.concat([decipher.update(Buffer.from(data, "base64")), decipher.final()]).toString("utf8");
-}
+export { decryptCredential } from "@/lib/credential-crypto";
 function maskSecret(secret: string) { return secret.length < 8 ? "••••••••" : `${secret.slice(0, 4)}••••••••${secret.slice(-4)}`; }
 function configFor(data: z.infer<typeof detailsSchema>): CredentialConfig {
   return data.provider === "GROQ" ? { ttsModel: data.ttsModel || "", sttModel: data.sttModel || "", chatModel: data.chatModel || "" } : { connectionId: data.connectionId || "", outboundNumber: data.outboundNumber || "", assistantId: data.assistantId || "" };

@@ -135,7 +135,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch("/api/admin/calls", { cache: "no-store" }), d = await r.json();
+      const r = await fetch("/api/admin/calls", { cache: "no-store", signal: AbortSignal.timeout(15000) }), d = await r.json();
       if (r.ok) {
         setCalls(d.calls || []);
         setReady(d.readyAgents || []);

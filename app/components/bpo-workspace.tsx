@@ -1,4 +1,5 @@
 "use client";
+import { VoipManager } from "./voip-manager";
 import { useCurrency, CurrencySelector } from "./currency-provider";
 import { SignOutConfirmation } from "@/app/components/sign-out-button";
 
@@ -10,7 +11,6 @@ import {
   FiFileText,
   FiLogOut,
   FiMenu,
-  FiMic,
   FiPhone,
   FiPlus,
   FiUser,
@@ -24,11 +24,12 @@ import { FaWhatsapp, FaInstagram, FaFacebookMessenger } from "react-icons/fa6";
 import BpoScriptPanel from "./bpo-script-workspace";
 import BpoHistory from "./bpo-history";
 import BpoAccountSettings from "./bpo-account-settings";
-import BpoVoicesWorkspace from "./bpo-voices-workspace";
+
 import BpoPlansWorkspace from "./bpo-plans-workspace";
 import BpoAgentsWorkspace from "./bpo-agents-workspace";
 import BpoDialingWorkspace from "./bpo-dialing-workspace";
-import BpoQuickDial from "./bpo-quick-dial";
+
+
 import "./bpo-workspace.css";
 import "./bpo-layout-fix.css";
 import "./bpo-equal-grid.css";
@@ -43,7 +44,7 @@ const defaultCreditContacts: CreditContacts = {
   instagramUrl: process.env.NEXT_PUBLIC_BPO_INSTAGRAM || "https://instagram.com/",
   messengerUrl: process.env.NEXT_PUBLIC_BPO_MESSENGER || "https://m.me/",
 };
-const dialing = ["Create Agent", "Voices", "Auto Dialing", "Manual Dialing", "Quick Dial"];
+const dialing = ["VoIP", "Create Agent", "Auto Dialing", "Manual Dialing"];
 const availableTabs = ["Script", "History", "Plans", "Settings", ...dialing];
 export default function BpoWorkspace({ user }: { user: User }) {
   const { formatMoney } = useCurrency();
@@ -70,7 +71,7 @@ export default function BpoWorkspace({ user }: { user: User }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (requested === "manual") setActive("Manual Dialing");
     else if (requested === "auto") setActive("Auto Dialing");
-    else if (requested === "quick") setActive("Quick Dial");
+    else if (requested === "quick") setActive("Script");
     else if (saved && availableTabs.includes(saved)) setActive(saved);
     else if (saved) localStorage.removeItem("bpo-active-tab");
   }, []);
@@ -134,7 +135,7 @@ export default function BpoWorkspace({ user }: { user: User }) {
     setMobileNavOpen(false);
     setDialingOpen(false);
     localStorage.setItem("bpo-active-tab", tab);
-    const query = tab === "Manual Dialing" ? "?tab=manual" : tab === "Auto Dialing" ? "?tab=auto" : tab === "Quick Dial" ? "?tab=quick" : "";
+    const query = tab === "Manual Dialing" ? "?tab=manual" : tab === "Auto Dialing" ? "?tab=auto" : "";
     window.history.replaceState(null, "", `/bpo${query}`);
   };
   const openCredits = async () => {
@@ -191,15 +192,11 @@ export default function BpoWorkspace({ user }: { user: User }) {
                       setDialingOpen(false);
                     }}
                   >
-                    {item === "Create Agent" ? (
+                    {item === "VoIP" ? (<FiPhone/>) : item === "Create Agent" ? (
                       <FiUserPlus />
-                    ) : item === "Voices" ? (
-                      <FiMic />
                     ) : item === "Auto Dialing" ? (
                       <FiZap />
                     ) : item === "Manual Dialing" ? (
-                      <FiPhone />
-                    ) : item === "Quick Dial" ? (
                       <FiPhone />
                     ) : null}
                     {item}
@@ -290,16 +287,13 @@ export default function BpoWorkspace({ user }: { user: User }) {
         <BpoHistory />
       ) : active === "Plans" ? (
         <BpoPlansWorkspace onAddCredits={() => void openCredits()} onBalanceUpdated={(remaining_credits) => setLiveUser(current => ({ ...current, remaining_credits }))} />
-      ) : active === "Create Agent" ? (
+      ) : active === "VoIP" ? (<VoipManager portal="bpo"/>) : active === "Create Agent" ? (
         <BpoAgentsWorkspace />
-      ) : active === "Voices" ? (
-        <BpoVoicesWorkspace />
+
       ) : active === "Auto Dialing" ? (
         <BpoDialingWorkspace mode="AUTO" />
       ) : active === "Manual Dialing" ? (
         <BpoDialingWorkspace mode="MANUAL" />
-      ) : active === "Quick Dial" ? (
-        <BpoQuickDial />
       ) : (
         <main className="bpo-main">
           <h1>{active}</h1>

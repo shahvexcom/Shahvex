@@ -14,12 +14,13 @@ function load(file, dependencies, fetchMock, transform = source => source) {
 
 // A transaction-aware in-memory adapter: the second caller must wait at
 // SELECT FOR UPDATE and see the first caller's committed active reservation.
-function harness({ approved = true, provider = 'success', limit = 25, suppressed = false, schedule = null } = {}) {
+function harness({ approved = true, provider = 'success', limit = 25, suppressed = false, schedule = null, setup = true } = {}) {
   let active = null, lock = Promise.resolve(), dials = 0, released = 0;
   const queries = [];
   const row = data => ({ rows: data ? [data] : [], rowCount: data ? 1 : 0 });
   const baseQuery = async (sql, args = []) => {
     queries.push({ sql, args });
+    if (sql.startsWith('SELECT a.id FROM agents a WHERE a.id=$1')) { assert.match(sql, /voip_agent_assignments/); assert.match(sql, /script_assignments/); assert.match(sql, /vc.enabled=TRUE/); return row(setup ? {id:args[0]} : null); }
     if (sql.startsWith('SELECT is_enabled,start_time::text')) return row(schedule);
     if (sql.startsWith('SELECT id FROM agent_calls')) return row(active);
     if (sql.includes('SELECT a.name,a.daily_call_limit')) return row(approved ? { name: 'Test agent', daily_call_limit: limit, lead_headers: ['Customer Name', 'Phone Number'], lead_rows: [['Test customer', '+15555550123']], script_text: 'Test script', credential_id: 'test-credential', secret_ciphertext: 'encrypted', config: { outboundNumber: '+15555550456', connectionId: 'test-connection' } } : null);
@@ -204,3 +205,10 @@ test('rapid clicks submit only once and navigate to the returned agent call page
   await Promise.all([first,second]);
   assert.deepEqual(ui.navigations, ['/agent/calls/new-call']);
 });
+
+test('controller start rejects missing script or verified VoIP before contacting provider', async () => {
+ const h = harness({ setup:false });
+ await assert.rejects(h.startAgentCall('agent-1'), /script.*VoIP/);
+ assert.equal(h.dials(), 0);
+});
+

@@ -311,7 +311,9 @@ async function uploadRecording(request: Request, bpoId: string) {
   }
 }
 
+const quickDialAvailable = () => false;
 export async function GET(request: Request) {
+  if(!quickDialAvailable())return Response.json({message:"Quick Dial is not available."},{status:410});
   const principal = await requireQuickDialPrincipal(request);
   if (!principal) return Response.json({ message: "You do not have access to Quick Dial." }, { status: 403 });
   try { return Response.json(await dashboard(principal), { headers: { "Cache-Control": "private, no-store" } }); }
@@ -319,6 +321,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if(!quickDialAvailable())return Response.json({message:"Quick Dial is not available."},{status:410});
   const principal = await requireQuickDialPrincipal(request);
   if (!principal) return Response.json({ message: "You do not have access to Quick Dial." }, { status: 403 });
   if (request.headers.get("content-type")?.includes("multipart/form-data")) return uploadRecording(request, principal.id);
