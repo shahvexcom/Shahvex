@@ -26,6 +26,18 @@ test('HTTP service rejects anonymous session requests',async()=>{
   try { const r=await fetch(`http://127.0.0.1:${server.address().port}/tester/start`,{method:'POST',body:'{}'});assert.equal(r.status,401); }
   finally {await new Promise(resolve=>server.close(resolve));}
 });
+test('same owner can switch agents; abandoned leases free capacity and live heartbeats retain it',async()=>{
+  const {dispatch}=createTesterService({secret,leaseMs:100});
+  const first=await(await dispatch(request('start','switch-owner',{agentId:'a',config}))).json();
+  const second=await(await dispatch(request('start','switch-owner',{agentId:'b',config}))).json();
+  assert.notEqual(first.id,second.id);
+  assert.equal((await dispatch(request('ping','switch-owner',{},first.id))).status,404);
+  assert.equal((await dispatch(request('ping','switch-owner',{},second.id))).status,200);
+  assert.equal((await dispatch(request('start','other-owner',{agentId:'c',config}))).status,429);
+  await new Promise(resolve=>setTimeout(resolve,120));
+  const next=await dispatch(request('start','other-owner',{agentId:'c',config}));assert.equal(next.status,200);
+  await dispatch(request('stop','other-owner',{},(await next.json()).id));
+});
 test('PC tester streams existing PCM protocol, remembers follow-ups and rejects duplicate turns',async()=>{
   const previous=global.fetch;
   const prompts=[];

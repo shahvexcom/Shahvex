@@ -24,7 +24,7 @@ function loader() {
   }
   return load;
 }
-function createTesterService({ secret, maxSessions = 1, load = loader() } = {}) {
+function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = Date.now, load = loader() } = {}) {
   if (typeof secret !== 'string' || secret.length < 32) throw Error('PC AI secret of at least 32 characters required');
   maxSessions = Math.max(1, Math.min(10, Number(maxSessions) || 1));
   const ai = load('agent-test');
@@ -35,7 +35,8 @@ function createTesterService({ secret, maxSessions = 1, load = loader() } = {}) 
     const expected = Buffer.from(secret);
     if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
     const url = new URL(request.url);
-    const match = /^\/tester\/(start|turn|interrupt|stop)$/.exec(url.pathname);
+    if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions});
+    const match = /^\/tester\/(start|turn|interrupt|stop|ping)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
@@ -67,6 +68,8 @@ function createTesterService({ secret, maxSessions = 1, load = loader() } = {}) 
     }
     const body = Buffer.concat(chunks);
     ai.pruneSessions();
+    // Reclaim abandoned tabs, never a worker that is still running.
+    for(const [id,s] of ai.sessions)if(!s.busy && now()-(s.lastSeen || 0)>leaseMs){s.abort?.abort();ai.sessions.delete(id);}
     if (match[1] === 'start') {
       if (body.length > 70000) return json(413, { error: 'Configuration too large' });
       let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }
@@ -74,7 +77,7 @@ function createTesterService({ secret, maxSessions = 1, load = loader() } = {}) 
       if (!parsed.success || typeof input.agentId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.agentId)) return json(400, { error: 'Invalid configuration' });
       // No awaits between admission and allocation; single-process admission is atomic.
       const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
-      if (others >= maxSessions) return json(429, { error: 'AI sessions are busy' });
+      if (others >= maxSessions) return json(429, { error: 'Another test session is active. End that session and try again.', code:'CAPACITY' });
       return json(200, { id: ai.newTest(owner, input.agentId, parsed.data) });
     }
     const id = request.headers.get('x-shahvex-session') || '';

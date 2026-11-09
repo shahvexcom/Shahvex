@@ -247,6 +247,13 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     } catch (e) { if (startup.signal.aborted) return; stop(); setAudioError(e instanceof Error ? e.message : "Unable to start microphone"); setStatus("Microphone Error"); }
   };
   useEffect(() => { if (!demoToken || !running) return; const timeout = setTimeout(stop, 15 * 60_000); const check = setInterval(() => { void fetch(base, {cache:"no-store"}).then(r => { if (r.status === 404) { stop(); setAudioError("This test link has expired or been revoked."); } }).catch(() => {}); }, 5000); return () => { clearTimeout(timeout); clearInterval(check); }; }, [demoToken, running]);
+  useEffect(() => {
+    if (!running || demoToken || remote) return;
+    const timer = setInterval(() => {
+      if (session.current) void fetch(`${base}?action=ping&id=${session.current}`, {method:"POST", signal:AbortSignal.timeout(10000)}).catch(()=>{});
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [running, demoToken, remote, base]);
   const displayState = audioError ? "Audio error" : playing ? "Speaking" : running ? busy ? "Thinking" : muted ? "Ready" : "Listening" : "Ready";
   const microphoneState = audioError ? "Microphone Error" : playing ? "Agent Speaking" : running ? busy ? "Processing" : muted ? "Microphone Ready" : "Listening" : "Microphone Ready";
   const close = () => { loadVersion.current++; stopPreview(); stop(); setOpen(false); };

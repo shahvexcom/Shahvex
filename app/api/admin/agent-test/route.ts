@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       }
       return json({ id: newTest(owner, body.agentId, config) });
     }
-    if (process.env.SHAHVEX_PC_AI_URL && ["turn", "interrupt", "stop"].includes(action || "")) {
+    if (process.env.SHAHVEX_PC_AI_URL && ["turn", "interrupt", "stop", "ping"].includes(action || "")) {
       if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return json({ error: "Invalid session" }, 400);
       const parts: Uint8Array[] = []; let size = 0;
       if (request.body) for await (const part of request.body as unknown as AsyncIterable<Uint8Array>) { size += part.length; if (size > 2_000_000) return json({ error: "Request too large" }, 413); parts.push(part); }

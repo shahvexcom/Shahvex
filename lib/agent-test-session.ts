@@ -8,6 +8,8 @@ export async function handleTestSession(request: Request, owner: string, publicD
   const url = new URL(request.url), action = url.searchParams.get("action"), id = url.searchParams.get("id") || "";
   try {
     const session = sessions.get(id); if (!session || session.owner !== owner) return json({ error: "Test session expired. Start again." }, 404);
+    session.lastSeen = Date.now();
+    if (action === "ping") return json({ active: true });
     if (action === "stop") { session.abort?.abort(); sessions.delete(id); return json({ stopped: true }); }
     if (action === "interrupt") {
       session.abort?.abort();

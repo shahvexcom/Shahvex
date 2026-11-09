@@ -1,3 +1,4 @@
+import { speechText } from "../gateway/speech-text.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
 type Options = { messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void };
 
@@ -24,7 +25,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
         if (!text) { await new Promise<void>(resolve => { wake = resolve; }); continue; }
         const index = sentenceIndex++;
         await timing("tts-request-started", { sentenceIndex: index, characters: text.length });
-        const response = await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice }) });
+        const response = await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: speechText(text), voice_id: voice }) });
         if (!response.ok || !response.body) throw Error("CosyVoice streaming synthesis failed");
         const rate = Number(response.headers.get("x-sample-rate"));
         if (response.headers.get("x-audio-format") !== "pcm_s16le" || rate !== 24000 || response.headers.get("x-channels") !== "1") { await response.body.cancel(); throw Error("Unexpected CosyVoice PCM format"); }
@@ -55,8 +56,14 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
   const enqueue = async (text: string) => {
     if (!text.trim()) return;
     if (firstSentence) { firstSentence = false; await timing("first-complete-sentence"); }
-    while (queue.length >= 32 && !failure) { signal.throwIfAborted(); await new Promise<void>(resolve => { space = resolve; }); }
-    if (failure) throw failure; signal.throwIfAborted(); queue.push(text.trim()); notify();
+    let spoken = speechText(text).trim();
+    while (spoken) {
+      let at = spoken.length <= 480 ? spoken.length : spoken.lastIndexOf(" ", 450);
+      if (at <= 0) at = 450;
+      while (queue.length >= 32 && !failure) { signal.throwIfAborted(); await new Promise<void>(resolve => { space = resolve; }); }
+      if (failure) throw failure; signal.throwIfAborted(); queue.push(spoken.slice(0, at).trim()); notify();
+      spoken = spoken.slice(at).trim();
+    }
   };
   let answer = "", phrase = "", pending = "", firstToken = true, done = false;
   try {
