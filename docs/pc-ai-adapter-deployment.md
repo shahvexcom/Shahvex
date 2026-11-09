@@ -39,6 +39,14 @@ Deploy reviewed code; preserve DB/auth/encryption secrets. The project must supp
 
 ## Validation and remaining work
 
+### TTS interruption recovery
+
+Repeated live interruptions exposed an installed CosyVoice synchronous generator holding `threading.RLock` across PCM yields. Starlette drives synchronous iterators through a thread pool; cancellation/thread changes can leave that ownership unresolved. `deployment/cosyvoice_safe_api.py` wraps only `/stream` with `tts_stream_worker.py`: a dedicated thread owns and exhausts each inference iterator, even after HTTP disconnect, discarding stale output through a bounded queue. Original source, voice references and model weights are preserved. The wrapper keeps the existing lifespan/health/voices/synthesize routes.
+
+The installed startup also attempted auxiliary normalization downloads. The wrapper restricts that tokenizer lookup to local cache; missing resources use the original frontend's existing fallback. No replacement model is provisioned. `Apply-CosyVoiceWrapper.py` verifies the exact PID/module/8767 before replacing it and saves the original command (without environment) for rollback in the protected local directory. Rollback uses that script with the current wrapper PID and `--rollback`. Automatic startup must use the wrapper rather than the old direct module.
+
+Recovery validation: `python tests/tts_stream_worker_test.py` passed 30 cancelled lock-owning streams and a subsequent full synthesis. `SHAHVEX_LIVE_PC_SOAK=1 node tests/pc-ai-interruption-soak.cjs` passed a 192-second real-engine session: 16 turns, 11 cancellations after actual PCM and 5 completed replies; each interrupt acknowledged cleanup and subsequent turns were admitted without BUSY stalls. Authenticated Cloudflare engine health remained 200 and the tester route remained reachable. This is not a physical browser/microphone soak; user browser retest remains required.
+
 Authenticated external verification on 2026-11-10: Cloudflare engine health returned HTTP 200; the tester stop route reached the new adapter and correctly rejected a nonexistent session. The production Next.js build passed. The user configured the two path routes ahead of the original 8768 catch-all and provisioned PC URL/key variables in Vercel. Vercel deployment/browser acceptance are still pending.
 
 Passed: TypeScript and targeted security/regression checks (17 passed, 3 skipped); separate real tester PCM check; full real HTTP adapter chain for voice inventory, anonymous denial, preview WAV, resampled WAV STT, Ollama, streamed PCM, follow-up and interrupt/stop endpoints. Automated tests cover in-flight cancellation, ownership, capacity and duplicate turns. HTTP input was synthesized speech, not a physical microphone. Cloudflare and audible browser playback are not verified.
