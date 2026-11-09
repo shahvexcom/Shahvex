@@ -1,6 +1,7 @@
 import { speechText } from "../gateway/speech-text.cjs";
+import { speechBoundary } from "../gateway/speech-boundary.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
-type Options = { messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void };
+type Options = { messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean };
 
 function sentenceBoundary(text: string) {
   for (const match of text.matchAll(/[.!?](?:["')\]]*)(?=\s|$)/g)) {
@@ -11,7 +12,7 @@ function sentenceBoundary(text: string) {
 }
 
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
-export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText }: Options) {
+export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText, phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
   const queue: string[] = [];
   let finished = false, failure: unknown, wake: (() => void) | undefined, space: (() => void) | undefined;
   let firstSentence = true, firstPCM = true, sentenceIndex = 0;
@@ -56,7 +57,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
   })();
   const enqueue = async (text: string) => {
     if (!text.trim()) return;
-    if (firstSentence) { firstSentence = false; await timing("first-complete-sentence"); }
+    if (firstSentence) { firstSentence = false; await timing(phraseStreaming ? "first-speakable-phrase" : "first-complete-sentence"); }
     let spoken = speechText(text).trim();
     while (spoken) {
       let at = spoken.length <= 480 ? spoken.length : spoken.lastIndexOf(" ", 450);
@@ -85,7 +86,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
         // Sentence terminators are usable even when Ollama ends a delta at punctuation.
         // Avoid splitting decimal numbers and common abbreviated titles.
         let boundary: number;
-        while ((boundary = sentenceBoundary(phrase)) || phrase.length > 480) {
+        while ((boundary = phraseStreaming ? speechBoundary(phrase, true) : sentenceBoundary(phrase)) || phrase.length > 480) {
           let at = boundary || phrase.lastIndexOf(" ", 450);
           if (at <= 0 || at > 480) at = phrase.lastIndexOf(" ", 450) > 0 ? phrase.lastIndexOf(" ", 450) : 450;
           await enqueue(phrase.slice(0, at)); phrase = phrase.slice(at).trimStart();

@@ -8,6 +8,26 @@ const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(
 const { streamAgentReply } = mod.exports;
 const pcmHeaders = { 'x-audio-format': 'pcm_s16le', 'x-sample-rate': '24000', 'x-channels': '1' };
 const enc = new TextEncoder();
+test('local phrase mode starts TTS before the rest of a long sentence arrives without changing text',{timeout:3000},async()=>{
+  const first='The consultation fee for your first clinic visit is 2,000 PKR,';
+  const rest=' and our staff must confirm your preferred appointment time.';
+  let release,seenFirst=false,full='';const spoken=[];
+  const started=new Promise(resolve=>{release=resolve;});
+  await streamAgentReply({phraseStreaming:true,messages:[],voice:'selected',signal:new AbortController().signal,onText:text=>{full=text;},send:async()=>{},timing:async()=>{},
+    engine:async(port,path,init)=>{
+      if(port===11434)return new Response(new ReadableStream({async start(controller){
+        controller.enqueue(enc.encode(JSON.stringify({message:{content:first+' '}})+'\n'));
+        await started;assert.equal(seenFirst,true);
+        controller.enqueue(enc.encode(JSON.stringify({message:{content:rest.trimStart()},done:true})+'\n'));controller.close();
+      }}));
+      spoken.push(JSON.parse(init.body).text);seenFirst=true;release();
+      return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+    },
+  });
+  assert.equal(full,first+' '+rest.trimStart());
+  assert.match(spoken[0],/two thousand Pakistani rupees/);
+  assert.equal(spoken.length,2);
+});
 test('LLM completes while first TTS is in flight; first PCM precedes synthesis completion and sentences stay ordered', async () => {
   const events = [], spoken = [], timings = []; let release, completed = false, text = '';
   const waiting = new Promise(resolve => { release = resolve; });
