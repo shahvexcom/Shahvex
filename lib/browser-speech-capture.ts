@@ -33,7 +33,8 @@ export class BrowserSpeechCapture {
     if (this.talking) this.frames.push(echo ? new Int16Array(frame.length) : frame);
     this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 8) this.pre.shift();
     let recording: { blob: Blob; durationMs: number; voicedMs: number; id: string } | undefined;
-    if (this.talking && (this.quiet >= 32 || this.frames.length >= 1000)) {
+    // 500 ms of trailing silence; retain the existing speech/echo safeguards.
+    if (this.talking && (this.quiet >= 25 || this.frames.length >= 1000)) {
       if (this.voiced >= 10) recording = { blob: speechWav(this.frames), durationMs: this.frames.length * 20, voicedMs: this.voiced * 20, id: crypto.randomUUID() };
       this.reset();
     }

@@ -34,11 +34,12 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
           signal.throwIfAborted(); bytes += chunk.length;
           if (bytes > 8_000_000) throw Error("Synthesis exceeds audio safety limit");
           carry = Buffer.concat([carry, chunk]);
-          while (carry.length >= 4800) {
+          // Forward 40 ms frames instead of waiting for 100 ms of PCM.
+          while (carry.length >= 1920) {
             signal.throwIfAborted();
-            for (let i = 0; i < 4800 && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
+            for (let i = 0; i < 1920 && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
             if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
-            await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 4800).toString("base64") }); carry = carry.subarray(4800);
+            await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 1920).toString("base64") }); carry = carry.subarray(1920);
           }
         }
         if (carry.length % 2) throw Error("Malformed PCM stream");
