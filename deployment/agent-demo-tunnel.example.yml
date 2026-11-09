@@ -1,0 +1,11 @@
+# Replace placeholders on the physical machine; keep credential JSON outside Git.
+tunnel: REPLACE_WITH_TUNNEL_UUID
+credentials-file: C:/ProgramData/Shahvex/cloudflared/REPLACE_WITH_TUNNEL_UUID.json
+ingress:
+  - hostname: demo-engine.shahvex.com
+    path: ^/api/demo/agent/[A-Za-z0-9_-]{43}$
+    service: http://127.0.0.1:3000
+    originRequest:
+      httpHostHeader: demo-engine.shahvex.com
+      connectTimeout: 10s
+  - service: http_status:404

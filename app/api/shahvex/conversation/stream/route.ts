@@ -1,0 +1,5 @@
+import { shahvexConversation } from "@/lib/shahvex-routes";
+export const runtime="nodejs";
+export const dynamic="force-dynamic";
+export const maxDuration=300;
+export async function POST(request:Request){return shahvexConversation(request,true);}

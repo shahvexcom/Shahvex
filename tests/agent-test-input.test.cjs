@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const ts = require('typescript');
 function load(file, deps = {}) {
   const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const m = { exports: {} }; new Function('require', 'module', 'exports', code)(n => Object.hasOwn(deps,n) ? deps[n] : require(n), m, m.exports); return m.exports;
+  const m = { exports: {} }; new Function('require', 'module', 'exports', code)(n => Object.hasOwn(deps,n) ? deps[n] : n === '@/lib/agent-test-session' ? load('lib/agent-test-session.ts', deps) : require(n), m, m.exports); return m.exports;
 }
 const audio = load('lib/agent-test-audio.ts');
 const details = load('lib/agent-script-details.ts');

@@ -1,0 +1,753 @@
+{
+  "scope": "Workspace (excluding dependencies, generated builds and private recovery backup) and every commit reachable from all Git refs. URL userinfo/query/fragment excluded; no credentials included. Dynamic relative routes are documented separately in gateway-recovery.md.",
+  "commits": [
+    "506ff5421c263d04fbb536d79e9874ef2f1024f8",
+    "ea5cbeac99613c3e1d17442df1a2a0c7a698dba0"
+  ],
+  "entries": [
+    {
+      "url": "http://127.0.0.1:1/wav",
+      "sources": [
+        "506ff54/tests/http-wav-candidate.test.cjs:34",
+        "ea5cbea/tests/http-wav-candidate.test.cjs:34",
+        "workspace/tests/http-wav-candidate.test.cjs:34"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://127.0.0.1:11434/",
+      "sources": [
+        "506ff54/gateway/README.md:54",
+        "506ff54/gateway/engine-contract.example.json:2",
+        "506ff54/gateway/physical-engine.example.json:2",
+        "506ff54/gateway/services.cjs:16",
+        "ea5cbea/gateway/README.md:54",
+        "ea5cbea/gateway/engine-contract.example.json:2",
+        "ea5cbea/gateway/physical-engine.example.json:2",
+        "ea5cbea/gateway/services.cjs:16",
+        "workspace/gateway/README.md:54",
+        "workspace/gateway/engine-contract.example.json:2",
+        "workspace/gateway/physical-engine.example.json:2",
+        "workspace/gateway/services.cjs:16"
+      ],
+      "status": "Current local LLM; GET /api/tags confirmed 200 and qwen3:4b-instruct present."
+    },
+    {
+      "url": "http://127.0.0.1:11434/api/chat",
+      "sources": [
+        "506ff54/docs/ollama-cold-warm-benchmark-plan.md:27",
+        "506ff54/gateway/provider-benchmark.cjs:14",
+        "506ff54/tests/provider-benchmark.test.cjs:14",
+        "ea5cbea/docs/ollama-cold-warm-benchmark-plan.md:27",
+        "ea5cbea/gateway/provider-benchmark.cjs:14",
+        "ea5cbea/tests/provider-benchmark.test.cjs:14",
+        "workspace/docs/ollama-cold-warm-benchmark-plan.md:27",
+        "workspace/gateway/provider-benchmark.cjs:14",
+        "workspace/tests/provider-benchmark.test.cjs:14"
+      ],
+      "status": "Confirmed live local text/voice inference during recovery."
+    },
+    {
+      "url": "http://127.0.0.1:11434/api/ps",
+      "sources": [
+        "506ff54/deployment/Start-GroqVoiceReview.ps1:39",
+        "506ff54/gateway/native-ab.cjs:76",
+        "506ff54/gateway/run-intelligence-compatibility.cjs:21",
+        "ea5cbea/deployment/Start-GroqVoiceReview.ps1:39",
+        "ea5cbea/gateway/native-ab.cjs:76",
+        "ea5cbea/gateway/run-intelligence-compatibility.cjs:21",
+        "workspace/deployment/Start-GroqVoiceReview.ps1:39",
+        "workspace/gateway/native-ab.cjs:76",
+        "workspace/gateway/run-intelligence-compatibility.cjs:21"
+      ],
+      "status": "Historical monitoring endpoint; not tested."
+    },
+    {
+      "url": "http://127.0.0.1:18787/",
+      "sources": [
+        "506ff54/docs/backend-private-connection.md:42",
+        "506ff54/docs/physical-engine-bridge.md:42",
+        "506ff54/docs/website-physical-e2e.md:85",
+        "506ff54/gateway/backend-client.cjs:5",
+        "506ff54/gateway/e2e.cjs:7",
+        "506ff54/gateway/isolation-check.cjs:4",
+        "ea5cbea/docs/backend-private-connection.md:42",
+        "ea5cbea/docs/physical-engine-bridge.md:42",
+        "ea5cbea/docs/website-physical-e2e.md:85",
+        "ea5cbea/gateway/backend-client.cjs:5",
+        "ea5cbea/gateway/e2e.cjs:7",
+        "ea5cbea/gateway/isolation-check.cjs:4",
+        "workspace/docs/backend-private-connection.md:42",
+        "workspace/docs/physical-engine-bridge.md:42",
+        "workspace/docs/website-physical-e2e.md:85",
+        "workspace/gateway/backend-client.cjs:5",
+        "workspace/gateway/e2e.cjs:7",
+        "workspace/gateway/isolation-check.cjs:4"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:3000/",
+      "sources": [
+        "506ff54/docs/coordinated-voice-streaming-deployment.md:63",
+        "506ff54/docs/generic-listening-comparison.md:34",
+        "506ff54/docs/jennifer-campaign-optimization-review.md:28",
+        "506ff54/docs/voice-functional-deployment.md:59",
+        "506ff54/tests/gateway-browser-access.test.cjs:107",
+        "506ff54/tests/gateway-browser-access.test.cjs:121",
+        "506ff54/tests/gateway-browser-access.test.cjs:43",
+        "506ff54/tests/gateway-browser-access.test.cjs:54",
+        "506ff54/tests/gateway-browser-access.test.cjs:55",
+        "506ff54/tests/gateway-browser-access.test.cjs:80",
+        "506ff54/tests/gateway-browser-access.test.cjs:81",
+        "506ff54/tests/gateway-browser-access.test.cjs:85",
+        "ea5cbea/docs/coordinated-voice-streaming-deployment.md:63",
+        "ea5cbea/docs/generic-listening-comparison.md:34",
+        "ea5cbea/docs/jennifer-campaign-optimization-review.md:28",
+        "ea5cbea/docs/voice-functional-deployment.md:59",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:107",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:121",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:43",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:54",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:55",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:80",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:81",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:85",
+        "workspace/deployment/agent-demo-tunnel.example.yml:7",
+        "workspace/docs/coordinated-voice-streaming-deployment.md:63",
+        "workspace/docs/generic-listening-comparison.md:34",
+        "workspace/docs/jennifer-campaign-optimization-review.md:28",
+        "workspace/docs/voice-functional-deployment.md:59",
+        "workspace/tests/agent-demo.test.cjs:68",
+        "workspace/tests/gateway-browser-access.test.cjs:107",
+        "workspace/tests/gateway-browser-access.test.cjs:121",
+        "workspace/tests/gateway-browser-access.test.cjs:43",
+        "workspace/tests/gateway-browser-access.test.cjs:54",
+        "workspace/tests/gateway-browser-access.test.cjs:55",
+        "workspace/tests/gateway-browser-access.test.cjs:80",
+        "workspace/tests/gateway-browser-access.test.cjs:81",
+        "workspace/tests/gateway-browser-access.test.cjs:85"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3000/api/admin/agents/gateway-export",
+      "sources": [
+        "506ff54/docs/local-backend-connection.md:63",
+        "ea5cbea/docs/local-backend-connection.md:63",
+        "workspace/docs/local-backend-connection.md:63"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3000/api/admin/local-voice",
+      "sources": [
+        "506ff54/tests/gateway-browser-access.test.cjs:107",
+        "506ff54/tests/gateway-browser-access.test.cjs:121",
+        "506ff54/tests/gateway-browser-access.test.cjs:43",
+        "506ff54/tests/gateway-browser-access.test.cjs:54",
+        "506ff54/tests/gateway-browser-access.test.cjs:55",
+        "506ff54/tests/gateway-browser-access.test.cjs:62",
+        "506ff54/tests/gateway-browser-access.test.cjs:92",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:107",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:121",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:43",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:54",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:55",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:62",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:92",
+        "workspace/tests/gateway-browser-access.test.cjs:107",
+        "workspace/tests/gateway-browser-access.test.cjs:121",
+        "workspace/tests/gateway-browser-access.test.cjs:43",
+        "workspace/tests/gateway-browser-access.test.cjs:54",
+        "workspace/tests/gateway-browser-access.test.cjs:55",
+        "workspace/tests/gateway-browser-access.test.cjs:62",
+        "workspace/tests/gateway-browser-access.test.cjs:92"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3000/api/demo/agent/$%7Btoken",
+      "sources": [
+        "workspace/tests/agent-demo.test.cjs:76"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3000/controler/login",
+      "sources": [
+        "506ff54/docs/browser-local-voice-test.md:47",
+        "506ff54/docs/local-backend-connection.md:58",
+        "ea5cbea/docs/browser-local-voice-test.md:47",
+        "ea5cbea/docs/local-backend-connection.md:58",
+        "workspace/docs/browser-local-voice-test.md:47",
+        "workspace/docs/local-backend-connection.md:58"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3000/controller",
+      "sources": [
+        "506ff54/docs/client-demo-baseline.md:9",
+        "ea5cbea/docs/client-demo-baseline.md:9",
+        "workspace/docs/client-demo-baseline.md:9"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "http://127.0.0.1:3001/",
+      "sources": [
+        "506ff54/tests/gateway-browser-access.test.cjs:82",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:82",
+        "workspace/tests/gateway-browser-access.test.cjs:82"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://127.0.0.1:8765/CONFIRMED_HEALTH_PATH",
+      "sources": [
+        "506ff54/gateway/README.md:63",
+        "ea5cbea/gateway/README.md:63",
+        "workspace/gateway/README.md:63"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8765/CONFIRMED_PATH",
+      "sources": [
+        "506ff54/gateway/README.md:62",
+        "ea5cbea/gateway/README.md:62",
+        "workspace/gateway/README.md:62"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8765/health",
+      "sources": [
+        "506ff54/docs/coordinated-voice-streaming-deployment.md:133",
+        "506ff54/docs/voice-functional-deployment.md:129",
+        "506ff54/docs/website-physical-e2e.md:48",
+        "506ff54/gateway/physical-engine.example.json:13",
+        "506ff54/gateway/transport-probe.cjs:56",
+        "ea5cbea/docs/coordinated-voice-streaming-deployment.md:133",
+        "ea5cbea/docs/voice-functional-deployment.md:129",
+        "ea5cbea/docs/website-physical-e2e.md:48",
+        "ea5cbea/gateway/physical-engine.example.json:13",
+        "ea5cbea/gateway/transport-probe.cjs:56",
+        "workspace/docs/coordinated-voice-streaming-deployment.md:133",
+        "workspace/docs/voice-functional-deployment.md:129",
+        "workspace/docs/website-physical-e2e.md:48",
+        "workspace/gateway/physical-engine.example.json:13",
+        "workspace/gateway/transport-probe.cjs:56"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8765/synthesize",
+      "sources": [
+        "506ff54/gateway/benchmark_resident_tts.py:35",
+        "506ff54/gateway/native-transport-once.cjs:8",
+        "506ff54/gateway/physical-engine.example.json:12",
+        "506ff54/gateway/style-review/run-approved-listening.cjs:30",
+        "506ff54/gateway/style-review/run-concise-native.cjs:38",
+        "506ff54/tests/gateway-first-audio.test.cjs:22",
+        "506ff54/tests/gateway-first-audio.test.cjs:33",
+        "506ff54/tests/gateway-llm-streaming.test.cjs:8",
+        "506ff54/tests/gateway-physical.test.cjs:13",
+        "ea5cbea/gateway/benchmark_resident_tts.py:35",
+        "ea5cbea/gateway/native-transport-once.cjs:8",
+        "ea5cbea/gateway/physical-engine.example.json:12",
+        "ea5cbea/gateway/style-review/run-approved-listening.cjs:30",
+        "ea5cbea/gateway/style-review/run-concise-native.cjs:38",
+        "ea5cbea/tests/gateway-first-audio.test.cjs:22",
+        "ea5cbea/tests/gateway-first-audio.test.cjs:33",
+        "ea5cbea/tests/gateway-llm-streaming.test.cjs:8",
+        "ea5cbea/tests/gateway-physical.test.cjs:13",
+        "workspace/gateway/benchmark_resident_tts.py:35",
+        "workspace/gateway/native-transport-once.cjs:8",
+        "workspace/gateway/physical-engine.example.json:12",
+        "workspace/gateway/style-review/run-approved-listening.cjs:30",
+        "workspace/gateway/style-review/run-concise-native.cjs:38",
+        "workspace/tests/gateway-first-audio.test.cjs:22",
+        "workspace/tests/gateway-first-audio.test.cjs:33",
+        "workspace/tests/gateway-llm-streaming.test.cjs:8",
+        "workspace/tests/gateway-physical.test.cjs:13"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8768/",
+      "sources": [
+        "workspace/docs/shahvex-physical-api-integration.md:60",
+        "workspace/tests/shahvex-api.test.cjs:20"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://127.0.0.1:8768/openapi.json",
+      "sources": [
+        "workspace/docs/shahvex-physical-api-integration.md:14"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://127.0.0.1:8787/",
+      "sources": [
+        "506ff54/.env.example:42",
+        "506ff54/deployment/Manage-ShahvexLocal.ps1:90",
+        "506ff54/deployment/Start-VoiceReviewBackend.ps1:6",
+        "506ff54/docs/backend-private-connection.md:3",
+        "506ff54/docs/browser-local-voice-test.md:12",
+        "506ff54/docs/browser-local-voice-test.md:38",
+        "506ff54/docs/concise-opening-latency-review.md:39",
+        "506ff54/docs/gateway-cancellation-review.md:54",
+        "506ff54/docs/local-backend-connection.md:22",
+        "506ff54/docs/local-backend-connection.md:28",
+        "506ff54/docs/local-backend-connection.md:72",
+        "506ff54/docs/studio-upgrade-review.md:36",
+        "506ff54/lib/local-voice-relay.ts:26",
+        "506ff54/tests/gateway-browser-access.test.cjs:117",
+        "506ff54/tests/gateway-browser-access.test.cjs:45",
+        "506ff54/tests/gateway-browser-access.test.cjs:68",
+        "506ff54/tests/gateway-browser-access.test.cjs:69",
+        "506ff54/tests/gateway-browser-access.test.cjs:94",
+        "ea5cbea/.env.example:42",
+        "ea5cbea/deployment/Manage-ShahvexLocal.ps1:90",
+        "ea5cbea/deployment/Start-VoiceReviewBackend.ps1:6",
+        "ea5cbea/docs/backend-private-connection.md:3",
+        "ea5cbea/docs/browser-local-voice-test.md:12",
+        "ea5cbea/docs/browser-local-voice-test.md:38",
+        "ea5cbea/docs/concise-opening-latency-review.md:39",
+        "ea5cbea/docs/gateway-cancellation-review.md:54",
+        "ea5cbea/docs/local-backend-connection.md:22",
+        "ea5cbea/docs/local-backend-connection.md:28",
+        "ea5cbea/docs/local-backend-connection.md:72",
+        "ea5cbea/docs/studio-upgrade-review.md:36",
+        "ea5cbea/lib/local-voice-relay.ts:26",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:117",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:45",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:68",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:69",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:94",
+        "workspace/.env.example:61",
+        "workspace/deployment/Manage-ShahvexLocal.ps1:90",
+        "workspace/deployment/Start-VoiceReviewBackend.ps1:6",
+        "workspace/docs/backend-private-connection.md:3",
+        "workspace/docs/browser-local-voice-test.md:12",
+        "workspace/docs/browser-local-voice-test.md:38",
+        "workspace/docs/concise-opening-latency-review.md:39",
+        "workspace/docs/gateway-cancellation-review.md:54",
+        "workspace/docs/local-backend-connection.md:22",
+        "workspace/docs/local-backend-connection.md:28",
+        "workspace/docs/local-backend-connection.md:72",
+        "workspace/docs/studio-upgrade-review.md:36",
+        "workspace/lib/local-voice-relay.ts:26",
+        "workspace/tests/gateway-browser-access.test.cjs:117",
+        "workspace/tests/gateway-browser-access.test.cjs:45",
+        "workspace/tests/gateway-browser-access.test.cjs:68",
+        "workspace/tests/gateway-browser-access.test.cjs:69",
+        "workspace/tests/gateway-browser-access.test.cjs:94"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8787/health",
+      "sources": [
+        "506ff54/deployment/Manage-ShahvexLocal.ps1:214",
+        "506ff54/deployment/Manage-ShahvexLocal.ps1:46",
+        "506ff54/deployment/Start-GroqVoiceReview.ps1:35",
+        "506ff54/gateway/README.md:41",
+        "506ff54/gateway/benchmark-streaming.cjs:6",
+        "506ff54/gateway/benchmark_resident_tts.py:15",
+        "506ff54/gateway/native-ab.cjs:59",
+        "506ff54/gateway/style-review/run-approved-listening.cjs:17",
+        "506ff54/gateway/style-review/run-concise-native.cjs:20",
+        "ea5cbea/deployment/Manage-ShahvexLocal.ps1:214",
+        "ea5cbea/deployment/Manage-ShahvexLocal.ps1:46",
+        "ea5cbea/deployment/Start-GroqVoiceReview.ps1:35",
+        "ea5cbea/gateway/README.md:41",
+        "ea5cbea/gateway/benchmark-streaming.cjs:6",
+        "ea5cbea/gateway/benchmark_resident_tts.py:15",
+        "ea5cbea/gateway/native-ab.cjs:59",
+        "ea5cbea/gateway/style-review/run-approved-listening.cjs:17",
+        "ea5cbea/gateway/style-review/run-concise-native.cjs:20",
+        "workspace/deployment/Manage-ShahvexLocal.ps1:214",
+        "workspace/deployment/Manage-ShahvexLocal.ps1:46",
+        "workspace/deployment/Start-GroqVoiceReview.ps1:35",
+        "workspace/gateway/README.md:41",
+        "workspace/gateway/benchmark-streaming.cjs:6",
+        "workspace/gateway/benchmark_resident_tts.py:15",
+        "workspace/gateway/native-ab.cjs:59",
+        "workspace/gateway/style-review/run-approved-listening.cjs:17",
+        "workspace/gateway/style-review/run-concise-native.cjs:20"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8788/health",
+      "sources": [
+        "506ff54/gateway/physical-engine.example.json:7",
+        "ea5cbea/gateway/physical-engine.example.json:7",
+        "workspace/gateway/physical-engine.example.json:7"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8788/transcribe",
+      "sources": [
+        "506ff54/gateway/physical-engine.example.json:6",
+        "506ff54/gateway/stt-outlier-control.cjs:6",
+        "506ff54/tests/gateway-first-audio.test.cjs:10",
+        "506ff54/tests/gateway-timing.test.cjs:16",
+        "506ff54/tests/gateway-timing.test.cjs:20",
+        "ea5cbea/gateway/physical-engine.example.json:6",
+        "ea5cbea/gateway/stt-outlier-control.cjs:6",
+        "ea5cbea/tests/gateway-first-audio.test.cjs:10",
+        "ea5cbea/tests/gateway-timing.test.cjs:16",
+        "ea5cbea/tests/gateway-timing.test.cjs:20",
+        "workspace/gateway/physical-engine.example.json:6",
+        "workspace/gateway/stt-outlier-control.cjs:6",
+        "workspace/tests/gateway-first-audio.test.cjs:10",
+        "workspace/tests/gateway-timing.test.cjs:16",
+        "workspace/tests/gateway-timing.test.cjs:20"
+      ],
+      "status": "Historical separate legacy voice-relay pipeline; corresponding health endpoint currently unreachable. No service started or URL substituted."
+    },
+    {
+      "url": "http://127.0.0.1:8789/",
+      "sources": [
+        "506ff54/deployment/Start-VoiceReviewBackend.ps1:6",
+        "ea5cbea/deployment/Start-VoiceReviewBackend.ps1:6",
+        "workspace/deployment/Start-VoiceReviewBackend.ps1:6"
+      ],
+      "status": "Historical isolated review listener; not the production tester. Unverified currently."
+    },
+    {
+      "url": "http://localhost/",
+      "sources": [
+        "506ff54/tests/gateway-export.test.cjs:18",
+        "506ff54/tests/gateway-export.test.cjs:23",
+        "506ff54/tests/gateway-export.test.cjs:26",
+        "ea5cbea/tests/gateway-export.test.cjs:18",
+        "ea5cbea/tests/gateway-export.test.cjs:23",
+        "ea5cbea/tests/gateway-export.test.cjs:26",
+        "workspace/tests/gateway-export.test.cjs:18",
+        "workspace/tests/gateway-export.test.cjs:23",
+        "workspace/tests/gateway-export.test.cjs:26"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost/api/admin/agents",
+      "sources": [
+        "506ff54/tests/agent-settings.test.cjs:14",
+        "workspace/tests/agent-settings.test.cjs:14"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost/api/admin/scripts",
+      "sources": [
+        "506ff54/tests/agent-settings.test.cjs:39",
+        "workspace/tests/agent-settings.test.cjs:39"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost/api/agent/calls",
+      "sources": [
+        "506ff54/tests/agent-calls.test.cjs:127",
+        "ea5cbea/tests/agent-calls.test.cjs:126",
+        "workspace/tests/agent-calls.test.cjs:127"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost/api/quick-dial",
+      "sources": [
+        "506ff54/tests/agent-settings.test.cjs:30",
+        "workspace/tests/agent-settings.test.cjs:30"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost/recording",
+      "sources": [
+        "506ff54/tests/agent-calls.test.cjs:155",
+        "ea5cbea/tests/agent-calls.test.cjs:154",
+        "workspace/tests/agent-calls.test.cjs:155"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/",
+      "sources": [
+        "506ff54/.env.example:3",
+        "506ff54/README.md:48",
+        "506ff54/app/robots.ts:4",
+        "506ff54/app/sitemap.ts:4",
+        "506ff54/tests/admin-settings-delete.test.cjs:3",
+        "506ff54/tests/agent-test-input.test.cjs:42",
+        "506ff54/tests/agent-test-input.test.cjs:68",
+        "506ff54/tests/agent-test.test.cjs:28",
+        "506ff54/tests/agent-test.test.cjs:44",
+        "506ff54/tests/agent-test.test.cjs:63",
+        "506ff54/tests/agent-test.test.cjs:82",
+        "506ff54/tests/agent-test.test.cjs:98",
+        "506ff54/tests/gateway-browser-access.test.cjs:31",
+        "506ff54/tests/gateway-browser-access.test.cjs:33",
+        "506ff54/tests/gateway-browser-access.test.cjs:35",
+        "506ff54/tests/gateway-browser-access.test.cjs:36",
+        "506ff54/tests/gateway-browser-access.test.cjs:37",
+        "506ff54/tests/gateway-browser-access.test.cjs:82",
+        "506ff54/tests/voip.test.cjs:27",
+        "506ff54/tests/voip.test.cjs:42",
+        "ea5cbea/.env.example:3",
+        "ea5cbea/README.md:48",
+        "ea5cbea/app/robots.ts:4",
+        "ea5cbea/app/sitemap.ts:4",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:31",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:33",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:35",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:36",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:37",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:82",
+        "workspace/.env.example:3",
+        "workspace/README.md:48",
+        "workspace/app/robots.ts:4",
+        "workspace/app/sitemap.ts:4",
+        "workspace/tests/admin-settings-delete.test.cjs:3",
+        "workspace/tests/agent-test-input.test.cjs:42",
+        "workspace/tests/agent-test-input.test.cjs:68",
+        "workspace/tests/agent-test.test.cjs:28",
+        "workspace/tests/agent-test.test.cjs:44",
+        "workspace/tests/agent-test.test.cjs:63",
+        "workspace/tests/agent-test.test.cjs:82",
+        "workspace/tests/agent-test.test.cjs:98",
+        "workspace/tests/gateway-browser-access.test.cjs:31",
+        "workspace/tests/gateway-browser-access.test.cjs:33",
+        "workspace/tests/gateway-browser-access.test.cjs:35",
+        "workspace/tests/gateway-browser-access.test.cjs:36",
+        "workspace/tests/gateway-browser-access.test.cjs:37",
+        "workspace/tests/gateway-browser-access.test.cjs:82",
+        "workspace/tests/voip.test.cjs:27",
+        "workspace/tests/voip.test.cjs:42"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/admin/agent-test",
+      "sources": [
+        "506ff54/tests/agent-test-input.test.cjs:42",
+        "506ff54/tests/agent-test-input.test.cjs:68",
+        "506ff54/tests/agent-test.test.cjs:28",
+        "506ff54/tests/agent-test.test.cjs:29",
+        "506ff54/tests/agent-test.test.cjs:44",
+        "506ff54/tests/agent-test.test.cjs:63",
+        "506ff54/tests/agent-test.test.cjs:82",
+        "506ff54/tests/agent-test.test.cjs:98",
+        "workspace/tests/agent-test-input.test.cjs:42",
+        "workspace/tests/agent-test-input.test.cjs:68",
+        "workspace/tests/agent-test.test.cjs:28",
+        "workspace/tests/agent-test.test.cjs:29",
+        "workspace/tests/agent-test.test.cjs:44",
+        "workspace/tests/agent-test.test.cjs:63",
+        "workspace/tests/agent-test.test.cjs:82",
+        "workspace/tests/agent-test.test.cjs:98"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/admin/local-voice",
+      "sources": [
+        "506ff54/tests/gateway-browser-access.test.cjs:31",
+        "506ff54/tests/gateway-browser-access.test.cjs:35",
+        "506ff54/tests/gateway-browser-access.test.cjs:36",
+        "506ff54/tests/gateway-browser-access.test.cjs:37",
+        "506ff54/tests/gateway-browser-access.test.cjs:78",
+        "506ff54/tests/gateway-browser-access.test.cjs:86",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:31",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:35",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:36",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:37",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:78",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:86",
+        "workspace/tests/gateway-browser-access.test.cjs:31",
+        "workspace/tests/gateway-browser-access.test.cjs:35",
+        "workspace/tests/gateway-browser-access.test.cjs:36",
+        "workspace/tests/gateway-browser-access.test.cjs:37",
+        "workspace/tests/gateway-browser-access.test.cjs:78",
+        "workspace/tests/gateway-browser-access.test.cjs:86"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/admin/settings",
+      "sources": [
+        "506ff54/tests/admin-settings-delete.test.cjs:3",
+        "workspace/tests/admin-settings-delete.test.cjs:3"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/admin/voip",
+      "sources": [
+        "506ff54/tests/voip.test.cjs:27",
+        "workspace/tests/voip.test.cjs:27"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/bpo/agents",
+      "sources": [
+        "506ff54/tests/bpo-local-voice.test.cjs:3",
+        "workspace/tests/bpo-local-voice.test.cjs:3"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "http://localhost:3000/api/bpo/voip",
+      "sources": [
+        "506ff54/tests/voip.test.cjs:34",
+        "506ff54/tests/voip.test.cjs:41",
+        "506ff54/tests/voip.test.cjs:42",
+        "workspace/tests/voip.test.cjs:34",
+        "workspace/tests/voip.test.cjs:41",
+        "workspace/tests/voip.test.cjs:42"
+      ],
+      "status": "Historical local development URL or unit-test fixture; not established as a working gateway by its presence."
+    },
+    {
+      "url": "https://127.0.0.1:3000/",
+      "sources": [
+        "506ff54/tests/gateway-browser-access.test.cjs:82",
+        "ea5cbea/tests/gateway-browser-access.test.cjs:82",
+        "workspace/tests/gateway-browser-access.test.cjs:82"
+      ],
+      "status": "Local website origin reachable; protected admin tester/agents/Cloudflare health routes returned 401 anonymously. Listed specific path may be documentation/fixture, not exercised."
+    },
+    {
+      "url": "https://ai.shahvex.com/",
+      "sources": [
+        "workspace/.env.example:7",
+        "workspace/docs/shahvex-physical-api-integration.md:49",
+        "workspace/tests/shahvex-api.test.cjs:10",
+        "workspace/tests/shahvex-api.test.cjs:18"
+      ],
+      "status": "Current configured Cloudflare origin; authenticated GET /health confirmed 200/ready. Conversation endpoints not exercised through this gateway in recovery."
+    },
+    {
+      "url": "https://ai.shahvex.com/health",
+      "sources": [
+        "workspace/docs/shahvex-physical-api-integration.md:206"
+      ],
+      "status": "Current configured Cloudflare origin; authenticated GET /health confirmed 200/ready. Conversation endpoints not exercised through this gateway in recovery."
+    },
+    {
+      "url": "https://demo-engine.shahvex.com/",
+      "sources": [
+        "workspace/docs/private-agent-test-links.md:117",
+        "workspace/tests/agent-demo.test.cjs:69",
+        "workspace/tests/agent-demo.test.cjs:70"
+      ],
+      "status": "Example/fixture introduced by private-link work, not a confirmed configured or deployed endpoint."
+    },
+    {
+      "url": "https://www.shahvex.com/",
+      "sources": [
+        "506ff54/app/layout.tsx:28",
+        "506ff54/lib/contact-email-templates.ts:26",
+        "506ff54/lib/contact-email-templates.ts:8",
+        "506ff54/lib/email-templates.ts:116",
+        "506ff54/lib/email-templates.ts:14",
+        "506ff54/lib/email-templates.ts:51",
+        "506ff54/lib/email-templates.ts:93",
+        "ea5cbea/app/layout.tsx:27",
+        "ea5cbea/lib/contact-email-templates.ts:26",
+        "ea5cbea/lib/contact-email-templates.ts:8",
+        "ea5cbea/lib/email-templates.ts:116",
+        "ea5cbea/lib/email-templates.ts:14",
+        "ea5cbea/lib/email-templates.ts:51",
+        "ea5cbea/lib/email-templates.ts:93",
+        "workspace/app/layout.tsx:28",
+        "workspace/docs/private-agent-test-links.md:116",
+        "workspace/docs/private-agent-test-links.md:5",
+        "workspace/lib/contact-email-templates.ts:26",
+        "workspace/lib/contact-email-templates.ts:8",
+        "workspace/lib/email-templates.ts:116",
+        "workspace/lib/email-templates.ts:14",
+        "workspace/lib/email-templates.ts:51",
+        "workspace/lib/email-templates.ts:93",
+        "workspace/tests/agent-demo.test.cjs:14",
+        "workspace/tests/shahvex-api.test.cjs:40",
+        "workspace/tests/shahvex-api.test.cjs:50"
+      ],
+      "status": "Production website origin or test/docs example. Not redeployed or externally voice-tested in this recovery."
+    },
+    {
+      "url": "https://www.shahvex.com/api/shahvex/conversation",
+      "sources": [
+        "workspace/tests/shahvex-api.test.cjs:50"
+      ],
+      "status": "Production website origin or test/docs example. Not redeployed or externally voice-tested in this recovery."
+    },
+    {
+      "url": "https://www.shahvex.com/api/shahvex/conversation/stream",
+      "sources": [
+        "workspace/tests/shahvex-api.test.cjs:40"
+      ],
+      "status": "Production website origin or test/docs example. Not redeployed or externally voice-tested in this recovery."
+    },
+    {
+      "url": "https://www.shahvex.com/api/shahvex/health",
+      "sources": [
+        "workspace/tests/shahvex-api.test.cjs:59"
+      ],
+      "status": "Production website origin or test/docs example. Not redeployed or externally voice-tested in this recovery."
+    },
+    {
+      "url": "https://www.shahvex.com/test/agent/",
+      "sources": [
+        "workspace/docs/private-agent-test-links.md:183"
+      ],
+      "status": "Production website origin or test/docs example. Not redeployed or externally voice-tested in this recovery."
+    }
+  ],
+  "runtimeConstructedEndpoints": [
+    {
+      "url": "http://127.0.0.1:8766/transcribe",
+      "source": "lib/agent-test.ts engine() + lib/agent-test-session.ts (formerly inline in app/api/admin/agent-test/route.ts at HEAD)",
+      "status": "Confirmed real synthetic-speech STT round trip."
+    },
+    {
+      "url": "http://127.0.0.1:8767/voices",
+      "source": "lib/agent-test.ts localVoices()",
+      "status": "Confirmed HTTP 200, 11 inventory entries."
+    },
+    {
+      "url": "http://127.0.0.1:8767/health",
+      "source": "lib/agent-test.ts warmSelectedVoice()",
+      "status": "Confirmed HTTP 200/ready."
+    },
+    {
+      "url": "http://127.0.0.1:8767/synthesize",
+      "source": "app/api/admin/agent-test/route.ts preview + lib/agent-test.ts warmSelectedVoice()",
+      "status": "Confirmed real WAV synthesis during recovery."
+    },
+    {
+      "url": "http://127.0.0.1:8767/stream",
+      "source": "lib/agent-test-stream.ts streamAgentReply()",
+      "status": "Confirmed real 24 kHz PCM output during recovery."
+    },
+    {
+      "url": "http://127.0.0.1:11434/api/chat",
+      "source": "lib/agent-test-stream.ts + lib/agent-script-extraction.ts",
+      "status": "Confirmed real text/voice inference; actual script extraction not separately exercised."
+    },
+    {
+      "url": "http://127.0.0.1:8769/health",
+      "source": "Experimental phrase-streaming port documented in docs/shahvex-physical-api-integration.md; inspected local runtime separately",
+      "status": "Health 200/ready; not selected for recovery and no public exposure assumed."
+    }
+  ]
+}

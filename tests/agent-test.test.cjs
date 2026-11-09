@@ -4,10 +4,43 @@ const fs = require('node:fs');
 const ts = require('typescript');
 function load(file, deps) {
   const code = ts.transpileModule(fs.readFileSync(require('node:path').join(__dirname, '..', file), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
-  const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(name => Object.hasOwn(deps, name) ? deps[name] : name === '@/lib/agent-test-stream' ? load('lib/agent-test-stream.ts', {}) : name === '@/lib/agent-script-extraction' ? { extractAgentScript: async () => load('lib/agent-script-details.ts', {}).emptyScriptDetails() } : name === '@/lib/agent-script-details' ? load('lib/agent-script-details.ts', {}) : name === '@/lib/agent-test-audio' ? load('lib/agent-test-audio.ts', {}) : require(name), mod, mod.exports); return mod.exports;
+  const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(name => Object.hasOwn(deps, name) ? deps[name] : name === '@/lib/agent-test-session' ? load('lib/agent-test-session.ts', deps) : name === '@/lib/agent-test-stream' ? load('lib/agent-test-stream.ts', {}) : name === '@/lib/agent-script-extraction' ? { extractAgentScript: async () => load('lib/agent-script-details.ts', {}).emptyScriptDetails() } : name === '@/lib/agent-script-details' ? load('lib/agent-script-details.ts', {}) : name === '@/lib/agent-test-audio' ? load('lib/agent-test-audio.ts', {}) : require(name), mod, mod.exports); return mod.exports;
 }
 const service = load('lib/agent-test.ts', { 'server-only': {} });
 const config = { name: 'Configured Agent', voice: 'local-voice', first: 'ai', goal: 'Schedule a consultation', task: 'Find availability', instructions: 'Be accurate', script: 'Ask about timing', knowledge: 'Open weekdays', style: 'Friendly' };
+
+test('configured Cloudflare URL cannot reroute existing local tester configuration, preview, extraction or conversation', async () => {
+  const before = process.env.SHAHVEX_API_URL;
+  process.env.SHAHVEX_API_URL = 'https://ai.shahvex.com';
+  service.sessions.clear(); const calls = [];
+  const route = load('app/api/admin/agent-test/route.ts', {
+    'next/headers': { cookies: async () => ({ get: () => ({ value: 'test' }) }) },
+    '@/lib/session': { ADMIN_SESSION_COOKIE: 'session', readSession: async () => ({ agentId: 'admin-a', role: 'ADMIN' }) },
+    '@/lib/database': { db: async () => ({ query: async () => ({ rows: [{ id: 'agent-a', name: 'Saved Agent', local_voice_id: config.voice, speaks_first: 'ai', script: config.script, conversation_style: 'Friendly' }] }) }) },
+    '@/lib/agent-script-extraction': { extractAgentScript: async () => ({ goals: [config.goal], tasks: [config.task], instructions: [config.instructions], conversationFlow: [], restrictions: [], knowledge: [config.knowledge], faqs: [] }) },
+    '@/lib/agent-test': { ...service, localVoices: async () => ({ defaultVoice: config.voice, voices: [{ id: config.voice, name: 'Assigned voice' }] }), warmSelectedVoice: async () => {}, engine: async (port,path,init) => {
+      calls.push({ port,path });
+      if (path === '/synthesize') return new Response(new Uint8Array(44));
+      if (port === 11434) return new Response(JSON.stringify({ message: { content: 'Hello. How can I help?' }, done: true }) + '\n');
+      return new Response(new Uint8Array(4800).fill(16), { headers: { 'x-audio-format': 'pcm_s16le', 'x-sample-rate': '24000', 'x-channels': '1' } });
+    } },
+  });
+  const post = (action,body={},id='') => route.POST(new Request(`http://localhost:3000/api/admin/agent-test?action=${action}&id=${id}`, {method:'POST',headers:{origin:'http://localhost:3000','Content-Type':'application/json'},body:JSON.stringify(body)}));
+  try {
+    const loaded = await route.GET(new Request('http://localhost:3000/api/admin/agent-test?agentId=agent-a'));
+    assert.equal(loaded.status,200); const metadata = await loaded.json(); assert.equal(metadata.transport,undefined); assert.equal(metadata.config.script,config.script);
+    assert.equal((await post('extract',{script:config.script})).status,200);
+    assert.equal((await post('preview',{voice:config.voice})).status,200);
+    const started = await post('start',{agentId:'agent-a',config}); assert.equal(started.status,200); const {id} = await started.json();
+    assert.equal(service.sessions.get(id).config.knowledge,config.knowledge);
+    const opening = (await (await post('turn',{opening:true},id)).text()).trim().split('\n').map(JSON.parse);
+    assert.ok(opening.some(e=>e.type==='pcm')); assert.ok(!opening.some(e=>e.type==='user'));
+    const reply = (await (await post('turn',{text:'What are your hours?'},id)).text()).trim().split('\n').map(JSON.parse);
+    assert.ok(reply.some(e=>e.type==='user'&&e.text==='What are your hours?')); assert.ok(reply.some(e=>e.type==='delta'));
+    assert.ok(calls.some(c=>c.port===8767&&c.path==='/synthesize')); assert.ok(calls.some(c=>c.port===8767&&c.path==='/stream')); assert.ok(calls.some(c=>c.port===11434&&c.path==='/api/chat'));
+    assert.equal((await post('interrupt',{},id)).status,200); assert.equal((await post('stop',{},id)).status,200); assert.equal(service.sessions.has(id),false);
+  } finally { if(before===undefined)delete process.env.SHAHVEX_API_URL;else process.env.SHAHVEX_API_URL=before; }
+});
 test('configuration and isolated server memory use assigned content and replace old owner sessions', () => {
   service.sessions.clear();
   const id = service.newTest('admin-a', 'agent-a', config), other = service.newTest('admin-b', 'agent-b', { ...config, name: 'Other' });

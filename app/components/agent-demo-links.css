@@ -1,0 +1,6 @@
+.agent-link-actions { position: relative; justify-self: end; }
+.agent-link-actions > summary { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; cursor: pointer; list-style: none; }
+.agent-link-actions > summary::-webkit-details-marker { display: none; }
+.agent-link-menu { position: absolute; right: 0; top: 100%; z-index: 50; width: 260px; padding: 12px; display: grid; gap: 8px; border: 1px solid var(--border, #ddd); border-radius: 12px; background: var(--card-bg, #fff); color: var(--text, #222); box-shadow: 0 12px 30px #0002; }
+.agent-link-menu small { line-height: 1.6; }
+.agent-link-menu input { width: 100%; min-width: 0; }

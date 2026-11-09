@@ -35,18 +35,18 @@ export async function localVoices(owner?: string) {
 }
 const warmState = globalThis as unknown as { agentTestVoiceWarmups?: Map<string, Promise<void>> };
 const warmups = warmState.agentTestVoiceWarmups ??= new Map<string, Promise<void>>();
-export async function warmSelectedVoice(voice: string) {
-  const existing = warmups.get(voice); if (existing) return existing;
+export async function warmSelectedVoice(voice: string, signal?: AbortSignal) {
+  const existing = signal ? undefined : warmups.get(voice); if (existing) return existing;
   const warm = (async () => {
-    const health = await engine(8767, "/health");
+    const health = await engine(8767, "/health", { signal });
     if (!health.ok) throw Error("CosyVoice is unavailable");
     const data = await health.json();
     // Existing CosyVoice owns its speaker-feature cache. Never reload its model.
     if (data.cached_voice_ids?.includes(voice)) return;
-    const response = await engine(8767, "/synthesize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Ready.", voice_id: voice }) });
+    const response = await engine(8767, "/synthesize", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Ready.", voice_id: voice }) });
     if (!response.ok) throw Error("Unable to warm selected voice");
     if (response.body) for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) void chunk;
   })();
-  warmups.set(voice, warm);
-  try { await warm; } finally { warmups.delete(voice); }
+  if (!signal) warmups.set(voice, warm);
+  try { await warm; } finally { if (!signal) warmups.delete(voice); }
 }
