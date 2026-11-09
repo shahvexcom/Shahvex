@@ -21,7 +21,9 @@ export async function GET(request: Request) {
   const session = await readSession((await cookies()).get(cookie)?.value);
   if (!session) return Response.json({ message: "Unauthenticated" }, { status: 401 });
   if (portal !== "admin" && portal !== "bpo" && !(await isRegularAgent(session.agentId))) return Response.json({ message: "Unauthenticated" }, { status: 401 });
-  try { const result = await (await db()).query("SELECT name,email,username,gender,accent,status,role,COALESCE(avatar_url,'') avatar_url,COALESCE(two_factor_enabled,FALSE) two_factor_enabled,COALESCE(remaining_credits,0)::float8 remaining_credits,admin_role,admin_permissions FROM agents WHERE id=$1 LIMIT 1", [session.agentId]); const agent = result.rows[0]; if (!agent) return Response.json({ message: "Agent not found" }, { status: 404 }); return Response.json({ agent }, { headers: { "Cache-Control": "no-store, max-age=0" } }); }
+  // Like login, profile reads must not trigger application-wide DDL on each
+  // serverless cold start. The authenticated account already exists.
+  try { const result = await (await db({ ensureSchema: false })).query("SELECT name,email,username,gender,accent,status,role,COALESCE(avatar_url,'') avatar_url,COALESCE(two_factor_enabled,FALSE) two_factor_enabled,COALESCE(remaining_credits,0)::float8 remaining_credits,admin_role,admin_permissions FROM agents WHERE id=$1 LIMIT 1", [session.agentId]); const agent = result.rows[0]; if (!agent) return Response.json({ message: "Agent not found" }, { status: 404 }); return Response.json({ agent }, { headers: { "Cache-Control": "no-store, max-age=0" } }); }
   catch { return Response.json({ message: "Unable to load agent profile" }, { status: 503 }); }
 }
 
