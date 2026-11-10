@@ -7,6 +7,12 @@ const state = globalThis as unknown as { agentScriptCache?: Map<string, { detail
 const cache = state.agentScriptCache ??= new Map();
 export async function extractAgentScript(owner: string, script: string, signal: AbortSignal): Promise<ScriptDetails> {
   if (!script.trim()) return emptyScriptDetails();
+  if (process.env.SHAHVEX_PC_AI_URL) {
+    const { pcAiRequest } = await import("./pc-ai-engine");
+    const response = await pcAiRequest("/tester/extract", { method: "POST", signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ script }) }, owner);
+    if (!response.ok) throw Error("Script extraction is unavailable. Retry after the AI service is ready.");
+    return groundedDetails(script, await response.json());
+  }
   const key = `${owner}:${createHash("sha256").update(script).digest("hex")}`, cached = cache.get(key);
   if (cached && cached.expires > Date.now()) return cached.details;
   const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({

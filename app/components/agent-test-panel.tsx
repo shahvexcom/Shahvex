@@ -39,7 +39,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
   const [open, setOpen] = useState(false), [config, setConfig] = useState<TestConfig>(), [voices, setVoices] = useState<{ id: string; name: string; gender?: string;language?:string;accent?:string }[]>([]);
   const [status, setStatus] = useState(""), [running, setRunning] = useState(false), [busy, setBusy] = useState(false), [lines, setLines] = useState<Line[]>([]), [muted, setMuted] = useState(false);
   const [level, setLevel] = useState(0), [playing, setPlaying] = useState(false), [mobilePanel,setMobilePanel] = useState<"configuration"|"conversation">("configuration");
-  const [recording,setRecording] = useState(false), [recordFinalizing,setRecordFinalizing] = useState(false), [recordURL,setRecordURL] = useState(""), [recordSeconds,setRecordSeconds] = useState(0), [recordError,setRecordError] = useState(""), [recordExtension,setRecordExtension] = useState("webm");
+  const [recording,setRecording] = useState(false), [recordFinalizing,setRecordFinalizing] = useState(false), [recordURL,setRecordURL] = useState(""), [recordSeconds,setRecordSeconds] = useState(0), [recordError,setRecordError] = useState(""), [recordExtension,setRecordExtension] = useState("wav");
   const recorder = useRef<ConversationRecorder | null>(null), micRecordGain = useRef<GainNode | null>(null), recordingNow = useRef(false), recordStarted = useRef(0), recordTimer = useRef<ReturnType<typeof setInterval> | null>(null), savedURL = useRef(""), mounted = useRef(true);
   const finalizeRecording = () => {
     if (!recordingNow.current) return;
@@ -53,7 +53,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     try { current.start(stream,blob=>{
       recorder.current=null;recordingNow.current=false;if(recordTimer.current)clearInterval(recordTimer.current);
       if(!mounted.current)return;
-      const url=URL.createObjectURL(blob);savedURL.current=url;setRecordURL(url);setRecordExtension(blob.type.includes("mp4")?"m4a":"webm");setRecordFinalizing(false);setRecording(false);
+      const url=URL.createObjectURL(blob);savedURL.current=url;setRecordURL(url);setRecordExtension("wav");setRecordFinalizing(false);setRecording(false);
     },message=>{recorder.current=null;recordingNow.current=false;if(recordTimer.current)clearInterval(recordTimer.current);if(mounted.current){setRecordError(message);setRecording(false);setRecordFinalizing(false);}}); } catch(error) { recorder.current=null; current.discard(); setRecordError(error instanceof Error?error.message:"Recording could not start"); throw error; }
     recordingNow.current=true;setRecording(true);recordTimer.current=setInterval(()=>setRecordSeconds(Math.floor((performance.now()-recordStarted.current)/1000)),500);
   };
@@ -115,11 +115,18 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     session.current = ""; working.current = false; setRunning(false); setBusy(false); setLevel(0); setStatus("Ready");
   };
   const interrupt = (preserveRecording = false) => {
-    speechDraft.current?.reject(Error("Speech resumed")); speechDraft.current = null;
+    const cancelledDraft = speechDraft.current;
+    const cancelledToken = cancelledDraft?.id || (working.current ? browserTurn.current.turnId : "");
+    cancelledDraft?.reject(Error("Speech resumed")); speechDraft.current = null;
     if (!preserveRecording) capture.current.reset();
     generation.current++; abort.current?.abort(); clearAudio();
     working.current = false; setBusy(false);
-    if (session.current) interruption.current = fetch(`${base}?action=interrupt&id=${session.current}`, { method: "POST" }).catch(() => {});
+    if (session.current) {
+      interruption.current = fetch(`${base}?action=${cancelledToken ? "cancel" : "interrupt"}&id=${session.current}${cancelledToken ? `&turnId=${cancelledToken}` : ""}`, { method: "POST" }).then(async r => {
+        if (!r.ok) throw Error((await r.json()).error || "Unable to interrupt the previous turn");
+      });
+      void interruption.current.catch(() => {});
+    }
     setStatus("Interrupted — listening");
   };
   useEffect(() => () => { speechDraft.current?.reject(Error("Closed")); speechDraft.current = null; active.current = false; startupAbort.current?.abort(); abort.current?.abort(); mic.current?.getTracks().forEach(t => t.stop()); player.current?.dispose(); void context.current?.close(); previewAbort.current?.abort(); try { preview.current?.stop(); } catch {} if (previewContext.current?.state !== "closed") void previewContext.current?.close().catch(() => {}); previewContext.current = null; if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true }); }, []);
@@ -154,7 +161,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     if (player.current?.hasAudio) interrupt();
     working.current = true; setBusy(true); setStatus(audio ? "Transcribing…" : "Thinking…");
     const stamp = generation.current, control = new AbortController(); abort.current = control; const turnId = recordingId || crypto.randomUUID();
-    browserTurn.current = { started: performance.now(), firstPlayback: false, turnId: "", speechEndedAtMs: speechEndedAtMs || 0 };
+    browserTurn.current = { started: performance.now(), firstPlayback: false, turnId, speechEndedAtMs: speechEndedAtMs || 0 };
     try {
       await interruption.current; control.signal.throwIfAborted();
       if (remote) {

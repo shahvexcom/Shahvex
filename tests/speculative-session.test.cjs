@@ -50,3 +50,18 @@ test('confirmed interrupted drafts retain the heard customer turn and partial an
   assert.match(sessionStore.get(id).messages.at(-1).content,/Friday.*interrupted/);assert.equal(sessionStore.get(id).busy,false);
  }finally{if(id)await call('stop');global.fetch=original;}
 });
+test('a late cancelled upload cannot acquire a session or cancel a newer draft',async()=>{
+ const original=global.fetch;global.fetch=async(url)=>String(url).includes('8766')?Response.json({text:'Friday please.'}):String(url).includes('11434')?new Response(JSON.stringify({message:{content:'Friday is requested.'},done:true})+'\n'):new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
+ const key='late-draft-'.repeat(4),{dispatch,sessionStore}=createTesterService({secret:key,testHooks:true});let id;
+ const call=(action,token,body='{}',audio=false)=>dispatch(new Request('http://localhost/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':key,'x-shahvex-owner':'late-owner','x-shahvex-session':id||'none','x-shahvex-turn':token,'content-type':audio?'audio/wav':'application/json'},body}));
+ try{
+  id=(await(await call('start','new',JSON.stringify({agentId:'late',config:{name:'Test',voice:'v',first:'customer',goal:'',task:'',instructions:'',script:'',knowledge:'',style:'Professional'}}))).json()).id;
+  assert.equal((await call('cancel','old')).status,200);
+  const wav=Buffer.from(await speechWav(Array.from({length:20},()=>Int16Array.from({length:320},(_,i)=>Math.round(Math.sin(i/5)*4000)))).arrayBuffer());
+  const current=await call('draft','new',wav,true);assert.equal(current.status,200);
+  assert.equal((await call('cancel','old')).status,200);
+  const late=await call('draft','old',wav,true);assert.equal(late.status,409);assert.equal((await late.json()).code,'CANCELLED_DRAFT');
+  assert.equal((await call('turn','old',JSON.stringify({text:'old speech'}))).status,409);
+  await current.text();assert.equal((await call('commit','new')).status,200);assert.equal(sessionStore.get(id).busy,false);assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').length,1);
+ }finally{if(id)await call('stop','new');global.fetch=original;}
+});

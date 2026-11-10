@@ -29,7 +29,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
     session.turns ??= new Set(); session.recordingHashes ??= new Set();
     if (session.turns.has(turnId)) return json({ error: "This turn has already been handled", code: "DUPLICATE_TURN" }, 409);
     session.turns.add(turnId); if (session.turns.size > 200) session.turns.delete(session.turns.values().next().value!);
-    const abort = new AbortController(); session.busy = true; session.abort = abort;
+    const abort = new AbortController(); session.busy = true; session.activeTurnId = turnId; session.abort = abort;
     let release!: () => void;
     session.finished = new Promise<void>(resolve => { release = resolve; });
     const cancel = () => abort.abort();
@@ -88,7 +88,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
             if (!session.messages[0].content.endsWith("The session has begun. Do not introduce yourself again.")) session.messages[0].content += "\nThe session has begun. Do not introduce yourself again.";
           }
           if (session.messages.length > 41) session.messages.splice(3, session.messages.length - 41);
-          session.busy = false; session.expires = Date.now() + 30 * 60_000;
+          session.busy = false; session.activeTurnId = undefined; session.expires = Date.now() + 30 * 60_000;
           clearTimeout(deadline); request.signal.removeEventListener("abort", cancel); release();
           try { controller.close(); } catch { /* The browser may already have cancelled the stream. */ }
         }

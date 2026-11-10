@@ -53,3 +53,13 @@ Rollback: remove `SHAHVEX_FAST_VOICE=1` from the private adapter launch configur
 Public tunnel verification after adapter reload: six female-voice browser trials measured 890?1,280 ms, with correct fee/hours and no false booking confirmation. This includes the public Cloudflare PC-tunnel round trip, but excludes Vercel's application proxy hop. The hard one-second target did not pass on this public path. The Vercel status for application commit `df82668` was successful, and localhost/live home pages returned HTTP 200. An automatic admin-session construction check was rejected by approval review and was not executed; authenticated end-to-end website-browser timing remains unverified. No admin session was created by that rejected action.
 
 Confirmed drafts keep the original 110-second inference deadline instead of the 30-second unconfirmed-draft lease. Interrupting confirmed playback preserves the customer turn and partial interrupted answer; cancelling unconfirmed speech discards it. Both cases have regression coverage.
+
+## Live preview, request ordering and audio download follow-up
+
+The live HTTP adapter supplies buffered JSON bodies. Fast voice selection now accepts both direct string bodies and buffered Uint8Array bodies; real authenticated public `/engine/8767/synthesize` and `/stream` returned audible-format audio after this fix. Voice identity and synthesis settings are unchanged.
+
+Cancellation now targets an exact turn token. A bounded per-session cancellation fence rejects an older upload even when its cancellation arrives first, and a late cancellation cannot abort a newer draft. Cancellation waits for the matching active worker to release; the client no longer ignores interruption failures. Tests cover cancelled uploads arriving late and normal turns using cancelled tokens.
+
+Script extraction for hosted callers now runs through authenticated `/tester/extract` on the persistent PC service. Its existing owner/script-hash cache survives Vercel instance changes, so opening the panel and then starting the same script does not repeat extraction inference. Grounding and owner isolation remain checked.
+
+Conversation downloads are real mono 16 kHz PCM16 WAV files. Browser MediaRecorder chunks are decoded and converted locally after recording stops; audio is not uploaded for export. Real Chrome recording verification produced a RIFF/WAV file with 9,600 audible samples, one channel and the correct 16 kHz header. The button uses the `.wav` extension and audio/wav MIME type. Recording size limits remain enforced.

@@ -11,7 +11,7 @@ export const testConfig = z.object({
 export type TestConfig = z.infer<typeof testConfig>;
 export const conversationEtiquette = "Conversation etiquette: When you speak first, give one brief introduction grounded in the assigned business and reason for this conversation, then ask one specific task-relevant question. Do not append generic service-desk lines such as 'How can I help you?' when a purpose is already assigned. If no purpose or business is configured, do not invent one: briefly introduce yourself and ask what the caller would like to discuss. Use the customer's name sparingly: normally acknowledge it once, and use it again only when it adds meaning, such as an important final confirmation. Never address the customer by name in consecutive replies and do not use their name more than three times in a session. Do not keep reconfirming unchanged information. These etiquette rules apply throughout the conversation.";
 type Message = { role: "system" | "user" | "assistant"; content: string };
-type Session = { lastSeen?: number; turns?: Set<string>; recordingHashes?: Set<string>; owner: string; agentId: string; config: TestConfig; messages: Message[]; expires: number; busy: boolean; abort?: AbortController; finished?: Promise<void> };
+type Session = { lastSeen?: number; activeTurnId?: string; cancelledDrafts?: Set<string>; turns?: Set<string>; recordingHashes?: Set<string>; owner: string; agentId: string; config: TestConfig; messages: Message[]; expires: number; busy: boolean; abort?: AbortController; finished?: Promise<void> };
 const state = globalThis as unknown as { agentTestSessions?: Map<string, Session> };
 export const sessions = state.agentTestSessions ??= new Map<string, Session>();
 export function pruneSessions() {
@@ -35,9 +35,11 @@ export async function engine(port: number, path: string, init: RequestInit = {})
       if (path === "/voices") return Response.json({ ...value, default_voice: "af_heart", voices: value.voices.filter((v: { id: string }) => v.id === "af_heart") });
       return Response.json(value);
     }
-    if ((path === "/stream" || path === "/synthesize") && typeof init.body === "string") {
-      const voice = JSON.parse(init.body).voice_id;
-      if (voice === "af_heart") port = 8778;
+    if (path === "/stream" || path === "/synthesize") {
+      // The authenticated HTTP adapter buffers incoming JSON into a Uint8Array;
+      // direct localhost callers provide a string. Both must select the same engine.
+      const body = typeof init.body === "string" ? init.body : init.body instanceof Uint8Array ? new TextDecoder().decode(init.body) : undefined;
+      if (body && JSON.parse(body).voice_id === "af_heart") port = 8778;
     }
   }
   // Separate experimental routing; never selected by Vercel.

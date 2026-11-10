@@ -8,7 +8,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
-const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio', 'agent-test-speculative']);
+const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio', 'agent-test-speculative', 'agent-script-extraction', 'agent-script-details']);
 function loader() {
   const cache = new Map();
   function load(name) {
@@ -36,7 +36,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
     const url = new URL(request.url);
     if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions});
-    const match = /^\/tester\/(start|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
+    const match = /^\/tester\/(start|extract|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
@@ -70,6 +70,13 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     ai.pruneSessions();
     // Reclaim abandoned tabs, never a worker that is still running.
     for(const [id,s] of ai.sessions)if(!s.busy && now()-(s.lastSeen || 0)>leaseMs){s.abort?.abort();ai.sessions.delete(id);}
+    if (match[1] === 'extract') {
+      if (body.length > 70000) return json(413, { error: 'Script too large' });
+      let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }
+      if (typeof input.script !== 'string' || input.script.length > 16000) return json(400, { error: 'Invalid script' });
+      try { return json(200, await load('agent-script-extraction').extractAgentScript(owner, input.script, request.signal)); }
+      catch { return json(503, { error: 'Script extraction unavailable' }); }
+    }
     if (match[1] === 'start') {
       if (body.length > 70000) return json(413, { error: 'Configuration too large' });
       let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }

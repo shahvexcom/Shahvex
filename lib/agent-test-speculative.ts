@@ -17,7 +17,7 @@ function release(id: string, d: Draft) {
     d.parent.recordingHashes = d.shadow.recordingHashes;
     d.parent.turns = d.shadow.turns;
   }
-  d.parent.busy = false;
+  d.parent.busy = false; d.parent.activeTurnId = undefined;
   drafts.delete(id);
 }
 function cancel(id: string, d: Draft) {
@@ -34,14 +34,35 @@ export async function handleTestSession(request: Request, owner: string, publicD
   let d = drafts.get(id);
   if (action === "stop" || action === "interrupt") { if (d) cancel(id, d); return run(request, owner, publicDemo); }
   if (action === "commit" || action === "cancel") {
-    if (!d || d.token !== url.searchParams.get("turnId")) return json(409, "Draft is no longer available", "STALE_DRAFT");
-    if (action === "cancel") cancel(id, d);
-    else { if (d.cancelled) return json(409, "Draft was cancelled", "STALE_DRAFT"); d.committed = true; clearTimeout(d.timer); release(id, d); }
+    const token = url.searchParams.get("turnId") || "";
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(token)) return json(400, "Invalid speech draft");
+    if (action === "cancel") {
+      // A cancellation may overtake its upload across Vercel/Cloudflare. Fence
+      // that token before acknowledging, even if the upload has not arrived.
+      parent.cancelledDrafts ??= new Set(); parent.cancelledDrafts.add(token);
+      if (parent.cancelledDrafts.size > 200) parent.cancelledDrafts.delete(parent.cancelledDrafts.values().next().value!);
+      if (d?.token === token) {
+        cancel(id, d);
+      } else if (parent.activeTurnId === token) parent.abort?.abort();
+      if (parent.activeTurnId === token && parent.finished) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try { await Promise.race([parent.finished, new Promise<void>(resolve => { timer = setTimeout(resolve, 10000); })]); }
+        finally { clearTimeout(timer); }
+        if (parent.busy) return json(409, "Previous turn is finishing; try again.", "BUSY");
+      }
+    } else {
+      if (!d || d.token !== token || d.cancelled) return json(409, "Draft is no longer available", "STALE_DRAFT");
+      d.committed = true; clearTimeout(d.timer); release(id, d);
+    }
     return Response.json({ accepted: true }, { headers: { "cache-control": "no-store" } });
   }
-  if (action !== "draft") return run(request, owner, publicDemo);
+  if (action !== "draft") {
+    if (action === "turn" && parent.cancelledDrafts?.has(url.searchParams.get("turnId") || "")) return json(409, "Turn was cancelled", "CANCELLED_DRAFT");
+    return run(request, owner, publicDemo);
+  }
   const token = url.searchParams.get("turnId") || "";
   if (!/^[a-zA-Z0-9_-]{1,80}$/.test(token) || !request.headers.get("content-type")?.startsWith("audio/wav")) return json(400, "Invalid speech draft");
+  if (parent.cancelledDrafts?.has(token)) return json(409, "Speech draft was cancelled", "CANCELLED_DRAFT");
   if (parent.busy || d) return json(409, "Previous turn is finishing; try again.", "BUSY");
   const now = Date.now();
   for (const [key, value] of rates) if (now - value.at > 60000) rates.delete(key);
@@ -54,7 +75,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
   clearTimeout(d.timer);
   const tx = d;
   tx.timer = setTimeout(() => cancel(id, tx), 30000); tx.timer.unref?.();
-  parent.busy = true; drafts.set(id, tx);
+  parent.busy = true; parent.activeTurnId = token; drafts.set(id, tx);
   const target = new URL(request.url); target.searchParams.set("action", "turn");
   try {
     const response = await run(new Request(target, request), owner, publicDemo, shadow);

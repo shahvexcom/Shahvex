@@ -116,3 +116,14 @@ test('live AI-first opening follows the task and customer names are not repeated
     console.log('Verified real LLM: task-specific opening; name usage across five follow-ups within policy');
   }finally{await dispatch(request('stop','etiquette-owner',{},id));global.fetch=previous;}
 });
+test('persistent script extraction reuses owner-scoped grounded results across requests',async()=>{
+ const original=global.fetch;let calls=0;
+ const details={instructions:[],goals:[],tasks:[],knowledge:['The fee is 2000 PKR.','Invented fact'],faqs:[],conversationFlow:[],restrictions:[]};
+ global.fetch=async()=>{calls++;return Response.json({message:{content:JSON.stringify(details)},done:true});};
+ const key='extract-cache-'.repeat(4),{dispatch}=createTesterService({secret:key});
+ const run=(owner)=>dispatch(new Request('http://localhost/tester/extract',{method:'POST',headers:{'x-shahvex-ai-key':key,'x-shahvex-owner':owner,'content-type':'application/json'},body:JSON.stringify({script:'The fee is 2000 PKR.'})}));
+ try{
+  for(let i=0;i<2;i++){const r=await run('extract-owner');assert.equal(r.status,200);assert.deepEqual((await r.json()).knowledge,['The fee is 2000 PKR.']);}
+  assert.equal(calls,1);assert.equal((await run('other-extract-owner')).status,200);assert.equal(calls,2);
+ }finally{global.fetch=original;}
+});
