@@ -46,7 +46,7 @@ The approved default is Heart (`af_heart`). Male remains excluded from the publi
 
 Integrated production-handler browser verification: 12 warm trials, 760?870 ms, plus four pause/resume trials at or below 880 ms. These are still local synthetic-microphone measurements, not a live-domain latency guarantee. Regression: 14 passed, two explicit opt-in cases skipped; TypeScript and production build passed.
 
-`deployment/Install-FastVoice.py` installs `shahvex-fast-voice.service` for loopback port 8778 with startup warmup and automatic restart. The existing Windows watchdog keeps WSL alive, so this unit joins the existing reboot recovery. A complete physical reboot remains untested.
+`deployment/Install-FastVoice.py` installs `shahvex-fast-voice.service` for loopback port 8778 with startup warmup and automatic restart. The existing Windows watchdog keeps WSL alive, so this unit joins the existing reboot recovery. A user-requested Windows restart was verified on 10 November 2026: services/listeners recovered automatically and subsequent local/public real-audio checks passed. Pre-login-only startup and physical power-loss recovery remain unverified.
 
 Rollback: remove `SHAHVEX_FAST_VOICE=1` from the private adapter launch configuration and local `.env`, then restart the idle adapter. Existing original voice engines remain available. Restore the prior application commit to disable speculative browser requests as part of a full rollback. Do not publish the earlier local fixed-owner prototype routes.
 

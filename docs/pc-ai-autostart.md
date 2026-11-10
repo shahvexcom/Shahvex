@@ -19,7 +19,7 @@ Existing Ubuntu terminal processes were not killed during installation. Each new
 
 Verified: all eight Ubuntu units active; experimental gateway 8773 gracefully stopped and automatically recovered under systemd. Windows watchdog ran under the correct S4U user and started the WSL keep-alive. With zero active AI sessions, the old Windows adapter was stopped by its owning account; the watchdog created a different Node PID and authenticated health passed. This validates live recovery, not a full power-cycle. GPU engines/models were not restarted as part of recovery testing.
 
-Actual reboot and pre-login startup remain to be checked during the user's next planned restart. Do not reboot an active call to test this. Initial model loading can take time after boot. Normal operation does not need visible terminals.
+User-requested Windows restart verified on 10 November 2026 after the user returned to the desktop. All eight Ubuntu gateway/AI units, Ollama and fast voice were active; listeners 8766?8773, 8778 and 11434 were present, the Windows watchdog reported adapter 8774 listening, and Cloudflared was Running/Automatic. No service was manually started during verification. Local real audio checks passed. Initial public checks hit a timeout/connection failure; a subsequent public-tunnel run passed real preview, PCM streaming, script extraction and a complete isolated conversation after cancellation. Pre-login-only startup and recovery after physical power loss remain unverified. Initial model loading can take time after boot. Normal operation does not need visible terminals.
 
 ## Inspect status
 
