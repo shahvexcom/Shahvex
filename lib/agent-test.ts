@@ -27,6 +27,9 @@ export function newTest(owner: string, agentId: string, config: TestConfig) {
 }
 export async function engine(port: number, path: string, init: RequestInit = {}) {
   if (process.env.SHAHVEX_PC_AI_URL) return (await import("./pc-ai-engine")).pcAiEngine(port, path, init);
+  // Isolated preview only. Production/Vercel and the public PC adapter keep
+  // their existing endpoint unless this explicit local-process flag is set.
+  if (port === 8767 && process.env.SHAHVEX_LOCAL_FAST_TTS === "1" && !process.env.VERCEL) port = 8776;
   return fetch(`http://127.0.0.1:${port}${path}`, { ...init, redirect: "error", cache: "no-store", signal: AbortSignal.any([init.signal || new AbortController().signal, AbortSignal.timeout(120_000)]) });
 }
 export async function localVoices(owner?: string) {
