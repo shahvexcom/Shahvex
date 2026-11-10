@@ -23,7 +23,7 @@ from tts_stream_worker import threaded_pcm
 
 pipeline=None
 lock=threading.Lock()
-voices={'af_heart':('Heart - fast voice','female'),'am_michael':('Experimental Michael','male')}
+voices={'af_heart':('Jenifer','female'),'am_michael':('Experimental Michael','male')}
 def audio(text,voice):
     with lock,torch.inference_mode():
         for _,_,samples in pipeline(text,voice=voice,speed=1):

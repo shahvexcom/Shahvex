@@ -49,7 +49,7 @@ export async function engine(port: number, path: string, init: RequestInit = {})
 export async function localVoices(owner?: string) {
   const r = await engine(8767, "/voices"); if (!r.ok) throw Error("CosyVoice voice list unavailable");
   const data = await r.json();
-  const result = { defaultVoice: String(data.default_voice || ""), voices: (data.voices as { id: string; name: string; selectable: boolean; gender?:string; language?:string; accent?:string }[]).filter(v => v.selectable).map(v => ({ id: v.id, name: v.name, gender: v.gender || "other", language: v.language || "English", accent: v.accent || "", selectable:true })) };
+  const result = { defaultVoice: String(data.default_voice || ""), voices: (data.voices as { id: string; name: string; selectable: boolean; gender?:string; language?:string; accent?:string }[]).filter(v => v.selectable).map(v => ({ id: v.id, name: v.id === "af_heart" ? "Jenifer" : v.name, gender: v.gender || "other", language: v.language || "English", accent: v.accent || "", selectable:true })) };
   const approved = result.voices.filter(v => v.id === "af_heart");
   if (owner && approved.length) {
     const legacy = result.voices.filter(v => v.id !== "af_heart");
