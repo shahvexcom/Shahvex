@@ -32,3 +32,7 @@ Additional checks passed: native-state reset/restoration including exceptions; 3
 Private artifacts: `.data/pc-ai/native-tts-compare/verified-results.json`, `join-results.json`, `local-soak.json`, `signal-comparison.json` and the paired WAV files. They are Git-ignored. Audio examples use the same reference text rather than impersonating the client's reference speaker.
 
 Candidate is ready for review/approval, not promoted to live. Human listening, real browser microphone/output and public-network acceptance remain separate checks. On approval, apply the candidate to the existing production TTS wrapper during an idle window, warm selected voices, verify public streaming, and retain the previous wrapper as rollback. Do not raise GPU concurrency or change model precision as part of that rollout.
+
+## Follow-up latency work
+
+A separate FP16 experiment was rejected: native-25 first PCM was 1784/1535 ms for Lauren and 1547/1440 ms for Adam, slower on average than the FP32 candidate above. No live precision change was made. Browser instrumentation now also records `speech-end-to-playback` from the last detected voiced frame to the first rendered audio; the older playback metric starts at turn upload and excludes endpoint silence. This instrumentation is local/unpublished pending the same rollout approval. Build, TypeScript and capture/stream regression checks passed. No instantaneous-response claim is supported by these measurements.

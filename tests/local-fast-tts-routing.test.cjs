@@ -9,6 +9,7 @@ test('candidate TTS routing is explicitly local and never selected by Vercel',as
     await mod.exports.engine(8767,'/health');assert.equal(target,'http://127.0.0.1:8767/health');
     process.env.SHAHVEX_LOCAL_FAST_TTS='1';await mod.exports.engine(8767,'/health');assert.equal(target,'http://127.0.0.1:8776/health');
     await mod.exports.engine(8766,'/transcribe');assert.equal(target,'http://127.0.0.1:8766/transcribe');
+    process.env.SHAHVEX_LOCAL_FAST_TTS='kokoro';await mod.exports.engine(8767,'/health');assert.equal(target,'http://127.0.0.1:8778/health');
     process.env.VERCEL='1';await mod.exports.engine(8767,'/health');assert.equal(target,'http://127.0.0.1:8767/health');
   }finally{global.fetch=original;for(const n of names)if(before[n]===undefined)delete process.env[n];else process.env[n]=before[n];}
 });

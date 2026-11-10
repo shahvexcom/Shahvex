@@ -22,8 +22,21 @@ sys.path.insert(0, str(Path(__file__).parent))
 from cosyvoice_safe_api import existing
 import torch
 
+precision=os.environ.get('SHAHVEX_LOCAL_TTS_PRECISION','fp32')
+if precision not in ('fp32','fp16','tf32'):raise SystemExit('Unsupported local precision')
+if precision=='tf32':
+    torch.backends.cuda.matmul.allow_tf32=True
+    torch.backends.cudnn.allow_tf32=True
+    torch.set_float32_matmul_precision('high')
+if precision=='fp16':
+    original_model=existing.AutoModel
+    def local_model(*args,**kwargs):
+        kwargs['fp16']=True
+        return original_model(*args,**kwargs)
+    existing.AutoModel=local_model
+
 torch.cuda.set_per_process_memory_fraction(min(0.25, (free-1200)/24576))
-folder = Path('/mnt/e/Shahvex/.data/pc-ai/native-tts-compare')
+folder = Path('/mnt/e/Shahvex/.data/pc-ai/native-tts-compare' + ('-'+precision if precision!='fp32' else ''))
 folder.mkdir(exist_ok=True)
 text = 'Your consultation costs two thousand Pakistani rupees, and our staff will confirm your preferred appointment time.'
 
@@ -53,7 +66,7 @@ async def main():
                 for piece in arrivals:
                     if piece['atSeconds']>queued_until+.04:underflows.append(round(piece['atSeconds']-queued_until,3))
                     queued_until=max(queued_until,piece['atSeconds'])+piece['audioSeconds']
-                row={'voice':voice_id,'initialHop':hop,'firstPcmMs':round(first*1000),'totalMs':round((time.perf_counter()-began)*1000),'durationSeconds':round(len(pcm)/48000,3),'chunks':len(pieces),'underflowSeconds':underflows,'file':name,'arrivals':arrivals}
+                row={'voice':voice_id,'precision':precision,'initialHop':hop,'firstPcmMs':round(first*1000),'totalMs':round((time.perf_counter()-began)*1000),'durationSeconds':round(len(pcm)/48000,3),'chunks':len(pieces),'underflowSeconds':underflows,'file':name,'arrivals':arrivals}
                 results.append(row)
                 (folder/'results.json').write_text(json.dumps({'text':text,'results':results},indent=2))
                 print('RESULT '+json.dumps(row),flush=True)

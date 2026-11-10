@@ -24,7 +24,7 @@ function loader() {
   }
   return load;
 }
-function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = Date.now, load = loader() } = {}) {
+function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = Date.now, load = loader(), testHooks = false } = {}) {
   if (typeof secret !== 'string' || secret.length < 32) throw Error('PC AI secret of at least 32 characters required');
   maxSessions = Math.max(1, Math.min(10, Number(maxSessions) || 1));
   const ai = load('agent-test');
@@ -99,7 +99,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     } catch { if (!res.headersSent) res.writeHead(503, { 'cache-control': 'no-store' }); res.end(); }
   });
   server.requestTimeout = 130000;
-  return { server, dispatch };
+  return { server, dispatch, ...(testHooks ? { sessionStore: ai.sessions } : {}) };
 }
 if (require.main === module) {
   // A transport flag on this process would recursively send inference upstream.

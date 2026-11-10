@@ -88,14 +88,14 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       source.onended = () => { if (preview.current === source) setPreviewing(false); if (output.state !== "closed") void output.close().catch(() => {}); }; source.start();
     } catch (error) { if (!control.signal.aborted) { setAudioError(error instanceof Error ? error.message : "Voice preview failed"); setPreviewing(false); if (previewContext.current?.state !== "closed") void previewContext.current?.close().catch(() => {}); previewContext.current = null; } }
   };
-  const player = useRef<BrowserPCMPlayer | null>(null), interruption = useRef<Promise<unknown>>(Promise.resolve()), chat = useRef<HTMLDivElement>(null), followChat = useRef(true), browserTurn = useRef({ started: 0, firstPlayback: false, turnId: "" });
+  const player = useRef<BrowserPCMPlayer | null>(null), interruption = useRef<Promise<unknown>>(Promise.resolve()), chat = useRef<HTMLDivElement>(null), followChat = useRef(true), browserTurn = useRef({ started: 0, firstPlayback: false, turnId: "", speechEndedAtMs: 0 });
   const metric = (event: Omit<VoiceTiming, "atMs">) => {
     const value = { ...event, atMs: performance.now() };
     console.info("[Shahvex agent test browser]", value);
     setTimings(old => [...old.slice(-49), value]);
   };
   useEffect(() => { if (followChat.current && chat.current) chat.current.scrollTop = chat.current.scrollHeight; }, [lines]);
-  const session = useRef(""), context = useRef<AudioContext | null>(null), mic = useRef<MediaStream | null>(null), generation = useRef(0), active = useRef(false), mute = useRef(false), working = useRef(false), abort = useRef<AbortController | null>(null), dialog = useRef<HTMLDivElement>(null), turnRef = useRef<(audio?: Blob, text?: string, opening?: boolean, recordingId?: string) => Promise<void>>(async () => {});
+  const session = useRef(""), context = useRef<AudioContext | null>(null), mic = useRef<MediaStream | null>(null), generation = useRef(0), active = useRef(false), mute = useRef(false), working = useRef(false), abort = useRef<AbortController | null>(null), dialog = useRef<HTMLDivElement>(null), turnRef = useRef<(audio?: Blob, text?: string, opening?: boolean, recordingId?: string, speechEndedAtMs?: number) => Promise<void>>(async () => {});
   const clearAudio = () => { player.current?.clear(generation.current); setPlaying(false); };
   const stop = () => {
     finalizeRecording();
@@ -138,12 +138,12 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     catch(e){if(loadVersion.current===version)setStatus(e instanceof Error?e.message:"Unable to load agent");}
   };
   const show = async () => {setAudioError("");setOpen(true);setMobilePanel(demoToken ? "conversation" : "configuration");await loadAgent(agentId||agents[0]?.id||initialAgentId||"");};
-  const turn = async (audio?: Blob, message?: string, opening = false, recordingId?: string) => {
+  const turn = async (audio?: Blob, message?: string, opening = false, recordingId?: string, speechEndedAtMs?: number) => {
     if (!active.current || working.current) return;
     if (player.current?.hasAudio) interrupt();
     working.current = true; setBusy(true); setStatus(audio ? "Transcribing…" : "Thinking…");
     const stamp = generation.current, control = new AbortController(); abort.current = control; const turnId = recordingId || crypto.randomUUID();
-    browserTurn.current = { started: performance.now(), firstPlayback: false, turnId: "" };
+    browserTurn.current = { started: performance.now(), firstPlayback: false, turnId: "", speechEndedAtMs: speechEndedAtMs || 0 };
     try {
       await interruption.current; control.signal.throwIfAborted();
       if (remote) {
@@ -217,6 +217,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
           if (!browserTurn.current.firstPlayback) {
             browserTurn.current.firstPlayback = true;
             metric({ stage: "browser-playback-started", elapsedMs: Math.round(performance.now() - browserTurn.current.started), turnId: browserTurn.current.turnId });
+            if (browserTurn.current.speechEndedAtMs) metric({ stage: "speech-end-to-playback", elapsedMs: Math.round(performance.now() - browserTurn.current.speechEndedAtMs), turnId: browserTurn.current.turnId });
             console.info("[Shahvex playback render]", { contextTime: event.contextTime, outputTimestamp: ctx.getOutputTimestamp?.() });
           }
         }
@@ -240,7 +241,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
         if (result.started) { if (working.current || player.current?.hasAudio) interrupt(true); setStatus("Listening"); }
         if (result.recording) {
           console.debug("[Shahvex microphone recording]", { turnId: result.recording.id, durationMs: result.recording.durationMs, vadSpeechMs: result.recording.voicedMs, state: "finalized" });
-          void turnRef.current(result.recording.blob, undefined, false, result.recording.id);
+          void turnRef.current(result.recording.blob, undefined, false, result.recording.id, result.recording.speechEndedAtMs);
         }
       };
       setMobilePanel("conversation"); setStatus("Listening"); if (config.first === "ai") void turnRef.current(undefined, undefined, true);
