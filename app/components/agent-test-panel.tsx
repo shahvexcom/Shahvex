@@ -119,7 +119,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     const cancelledToken = cancelledDraft?.id || (working.current ? browserTurn.current.turnId : "");
     cancelledDraft?.reject(Error("Speech resumed")); speechDraft.current = null;
     if (!preserveRecording) capture.current.reset();
-    generation.current++; abort.current?.abort(); clearAudio();
+    generation.current++; clearAudio(); abort.current?.abort();
     working.current = false; setBusy(false);
     if (session.current) {
       interruption.current = fetch(`${base}?action=${cancelledToken ? "cancel" : "interrupt"}&id=${session.current}${cancelledToken ? `&turnId=${cancelledToken}` : ""}`, { method: "POST" }).then(async r => {
@@ -226,7 +226,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       const ctx = new AudioContext({ sampleRate: 16000 }); context.current = ctx; await ctx.resume();
       if (ctx.state !== "running") throw Error("Audio output is blocked. Allow audio and restart testing.");
       ctx.onstatechange = () => { if (active.current && ctx.state !== "running") { clearAudio(); setStatus("Audio paused"); setAudioError("Audio output is paused. Click Resume audio."); } };
-      await ctx.audioWorklet.addModule("/shahvex-playback-worklet.js");
+      await ctx.audioWorklet.addModule("/shahvex-playback-worklet.js?v=2");
       if (!active.current || context.current !== ctx) return;
       player.current = new BrowserPCMPlayer(ctx, event => {
         if (!active.current || context.current !== ctx) return;

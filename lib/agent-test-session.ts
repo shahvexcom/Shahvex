@@ -1,7 +1,7 @@
 import { streamAgentReply } from "@/lib/agent-test-stream";
 import { inspectSpeechWav } from "@/lib/agent-test-audio";
 import { createHash } from "node:crypto";
-import { engine, sessions } from "@/lib/agent-test";
+import { customerResponseRules, engine, sessions } from "@/lib/agent-test";
 const json = (data: unknown, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 // Shared conversation engine; callers must authorize the session before invoking.
 export async function handleTestSession(request: Request, owner: string, publicDemo = false, isolated?: typeof sessions extends Map<string, infer S> ? S : never) {
@@ -79,13 +79,16 @@ export async function handleTestSession(request: Request, owner: string, publicD
           const messages = text ? session.messages : [...session.messages, { role: "user", content: hasTask
             ? "Open with your name and the configured reason for this conversation, then ask one specific question that starts the assigned task. Follow any script-supported opening. Do not ask a generic 'How can I help you?' or invent business details, customer needs or completed actions."
             : "Introduce yourself briefly and ask what the caller would like to discuss. No business scenario or task has been assigned; do not invent one." }];
-          await streamAgentReply({ messages, voice: session.config.voice, signal: abort.signal, engine, send, timing, onText: text => { answer = text; } });
+          // Keep response grounding next to the latest utterance even in long
+          // scripted calls; do not turn questions into scripted confirmations.
+          const groundedMessages = text ? [...messages.slice(0, -1), { role: "system", content: customerResponseRules }, messages[messages.length - 1]] : messages;
+          await streamAgentReply({ messages: groundedMessages, voice: session.config.voice, signal: abort.signal, engine, send, timing, onText: text => { answer = text; } });
           await send({ type: "done" });
         } catch (error) { if (!abort.signal.aborted) await send({ type: "error", error: publicDemo ? "Voice service unavailable. End the session and try again." : error instanceof Error ? error.message : "Local AI service failed" }); }
         finally {
           if (answer) {
             session.messages.push({ role: "assistant", content: answer + (abort.signal.aborted ? " [interrupted]" : "") });
-            if (!session.messages[0].content.endsWith("The session has begun. Do not introduce yourself again.")) session.messages[0].content += "\nThe session has begun. Do not introduce yourself again.";
+            if (!session.messages[0].content.endsWith("The session has begun. Avoid unsolicited repeated introductions; answer identity questions whenever asked.")) session.messages[0].content += "\nThe session has begun. Avoid unsolicited repeated introductions; answer identity questions whenever asked.";
           }
           if (session.messages.length > 41) session.messages.splice(3, session.messages.length - 41);
           session.busy = false; session.activeTurnId = undefined; session.expires = Date.now() + 30 * 60_000;

@@ -69,7 +69,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
   };
   let answer = "", phrase = "", pending = "", firstToken = true, done = false;
   try {
-    const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.SHAHVEX_TEST_OLLAMA_MODEL || "qwen3:4b-instruct", messages, stream: true, think: false, keep_alive: "30m", options: { num_predict: -1 } }) });
+    const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.SHAHVEX_TEST_OLLAMA_MODEL || "qwen3:4b-instruct", messages, stream: true, think: false, keep_alive: "30m", options: { num_predict: -1, temperature: 0 } }) });
     if (!response.ok || !response.body) throw Error("Ollama response unavailable");
     const decoder = new TextDecoder();
     const consume = async (line: string) => {

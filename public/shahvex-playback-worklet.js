@@ -4,7 +4,7 @@ class ShahvexPlayback extends AudioWorkletProcessor {
     super(); this.ring = new Float32Array(24000 * 4); this.read = 0; this.count = 0;
     this.epoch = 0; this.playing = false; this.ending = false; this.clock = 0; this.underruns = 0; this.audible = false; this.reference = new Float32Array(320); this.referenceOffset = 0;
     this.port.onmessage = ({ data }) => {
-      if (data.type === "clear") { this.epoch = data.epoch; this.read = 0; this.count = 0; this.playing = false; this.audible = false; this.ending = false; this.referenceOffset = 0; return; }
+      if (data.type === "clear") { this.epoch = data.epoch; this.read = 0; this.count = 0; this.playing = false; this.audible = false; this.ending = false; this.referenceOffset = 0; this.port.postMessage({ type: "cleared", epoch: this.epoch }); return; }
       if (data.epoch !== this.epoch) return;
       if (data.type === "end") { this.ending = true; return; }
       if (data.type !== "pcm") return;
