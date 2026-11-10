@@ -77,8 +77,8 @@ export async function handleTestSession(request: Request, owner: string, publicD
           if (text) { if (process.env.NODE_ENV === "development") console.debug("[Shahvex transcript commit]", { turnId, source: request.headers.get("content-type")?.startsWith("audio/wav") ? "stt" : "typed", committed: true }); session.messages.push({ role: "user", content: text }); await send({ type: "user", text, final: true, source: request.headers.get("content-type")?.startsWith("audio/wav") ? "stt" : "typed" }); }
           const hasTask = Boolean(session.config.goal.trim() || session.config.task.trim() || session.config.script.trim());
           const messages = text ? session.messages : [...session.messages, { role: "user", content: hasTask
-            ? "Begin with a brief introduction and follow only the configured task. Do not invent details or unrelated topics."
-            : "Introduce yourself briefly and ask how you can help. No business scenario or task has been assigned; do not invent one." }];
+            ? "Open with your name and the configured reason for this conversation, then ask one specific question that starts the assigned task. Follow any script-supported opening. Do not ask a generic 'How can I help you?' or invent business details, customer needs or completed actions."
+            : "Introduce yourself briefly and ask what the caller would like to discuss. No business scenario or task has been assigned; do not invent one." }];
           await streamAgentReply({ messages, voice: session.config.voice, signal: abort.signal, engine, send, timing, onText: text => { answer = text; } });
           await send({ type: "done" });
         } catch (error) { if (!abort.signal.aborted) await send({ type: "error", error: publicDemo ? "Voice service unavailable. End the session and try again." : error instanceof Error ? error.message : "Local AI service failed" }); }

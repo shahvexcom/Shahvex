@@ -96,3 +96,23 @@ test('interrupt aborts in-flight inference and permits a subsequent turn',async(
     await dispatch(request('stop','cancel-owner',{},id));await next.text();
   } finally {global.fetch=previous;await dispatch(request('stop','cancel-owner',{},id));}
 });
+test('live AI-first opening follows the task and customer names are not repeated every reply',{skip:process.env.SHAHVEX_LIVE_ETIQUETTE!=='1',timeout:90000},async()=>{
+  const previous=global.fetch;
+  global.fetch=(url,init)=>String(url).includes(':8767/')?Promise.resolve(new Response(new Uint8Array(1920).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}})):previous(url,init);
+  const {dispatch}=createTesterService({secret});
+  const script='You are the appointment assistant for Bright Dental Clinic. Help callers request a dental visit. Open Monday to Friday, 9 AM to 5 PM in Gulberg, Lahore. Consultation costs 2,000 PKR. Ask for a first name, preferred day and preferred time. Staff must confirm requests. Keep replies brief.';
+  const {id}=await(await dispatch(request('start','etiquette-owner',{agentId:'etiquette',config:{...config,script,goal:'Collect a dental appointment request',task:'Ask for preferred day and time'}}))).json();
+  try{
+    const replies=[];
+    for(const body of [{opening:true},{text:'My name is Ali. I would like a cleaning on Thursday at 3 PM.'},{text:'Where is the clinic?'},{text:'What are the opening hours?'},{text:'What is the consultation fee?'},{text:'Summarize my appointment request.'}]){
+      const r=await dispatch(request('turn','etiquette-owner',body,id));assert.equal(r.status,200);
+      const events=(await r.text()).trim().split('\n').map(JSON.parse);assert.ok(!events.some(e=>e.type==='error'));
+      replies.push(events.filter(e=>e.type==='delta').map(e=>e.text).join(''));
+    }
+    assert.doesNotMatch(replies[0],/how (?:can|may) I help/i);
+    assert.match(replies[0],/dental|appointment|clinic|visit/i);
+    assert.ok(replies.slice(1).reduce((n,text)=>n+(text.match(/\bAli\b/gi)||[]).length,0)<=3);
+    assert.ok(replies.slice(1).every((text,index,array)=>index===0||!(/\bAli\b/i.test(text)&&/\bAli\b/i.test(array[index-1]))));
+    console.log('Verified real LLM: task-specific opening; name usage across five follow-ups within policy');
+  }finally{await dispatch(request('stop','etiquette-owner',{},id));global.fetch=previous;}
+});
