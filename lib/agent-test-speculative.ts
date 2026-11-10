@@ -21,7 +21,9 @@ function release(id: string, d: Draft) {
   drafts.delete(id);
 }
 function cancel(id: string, d: Draft) {
-  d.cancelled = true; d.shadow.abort?.abort(); release(id, d);
+  clearTimeout(d.timer);
+  // Once playback is confirmed, preserve the heard user turn and interrupted reply.
+  d.cancelled = !d.committed; d.shadow.abort?.abort(); release(id, d);
 }
 /** Authenticated callers share this bounded, isolated draft transaction on local and PC routes. */
 export async function handleTestSession(request: Request, owner: string, publicDemo = false) {
@@ -34,7 +36,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
   if (action === "commit" || action === "cancel") {
     if (!d || d.token !== url.searchParams.get("turnId")) return json(409, "Draft is no longer available", "STALE_DRAFT");
     if (action === "cancel") cancel(id, d);
-    else { if (d.cancelled) return json(409, "Draft was cancelled", "STALE_DRAFT"); d.committed = true; release(id, d); }
+    else { if (d.cancelled) return json(409, "Draft was cancelled", "STALE_DRAFT"); d.committed = true; clearTimeout(d.timer); release(id, d); }
     return Response.json({ accepted: true }, { headers: { "cache-control": "no-store" } });
   }
   if (action !== "draft") return run(request, owner, publicDemo);

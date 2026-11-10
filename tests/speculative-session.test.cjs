@@ -32,3 +32,21 @@ test('interrupt waits for an active draft worker and never commits its partial h
   assert.equal((await call('interrupt')).status,200);await r.text();assert.equal(sawAbort,true);assert.equal(sessionStore.get(id).busy,false);assert.equal(sessionStore.get(id).messages.length,1);
  }finally{if(id)await call('stop');global.fetch=original;}
 });
+test('confirmed interrupted drafts retain the heard customer turn and partial answer',async()=>{
+ const original=global.fetch;
+ global.fetch=async(url,init)=>{
+  if(String(url).includes('8766'))return Response.json({text:'Change it to Friday.'});
+  if(String(url).includes('11434'))return new Response(JSON.stringify({message:{content:'Friday is requested.'},done:true})+'\n');
+  return new Promise((resolve,reject)=>init.signal.addEventListener('abort',()=>reject(Error('cancelled')),{once:true}));
+ };
+ const key='heard-draft-'.repeat(4),{dispatch,sessionStore}=createTesterService({secret:key,testHooks:true});let id;
+ const call=(action,body='{}',audio=false)=>dispatch(new Request('http://localhost/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':key,'x-shahvex-owner':'heard-owner','x-shahvex-session':id||'none','x-shahvex-turn':'heard','content-type':audio?'audio/wav':'application/json'},body}));
+ try{
+  id=(await(await call('start',JSON.stringify({agentId:'heard',config:{name:'Test',voice:'v',first:'customer',goal:'',task:'',instructions:'',script:'',knowledge:'',style:'Professional'}}))).json()).id;
+  const wav=Buffer.from(await speechWav(Array.from({length:20},()=>Int16Array.from({length:320},(_,i)=>Math.round(Math.sin(i/5)*4000)))).arrayBuffer());
+  const r=await call('draft',wav,true);await new Promise(resolve=>setTimeout(resolve,15));
+  assert.equal((await call('commit')).status,200);assert.equal((await call('interrupt')).status,200);await r.text();
+  assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').at(-1).content,'Change it to Friday.');
+  assert.match(sessionStore.get(id).messages.at(-1).content,/Friday.*interrupted/);assert.equal(sessionStore.get(id).busy,false);
+ }finally{if(id)await call('stop');global.fetch=original;}
+});
