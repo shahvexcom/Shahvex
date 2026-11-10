@@ -18,6 +18,14 @@ import "./agent-test-panel.css";
 type Line = { id: string; role: string; text: string };
 type VoiceTiming = { stage: string; elapsedMs?: number; atMs: number; turnId?: string };
 
+type SpeechDraftGate = { id: string; promise: Promise<void>; resolve: () => void; reject: (reason: Error) => void; ready: Promise<void>; markReady: () => void };
+function speechDraftGate(id: string): SpeechDraftGate {
+  let resolve!: () => void, reject!: (reason: Error) => void, markReady!: () => void;
+  const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void promise.catch(() => {});
+  const ready = new Promise<void>(yes => { markReady = yes; });
+  return { id, promise, resolve, reject, ready, markReady };
+}
 export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName = "Agent", avatarUrl: initialAvatar, onVoiceChange, agents = [], demoToken }: { demoToken?: string; agentId?: string; agentName?: string; avatarUrl?: string; onVoiceChange?: (name: string) => void; agents?: {id:string;name:string;avatar_url?:string}[] }) {
   const base = demoToken ? `/api/demo/agent/${encodeURIComponent(demoToken)}` : "/api/admin/agent-test";
   const [remote,setRemote] = useState(false);
@@ -54,7 +62,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
   const [timings, setTimings] = useState<VoiceTiming[]>([]);
   const [extraction, setExtraction] = useState<{ script: string; details: ScriptDetails; status: "ready" | "loading" | "error"; error?: string }>({ script: "", details: emptyScriptDetails(), status: "ready" });
   const [extractionRetry, setExtractionRetry] = useState(0), [audioError, setAudioError] = useState(""), [previewing, setPreviewing] = useState(false);
-  const capture = useRef(new BrowserSpeechCapture()), preview = useRef<AudioBufferSourceNode | null>(null), previewContext = useRef<AudioContext | null>(null), previewAbort = useRef<AbortController | null>(null), loadVersion = useRef(0), startupAbort = useRef<AbortController | null>(null);
+  const capture = useRef(new BrowserSpeechCapture(true)), preview = useRef<AudioBufferSourceNode | null>(null), previewContext = useRef<AudioContext | null>(null), previewAbort = useRef<AbortController | null>(null), loadVersion = useRef(0), startupAbort = useRef<AbortController | null>(null);
   const currentScript = config?.script;
   const extractionReady = remote || Boolean(demoToken) || currentScript !== undefined && extraction.script === currentScript && extraction.status === "ready";
   useEffect(() => {
@@ -95,23 +103,26 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     setTimings(old => [...old.slice(-49), value]);
   };
   useEffect(() => { if (followChat.current && chat.current) chat.current.scrollTop = chat.current.scrollHeight; }, [lines]);
-  const session = useRef(""), context = useRef<AudioContext | null>(null), mic = useRef<MediaStream | null>(null), generation = useRef(0), active = useRef(false), mute = useRef(false), working = useRef(false), abort = useRef<AbortController | null>(null), dialog = useRef<HTMLDivElement>(null), turnRef = useRef<(audio?: Blob, text?: string, opening?: boolean, recordingId?: string, speechEndedAtMs?: number) => Promise<void>>(async () => {});
+  const session = useRef(""), context = useRef<AudioContext | null>(null), mic = useRef<MediaStream | null>(null), generation = useRef(0), active = useRef(false), mute = useRef(false), working = useRef(false), abort = useRef<AbortController | null>(null), dialog = useRef<HTMLDivElement>(null), turnRef = useRef<(audio?: Blob, text?: string, opening?: boolean, recordingId?: string, speechEndedAtMs?: number, draft?: SpeechDraftGate) => Promise<void>>(async () => {});
+  const speechDraft = useRef<SpeechDraftGate | null>(null);
   const clearAudio = () => { player.current?.clear(generation.current); setPlaying(false); };
   const stop = () => {
     finalizeRecording();
+    speechDraft.current?.reject(Error("Stopped")); speechDraft.current = null;
     active.current = false; startupAbort.current?.abort(); generation.current++; capture.current.reset(); abort.current?.abort(); clearAudio(); mic.current?.getTracks().forEach(t => t.stop()); mic.current = null;
     player.current?.dispose(); player.current = null; void context.current?.close(); context.current = null;
     if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true });
     session.current = ""; working.current = false; setRunning(false); setBusy(false); setLevel(0); setStatus("Ready");
   };
   const interrupt = (preserveRecording = false) => {
+    speechDraft.current?.reject(Error("Speech resumed")); speechDraft.current = null;
     if (!preserveRecording) capture.current.reset();
     generation.current++; abort.current?.abort(); clearAudio();
     working.current = false; setBusy(false);
     if (session.current) interruption.current = fetch(`${base}?action=interrupt&id=${session.current}`, { method: "POST" }).catch(() => {});
     setStatus("Interrupted — listening");
   };
-  useEffect(() => () => { active.current = false; startupAbort.current?.abort(); abort.current?.abort(); mic.current?.getTracks().forEach(t => t.stop()); player.current?.dispose(); void context.current?.close(); previewAbort.current?.abort(); try { preview.current?.stop(); } catch {} if (previewContext.current?.state !== "closed") void previewContext.current?.close().catch(() => {}); previewContext.current = null; if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true }); }, []);
+  useEffect(() => () => { speechDraft.current?.reject(Error("Closed")); speechDraft.current = null; active.current = false; startupAbort.current?.abort(); abort.current?.abort(); mic.current?.getTracks().forEach(t => t.stop()); player.current?.dispose(); void context.current?.close(); previewAbort.current?.abort(); try { preview.current?.stop(); } catch {} if (previewContext.current?.state !== "closed") void previewContext.current?.close().catch(() => {}); previewContext.current = null; if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true }); }, []);
   useEffect(() => {
     if (!open) return;
     const prior = document.activeElement as HTMLElement;
@@ -138,7 +149,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     catch(e){if(loadVersion.current===version)setStatus(e instanceof Error?e.message:"Unable to load agent");}
   };
   const show = async () => {setAudioError("");setOpen(true);setMobilePanel(demoToken ? "conversation" : "configuration");await loadAgent(agentId||agents[0]?.id||initialAgentId||"");};
-  const turn = async (audio?: Blob, message?: string, opening = false, recordingId?: string, speechEndedAtMs?: number) => {
+  const turn = async (audio?: Blob, message?: string, opening = false, recordingId?: string, speechEndedAtMs?: number, draft?: SpeechDraftGate) => {
     if (!active.current || working.current) return;
     if (player.current?.hasAudio) interrupt();
     working.current = true; setBusy(true); setStatus(audio ? "Transcribing…" : "Thinking…");
@@ -167,13 +178,15 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       }
       let r: Response;
       for (let attempt = 0; ; attempt++) {
-        r = await fetch(`${base}?action=turn&id=${session.current}&turnId=${turnId}`, { method: "POST", signal: control.signal, headers: { "Content-Type": audio ? "audio/wav" : "application/json" }, body: audio || JSON.stringify({ text: message, opening }) });
+        r = await fetch(`${base}?action=${draft ? "draft" : "turn"}&id=${session.current}&turnId=${turnId}`, { method: "POST", signal: control.signal, headers: { "Content-Type": audio ? "audio/wav" : "application/json" }, body: audio || JSON.stringify({ text: message, opening }) });
         if (r.status !== 409 || attempt >= 40) break;
         const rejection = await r.json(); if (rejection.code !== "BUSY") throw Error(rejection.error); await new Promise(resolve => setTimeout(resolve, 250)); control.signal.throwIfAborted();
       }
       if (!r.ok) throw Error((await r.json()).error); if (!r.body) throw Error("Missing response stream");
+      draft?.markReady();
       const reader = r.body.getReader(), decoder = new TextDecoder(); let pending = "";
       const consume = async (line: string) => {
+        if (draft) { await draft.promise; control.signal.throwIfAborted(); }
         if (!line.trim() || stamp !== generation.current) return; const event = JSON.parse(line);
         browserTurn.current.turnId = event.turnId || "";
         if (event.type === "timing") metric({ stage: event.stage, elapsedMs: event.elapsedMs, turnId: event.turnId });
@@ -194,7 +207,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       await consume(pending + decoder.decode());
       if (stamp === generation.current) setStatus(player.current?.isPlaying ? "Speaking" : "Listening");
     } catch (e) { if (!control.signal.aborted && stamp === generation.current) { clearAudio(); control.abort(); stop(); setAudioError(e instanceof Error ? e.message : "Conversation failed"); setStatus("Error"); } }
-    finally { if (abort.current === control) { working.current = false; setBusy(false); } }
+    finally { draft?.markReady(); if (speechDraft.current === draft) speechDraft.current = null; if (abort.current === control) { working.current = false; setBusy(false); } }
   };
   const start = async () => {
     if (!config || !extractionReady || (demoToken && !consent) || recordFinalizing || active.current) return;
@@ -235,13 +248,29 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       const source = ctx.createMediaStreamSource(stream), worklet = new AudioWorkletNode(ctx, "shahvex-microphone"), silent = ctx.createGain(); silent.gain.value = 0; const recordGain=ctx.createGain();micRecordGain.current=recordGain;source.connect(recordGain);recordGain.connect(mixed); beginRecording(mixed.stream); source.connect(worklet); worklet.connect(silent); silent.connect(ctx.destination);
       worklet.port.onmessage = event => {
         if (!active.current || context.current !== ctx) return;
-        if (mute.current) { capture.current.reset(); setLevel(0); return; }
+        if (mute.current) { if (speechDraft.current) interrupt(); capture.current.reset(); setLevel(0); return; }
         const frame = new Int16Array(event.data), result = capture.current.feed(frame, Boolean(player.current?.hasAudio));
         setLevel(Math.min(1, result.rms / 5000));
         if (result.started) { if (working.current || player.current?.hasAudio) interrupt(true); setStatus("Listening"); }
+        if (result.draftInvalidated && speechDraft.current) interrupt(true);
+        if (result.draft && !remote && !working.current && !player.current?.hasAudio) {
+          const gate = speechDraftGate(result.draft.id); speechDraft.current = gate;
+          void turnRef.current(result.draft.blob, undefined, false, gate.id, result.draft.speechEndedAtMs, gate);
+        }
         if (result.recording) {
           console.debug("[Shahvex microphone recording]", { turnId: result.recording.id, durationMs: result.recording.durationMs, vadSpeechMs: result.recording.voicedMs, state: "finalized" });
-          void turnRef.current(result.recording.blob, undefined, false, result.recording.id, result.recording.speechEndedAtMs);
+          const gate = speechDraft.current;
+          if (gate) {
+            void (async () => {
+              try {
+                await gate.ready;
+                if (speechDraft.current !== gate || !active.current) return;
+                const r = await fetch(`${base}?action=commit&id=${session.current}&turnId=${gate.id}`, { method: "POST", signal: abort.current?.signal });
+                if (!r.ok) throw Error("Speech confirmation failed. Restart testing.");
+                gate.resolve();
+              } catch (error) { gate.reject(error instanceof Error ? error : Error("Speech confirmation failed")); }
+            })();
+          } else void turnRef.current(result.recording.blob, undefined, false, result.recording.id, result.recording.speechEndedAtMs);
         }
       };
       setMobilePanel("conversation"); setStatus("Listening"); if (config.first === "ai") void turnRef.current(undefined, undefined, true);

@@ -8,9 +8,25 @@ const {chromium}=require('playwright');
 const {createTesterService}=require('../gateway/tester-service.cjs');
 const {decodeWav,resample}=require('../gateway/wav.cjs');
 const overlap=process.env.SHAHVEX_LOCAL_OVERLAP==='1';
-const secret=crypto.randomBytes(32).toString('hex'),{dispatch,sessionStore}=createTesterService({secret,maxSessions:2,testHooks:true});
+const productionDraft=process.env.SHAHVEX_PRODUCTION_DRAFT==='1';
+const secret=crypto.randomBytes(32).toString('hex'),{dispatch:localDispatch,sessionStore}=createTesterService({secret,maxSessions:2,testHooks:true});
+const publicTunnel=process.env.SHAHVEX_PUBLIC_TUNNEL_BENCH==='1';
+let tunnelHeaders;
+if(publicTunnel){
+ require('@next/env').loadEnvConfig(process.cwd());
+ const privateEnv=fs.readFileSync('.data/pc-ai/.env.pc-ai','utf8');
+ const key=privateEnv.split(/\r?\n/).find(x=>x.startsWith('SHAHVEX_PC_AI_SECRET='))?.split('=').slice(1).join('=');
+ if(!key||!process.env.SHAHVEX_CF_CLIENT_ID||!process.env.SHAHVEX_CF_CLIENT_SECRET)throw Error('Public verification credentials missing');
+ tunnelHeaders={'x-shahvex-ai-key':key,'CF-Access-Client-Id':process.env.SHAHVEX_CF_CLIENT_ID,'CF-Access-Client-Secret':process.env.SHAHVEX_CF_CLIENT_SECRET};
+}
+async function dispatch(request){
+ if(!publicTunnel)return localDispatch(request);
+ const headers=new Headers(request.headers);for(const [key,value]of Object.entries(tunnelHeaders))headers.set(key,value);
+ headers.set('x-shahvex-owner','approved-fast-voice-release-check');
+ return fetch('https://ai.shahvex.com'+new URL(request.url).pathname,{method:request.method,headers,body:await request.arrayBuffer(),signal:AbortSignal.any([request.signal,AbortSignal.timeout(45000)])});
+}
 const resumption=process.env.SHAHVEX_LOCAL_RESUMPTION==='1',continuous=process.env.SHAHVEX_LOCAL_CONTINUOUS==='1';
-const folder=path.resolve('.data/pc-ai/one-second-browser'+(overlap?'-overlap':'')+(resumption?'-resumption':'')+(continuous?'-continuous':''));fs.mkdirSync(folder,{recursive:true});
+const folder=path.resolve('.data/pc-ai/'+(publicTunnel?'public-tunnel-browser':productionDraft?'production-draft-browser':'one-second-browser')+(overlap?'-overlap':'')+(resumption?'-resumption':'')+(continuous?'-continuous':''));fs.mkdirSync(folder,{recursive:true});
 const drafts=new Map();
 let session='',voice='af_heart',base='';
 const config=()=>({name:'Local Assistant',voice,first:'customer',goal:'Answer clinic questions',task:'Provide only the requested information',instructions:'Answer in exactly one short factual sentence. No greeting, no filler, no follow-up question.',script:'Consultation costs 2,000 PKR. The clinic is open Monday through Friday, 9 AM to 5 PM. Staff must confirm all appointment requests; you cannot confirm a booking.',knowledge:'',style:'Professional'});
@@ -62,6 +78,12 @@ const server=http.createServer(async(req,res)=>{try{
   const u=new URL(req.url,base),token=u.searchParams.get('token');
   if(['/draft','/commit','/cancel'].includes(u.pathname)){
    if(!token||!/^[a-f0-9-]{36}$/.test(token)){res.writeHead(400).end();return;}
+   if(productionDraft){
+    const parts=[];for await(const p of req)parts.push(p);
+    const action=u.pathname.slice(1),headers={'x-shahvex-ai-key':secret,'x-shahvex-owner':'one-second-browser','x-shahvex-session':session,'x-shahvex-turn':token,'content-type':action==='draft'?'audio/wav':'application/json'};
+    const control=new AbortController();res.once('close',()=>{if(!res.writableFinished)control.abort();});
+    const r=await dispatch(new Request('http://127.0.0.1/tester/'+action,{method:'POST',headers,body:Buffer.concat(parts),signal:control.signal}));res.writeHead(r.status,Object.fromEntries(r.headers));await pipeline(Readable.fromWeb(r.body),res);return;
+   }
    if(u.pathname==='/draft'){
     const parts=[];let size=0;for await(const p of req){size+=p.length;if(size>2000000)throw Error('Body limit');parts.push(p);}
     const started=await call('start',{agentId:'draft-local',config:config()},'application/json',true);if(!started.ok)throw Error('Draft start failed');const id=(await started.json()).id;
@@ -85,17 +107,17 @@ async function main(){
   // Warm model/context before the explicitly warm acceptance trials.
   session=(await(await call('start',{agentId:'local',config:config()})).json()).id;await(await call('turn',{text:'State your purpose briefly.'})).text();await call('stop',{});session='';
   const questions=continuous?['My name is Ali. I want Thursday at three PM.','What day and time did I request?','Actually change it to Friday at four PM.','Summarize my request.']:resumption?['What are the clinic opening hours?']:['What is the consultation fee?','What are the opening hours?','Is my appointment confirmed?'];
-  for(const currentVoice of ['af_heart','am_michael'])for(const question of questions)for(let repeat=0;repeat<(continuous?1:2);repeat++){
+  for(const currentVoice of (publicTunnel?['af_heart']:['af_heart','am_michael']))for(const question of questions)for(let repeat=0;repeat<(continuous?1:2);repeat++){
    const roundStarted=Date.now();voice=currentVoice;
    const synth=await fetch('http://127.0.0.1:8778/synthesize',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:question,voice_id:'am_michael'})});if(!synth.ok)throw Error('Input fixture generation failed');
    const decoded=decodeWav(Buffer.from(await synth.arrayBuffer()));let pcm=resample(decoded.audio,decoded.sampleRate,16000);
    if(resumption){const pieces=[];for(const part of ['What are the clinic','opening hours?']){const r=await fetch('http://127.0.0.1:8778/synthesize',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({text:part,voice_id:'am_michael'})});const d=decodeWav(Buffer.from(await r.arrayBuffer()));const a=resample(d.audio,d.sampleRate,16000);let first=0,last=a.length;const rms=(at)=>{let sum=0;for(let i=at;i<at+640;i+=2)sum+=a.readInt16LE(i)**2;return Math.sqrt(sum/320);};while(first+640<last&&rms(first)<500)first+=640;while(last-640>first&&rms(last-640)<500)last-=640;pieces.push(a.subarray(first,last));}pcm=Buffer.concat([pieces[0],Buffer.alloc(9600),pieces[1]]);}
    const file=path.join(folder,'microphone.wav');fs.writeFileSync(file,makeWav(Buffer.concat([pcm,Buffer.alloc(32000)])));
-   if(session&&sessionStore.get(session)?.config.voice!==voice){await call('stop',{});session='';}
+   if(!publicTunnel&&session&&sessionStore.get(session)?.config.voice!==voice){await call('stop',{});session='';}
    if(!session)session=(await(await call('start',{agentId:'local',config:config()})).json()).id;
-   const priorUsers=sessionStore.get(session).messages.filter(m=>m.role==='user').length;
+   const priorUsers=publicTunnel?0:sessionStore.get(session).messages.filter(m=>m.role==='user').length;
    const browser=await chromium.launch({channel:'chrome',headless:true,args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--use-file-for-fake-audio-capture='+file,'--autoplay-policy=no-user-gesture-required']});
-   try{const page=await browser.newPage({permissions:['microphone']});page.on('pageerror',e=>console.log('BROWSER ERROR '+e.message));await page.goto(base);await page.click('#start');try{await page.waitForFunction(()=>window.failure||(window.result&&window.completed),{},{timeout:30000});}catch(e){console.log('BROWSER DIAGNOSTIC '+JSON.stringify(await page.evaluate(()=>({debug:window.debug,failure:window.failure,result:window.result,heard:window.heard}))));throw e;}const value=await page.evaluate(()=>({result:window.result,failure:window.failure,reply:window.reply,heard:window.heard}));if(value.failure)throw Error(value.failure);const row={voice,question,repeat:repeat+1,...value.result,reply:value.reply,heard:value.heard};if(overlap){for(let attempt=0;attempt<20&&sessionStore.get(session)?.messages.filter(m=>m.role==='user').length!==priorUsers+1;attempt++)await new Promise(r=>setTimeout(r,10));const users=sessionStore.get(session).messages.filter(m=>m.role==='user');if(users.length!==priorUsers+1||users.at(-1).content!==row.heard)throw Error('Draft history isolation failed');if(row.speechEndToPlaybackMs<500)throw Error('Endpoint guard bypassed');if(resumption&&row.cancelled<1)throw Error('Resumption did not invalidate draft');row.historyIsolationPassed=true;row.committedUserTurns=users.length;if(continuous&&question==='What day and time did I request?'&&!/Thursday/i.test(row.reply))throw Error('Follow-up memory failed');if(continuous&&question==='Summarize my request.'&&(!/Friday/i.test(row.reply)||/Thursday/i.test(row.reply)))throw Error('Correction memory failed');}results.push(row);console.log('RESULT '+JSON.stringify(row));fs.writeFileSync(path.join(folder,'results.json'),JSON.stringify({method:'Warm local Chrome fake microphone, original 500ms endpoint, real STT/LLM, experimental voices, actual AudioWorklet started event. No Cloudflare round-trip.',overlap,resumption,continuous,results},null,2));}
+   try{const page=await browser.newPage({permissions:['microphone']});page.on('pageerror',e=>console.log('BROWSER ERROR '+e.message));await page.goto(base);await page.click('#start');try{await page.waitForFunction(()=>window.failure||(window.result&&window.completed),{},{timeout:30000});}catch(e){console.log('BROWSER DIAGNOSTIC '+JSON.stringify(await page.evaluate(()=>({debug:window.debug,failure:window.failure,result:window.result,heard:window.heard}))));throw e;}const value=await page.evaluate(()=>({result:window.result,failure:window.failure,reply:window.reply,heard:window.heard}));if(value.failure)throw Error(value.failure);const row={voice,question,repeat:repeat+1,...value.result,reply:value.reply,heard:value.heard};if(overlap&&!publicTunnel){for(let attempt=0;attempt<20&&sessionStore.get(session)?.messages.filter(m=>m.role==='user').length!==priorUsers+1;attempt++)await new Promise(r=>setTimeout(r,10));const users=sessionStore.get(session).messages.filter(m=>m.role==='user');if(users.length!==priorUsers+1||users.at(-1).content!==row.heard)throw Error('Draft history isolation failed');if(row.speechEndToPlaybackMs<500)throw Error('Endpoint guard bypassed');if(resumption&&row.cancelled<1)throw Error('Resumption did not invalidate draft');row.historyIsolationPassed=true;row.committedUserTurns=users.length;if(continuous&&question==='What day and time did I request?'&&!/Thursday/i.test(row.reply))throw Error('Follow-up memory failed');if(continuous&&question==='Summarize my request.'&&(!/Friday/i.test(row.reply)||/Thursday/i.test(row.reply)))throw Error('Correction memory failed');}results.push(row);console.log('RESULT '+JSON.stringify(row));fs.writeFileSync(path.join(folder,'results.json'),JSON.stringify({method:'Warm local Chrome fake microphone, original 500ms endpoint, real STT/LLM, experimental voices, actual AudioWorklet started event. No Cloudflare round-trip.',overlap,resumption,continuous,publicTunnel,results},null,2));}
    finally{await browser.close();for(const tx of drafts.values()){tx.abort.abort();await call('stop',{},'application/json',true,undefined,tx.id);}drafts.clear();if(!continuous){await call('stop',{});session='';}}
    if(continuous)await new Promise(r=>setTimeout(r,Math.max(0,24000-(Date.now()-roundStarted))));
   }

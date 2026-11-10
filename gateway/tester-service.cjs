@@ -8,7 +8,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
-const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio']);
+const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio', 'agent-test-speculative']);
 function loader() {
   const cache = new Map();
   function load(name) {
@@ -28,7 +28,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
   if (typeof secret !== 'string' || secret.length < 32) throw Error('PC AI secret of at least 32 characters required');
   maxSessions = Math.max(1, Math.min(10, Number(maxSessions) || 1));
   const ai = load('agent-test');
-  const { handleTestSession } = load('agent-test-session');
+  const { handleTestSession } = load('agent-test-speculative');
   const json = (status, body) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
   async function dispatch(request) {
     const got = Buffer.from(request.headers.get('x-shahvex-ai-key') || '');
@@ -36,7 +36,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
     const url = new URL(request.url);
     if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions});
-    const match = /^\/tester\/(start|turn|interrupt|stop|ping)$/.exec(url.pathname);
+    const match = /^\/tester\/(start|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {

@@ -1,4 +1,4 @@
-import { handleTestSession } from "@/lib/agent-test-session";
+import { handleTestSession } from "@/lib/agent-test-speculative";
 import { extractAgentScript } from "@/lib/agent-script-extraction";
 import { conversationStyles } from "@/lib/agent-script-details";
 import { cookies } from "next/headers";
@@ -20,7 +20,7 @@ export async function GET(request: Request) {
       WHERE a.id=$1 AND a.role='AGENT' AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id)`, [id]);
     if (!result.rows[0]) return json({ error: "Agent not found" }, 404);
     const voices = await localVoices(owner), a = result.rows[0];
-    return json({ ...voices, agent: {name:a.name,avatarUrl:a.avatar_url||"",accent:a.accent,language:a.language||"English"}, config: { name: a.name, voice: a.local_voice_id||voices.defaultVoice, first: a.speaks_first||"customer", goal: "", task: "", instructions: "", script: a.script, knowledge: "", style: a.conversation_style||"Professional" } });
+    return json({ ...voices, agent: {name:a.name,avatarUrl:a.avatar_url||"",accent:a.accent,language:a.language||"English"}, config: { name: a.name, voice: voices.defaultVoice === "af_heart" ? "af_heart" : a.local_voice_id||voices.defaultVoice, first: a.speaks_first||"customer", goal: "", task: "", instructions: "", script: a.script, knowledge: "", style: a.conversation_style||"Professional" } });
   } catch { return json({ error: "Unable to load agent configuration or local CosyVoice service." }, 503); }
 }
 export async function POST(request: Request) {
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       }
       return json({ id: newTest(owner, body.agentId, config) });
     }
-    if (process.env.SHAHVEX_PC_AI_URL && ["turn", "interrupt", "stop", "ping"].includes(action || "")) {
+    if (process.env.SHAHVEX_PC_AI_URL && ["turn", "draft", "commit", "cancel", "interrupt", "stop", "ping"].includes(action || "")) {
       if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) return json({ error: "Invalid session" }, 400);
       const parts: Uint8Array[] = []; let size = 0;
       if (request.body) for await (const part of request.body as unknown as AsyncIterable<Uint8Array>) { size += part.length; if (size > 2_000_000) return json({ error: "Request too large" }, 413); parts.push(part); }

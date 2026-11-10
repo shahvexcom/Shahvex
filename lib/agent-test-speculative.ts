@@ -1,0 +1,66 @@
+import { sessions } from "./agent-test";
+import { handleTestSession as run } from "./agent-test-session";
+
+type Session = NonNullable<ReturnType<typeof sessions.get>>;
+type Draft = { token: string; parent: Session; shadow: Session; committed: boolean; cancelled: boolean; finished: boolean; timer: ReturnType<typeof setTimeout> };
+const state = globalThis as unknown as { agentSpeechDrafts?: Map<string, Draft> };
+const drafts = state.agentSpeechDrafts ??= new Map<string, Draft>();
+const rateState = globalThis as unknown as { agentSpeechDraftRates?: Map<string, { at: number; count: number }> };
+const rates = rateState.agentSpeechDraftRates ??= new Map<string, { at: number; count: number }>();
+const json = (status: number, error: string, code?: string) => Response.json({ error, code }, { status, headers: { "cache-control": "no-store" } });
+function release(id: string, d: Draft) {
+  if (!d.finished || (!d.committed && !d.cancelled)) return;
+  clearTimeout(d.timer);
+  if (drafts.get(id) !== d) return;
+  if (d.committed && !d.cancelled && sessions.get(id) === d.parent) {
+    d.parent.messages = d.shadow.messages;
+    d.parent.recordingHashes = d.shadow.recordingHashes;
+    d.parent.turns = d.shadow.turns;
+  }
+  d.parent.busy = false;
+  drafts.delete(id);
+}
+function cancel(id: string, d: Draft) {
+  d.cancelled = true; d.shadow.abort?.abort(); release(id, d);
+}
+/** Authenticated callers share this bounded, isolated draft transaction on local and PC routes. */
+export async function handleTestSession(request: Request, owner: string, publicDemo = false) {
+  const url = new URL(request.url), id = url.searchParams.get("id") || "", action = url.searchParams.get("action");
+  const parent = sessions.get(id);
+  if (!parent || parent.owner !== owner) return json(404, "Test session expired. Start again.");
+  parent.lastSeen = Date.now();
+  let d = drafts.get(id);
+  if (action === "stop" || action === "interrupt") { if (d) cancel(id, d); return run(request, owner, publicDemo); }
+  if (action === "commit" || action === "cancel") {
+    if (!d || d.token !== url.searchParams.get("turnId")) return json(409, "Draft is no longer available", "STALE_DRAFT");
+    if (action === "cancel") cancel(id, d);
+    else { if (d.cancelled) return json(409, "Draft was cancelled", "STALE_DRAFT"); d.committed = true; release(id, d); }
+    return Response.json({ accepted: true }, { headers: { "cache-control": "no-store" } });
+  }
+  if (action !== "draft") return run(request, owner, publicDemo);
+  const token = url.searchParams.get("turnId") || "";
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(token) || !request.headers.get("content-type")?.startsWith("audio/wav")) return json(400, "Invalid speech draft");
+  if (parent.busy || d) return json(409, "Previous turn is finishing; try again.", "BUSY");
+  const now = Date.now();
+  for (const [key, value] of rates) if (now - value.at > 60000) rates.delete(key);
+  const rate = rates.get(owner) || { at: now, count: 0 };
+  if (++rate.count > 60) return json(429, "Too many speech drafts. Pause and try again.");
+  rates.set(owner, rate);
+  const shadow: Session = { ...parent, busy: false, abort: undefined, finished: undefined,
+    messages: parent.messages.map(m => ({ ...m })), turns: new Set(parent.turns), recordingHashes: new Set(parent.recordingHashes) };
+  d = { token, parent, shadow, committed: false, cancelled: false, finished: false, timer: setTimeout(() => {}, 0) };
+  clearTimeout(d.timer);
+  const tx = d;
+  tx.timer = setTimeout(() => cancel(id, tx), 30000); tx.timer.unref?.();
+  parent.busy = true; drafts.set(id, tx);
+  const target = new URL(request.url); target.searchParams.set("action", "turn");
+  try {
+    const response = await run(new Request(target, request), owner, publicDemo, shadow);
+    parent.abort = shadow.abort;
+    parent.finished = (shadow.finished || Promise.resolve()).then(() => { tx.finished = true; release(id, tx); });
+    // An abandoned tab or stream cannot leave its isolated work holding capacity.
+    request.signal.addEventListener("abort", () => cancel(id, tx), { once: true });
+    if (request.signal.aborted || !response.ok) cancel(id, tx);
+    return response;
+  } catch (error) { tx.finished = true; cancel(id, tx); throw error; }
+}

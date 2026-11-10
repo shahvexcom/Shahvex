@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { demoDb, demoHeaders, demoJson, demoLink, demoRate } from "@/lib/agent-demo";
 import { newTest, sessions, localVoices, warmSelectedVoice, pruneSessions } from "@/lib/agent-test";
 import { extractAgentScript } from "@/lib/agent-script-extraction";
-import { handleTestSession } from "@/lib/agent-test-session";
+import { handleTestSession } from "@/lib/agent-test-speculative";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,7 +92,9 @@ export async function POST(request: Request, context: Context) {
           }
         }).catch(() => { clearInterval(watchdog); s.abort?.abort(); sessions.delete(sid); });
       }, 2000); watchdog.unref();
-      if (!(await localVoices(link.owner_id)).voices.some(v => v.id === s.config.voice)) throw Error("Saved voice unavailable");
+      const available = await localVoices(link.owner_id);
+      if (available.defaultVoice === "af_heart") s.config.voice = "af_heart";
+      if (!available.voices.some(v => v.id === s.config.voice)) throw Error("Saved voice unavailable");
       await warmSelectedVoice(s.config.voice, startupSignal);
       const details = await extractAgentScript(link.owner_id, link.script, startupSignal);
       startupSignal.throwIfAborted();
@@ -100,7 +102,7 @@ export async function POST(request: Request, context: Context) {
       s.messages[0].content += `\nSaved goals: ${s.config.goal}\nSaved tasks: ${s.config.task}\nSaved instructions: ${[...details.instructions,...details.conversationFlow,...details.restrictions].join("\n")}\nSaved knowledge: ${[...details.knowledge,...details.faqs].join("\n")}`;
       return demoJson({ id: sid });
     }
-    if (!["turn", "interrupt", "stop"].includes(action || "")) return demoJson({ error: "Unknown action" }, 400);
+    if (!["turn", "draft", "commit", "cancel", "interrupt", "stop"].includes(action || "")) return demoJson({ error: "Unknown action" }, 400);
     const lease = await pool.query(`UPDATE agent_demo_sessions SET
       request_count=CASE WHEN request_window<NOW()-INTERVAL '1 minute' THEN 1 ELSE request_count+1 END,
       request_window=CASE WHEN request_window<NOW()-INTERVAL '1 minute' THEN NOW() ELSE request_window END
@@ -109,7 +111,7 @@ export async function POST(request: Request, context: Context) {
     if (!lease.rowCount) return demoJson({ error: "Session expired or request limit reached" }, 429);
     const s = sessions.get(id); if (!s || s.agentId !== link.agent_id) { await pool.query("UPDATE agent_demo_sessions SET ended_at=NOW() WHERE id=$1", [id]); return demoJson({ error: "Session ended. Start again." }, 410); }
     if (action === "stop") await pool.query("UPDATE agent_demo_sessions SET ended_at=NOW() WHERE id=$1", [id]);
-    const body = await boundedBody(request, action === "turn" ? 2_000_000 : 4096);
+    const body = await boundedBody(request, (action === "turn" || action === "draft") ? 2_000_000 : 4096);
     const limited = new Request(request.url, { method: "POST", headers: request.headers, body, signal: request.signal });
     const response = await handleTestSession(limited, s.owner, true);
     for (const [key,value] of Object.entries(demoHeaders)) response.headers.set(key,value);

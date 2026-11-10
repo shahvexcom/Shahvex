@@ -27,8 +27,21 @@ export function newTest(owner: string, agentId: string, config: TestConfig) {
 }
 export async function engine(port: number, path: string, init: RequestInit = {}) {
   if (process.env.SHAHVEX_PC_AI_URL) return (await import("./pc-ai-engine")).pcAiEngine(port, path, init);
-  // Isolated preview only. Production/Vercel and the public PC adapter keep
-  // their existing endpoint unless this explicit local-process flag is set.
+  if (port === 8767 && process.env.SHAHVEX_FAST_VOICE === "1") {
+    if (path === "/voices" || path === "/health") {
+      const fast = await fetch(`http://127.0.0.1:8778${path}`, { ...init, cache: "no-store", signal: AbortSignal.any([init.signal || new AbortController().signal, AbortSignal.timeout(10000)]) });
+      if (!fast.ok) return fast;
+      const value = await fast.json();
+      if (path === "/voices") return Response.json({ ...value, default_voice: "af_heart", voices: value.voices.filter((v: { id: string }) => v.id === "af_heart") });
+      return Response.json(value);
+    }
+    if ((path === "/stream" || path === "/synthesize") && typeof init.body === "string") {
+      const voice = JSON.parse(init.body).voice_id;
+      if (voice === "af_heart") port = 8778;
+    }
+  }
+  // Separate experimental routing; never selected by Vercel.
+  // Approved adapter routing above uses its own explicit deployment flag.
   if (port === 8767 && process.env.SHAHVEX_LOCAL_FAST_TTS === "1" && !process.env.VERCEL) port = 8776;
   if (port === 8767 && process.env.SHAHVEX_LOCAL_FAST_TTS === "kokoro" && !process.env.VERCEL) port = 8778;
   return fetch(`http://127.0.0.1:${port}${path}`, { ...init, redirect: "error", cache: "no-store", signal: AbortSignal.any([init.signal || new AbortController().signal, AbortSignal.timeout(120_000)]) });
@@ -37,6 +50,12 @@ export async function localVoices(owner?: string) {
   const r = await engine(8767, "/voices"); if (!r.ok) throw Error("CosyVoice voice list unavailable");
   const data = await r.json();
   const result = { defaultVoice: String(data.default_voice || ""), voices: (data.voices as { id: string; name: string; selectable: boolean; gender?:string; language?:string; accent?:string }[]).filter(v => v.selectable).map(v => ({ id: v.id, name: v.name, gender: v.gender || "other", language: v.language || "English", accent: v.accent || "", selectable:true })) };
+  const approved = result.voices.filter(v => v.id === "af_heart");
+  if (owner && approved.length) {
+    const legacy = result.voices.filter(v => v.id !== "af_heart");
+    const registered = legacy.length ? await (await import("./local-voice-registry")).registeredVoices(owner, { ...result, voices: legacy }) : { voices: [] };
+    return { defaultVoice: "af_heart", voices: [...approved, ...registered.voices] };
+  }
   return owner ? (await import("./local-voice-registry")).registeredVoices(owner,result) : result;
 }
 const warmState = globalThis as unknown as { agentTestVoiceWarmups?: Map<string, Promise<void>> };

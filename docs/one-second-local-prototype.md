@@ -1,6 +1,6 @@
 # Local response latency prototype — 10 November 2026
 
-Status: local review only. Not pushed or deployed; existing cloned voices and live services remain unchanged.
+Status: user approved the fast female voice and requested localhost/live rollout on 10 November 2026. See the approved rollout notes below.
 
 ## Measurement
 
@@ -37,3 +37,15 @@ Private results: `.data/pc-ai/one-second-browser-overlap/results.json`, `one-sec
 Local opt-in harness: `tests/local-one-second-browser.cjs` with `SHAHVEX_LOCAL_BROWSER_LATENCY=1` and `SHAHVEX_LOCAL_OVERLAP=1`; optional `SHAHVEX_LOCAL_RESUMPTION=1` or `SHAHVEX_LOCAL_CONTINUOUS=1`. Requires the isolated local TTS service on 8778 and existing local STT/LLM. It does not use website accounts or the live adapter.
 
 Regression: 20 passed, two explicit opt-in cases skipped; production build and TypeScript checks passed. Speculative capture tests cover delayed release, draft invalidation/full utterance preservation and unchanged production defaults.
+
+## Approved rollout
+
+The approved default is Heart (`af_heart`). Male remains excluded from the public voice inventory pending pronunciation review. Saved voice records are not rewritten; admin testing and demo sessions select the approved fast default when it is available. Local/adapter launch configuration enables `SHAHVEX_FAST_VOICE=1` and phrase streaming. Vercel continues to use the authenticated PC adapter; it does not need direct model access.
+
+`lib/agent-test-speculative.ts` implements the shared production draft transaction: one bounded isolated draft per session, authenticated owner checks, exact turn-token checks, 60 drafts/minute per owner, 30-second abandoned-draft cleanup and cancellation on stop/interruption. Drafts hold the parent session's capacity slot. Only confirmed drafts update conversation history; the browser retains its 500 ms endpoint guard and blocks all draft output until confirmation. Resumed speech aborts the draft without losing the original utterance.
+
+Integrated production-handler browser verification: 12 warm trials, 760?870 ms, plus four pause/resume trials at or below 880 ms. These are still local synthetic-microphone measurements, not a live-domain latency guarantee. Regression: 13 passed, two explicit opt-in cases skipped; TypeScript and production build passed.
+
+`deployment/Install-FastVoice.py` installs `shahvex-fast-voice.service` for loopback port 8778 with startup warmup and automatic restart. The existing Windows watchdog keeps WSL alive, so this unit joins the existing reboot recovery. A complete physical reboot remains untested.
+
+Rollback: remove `SHAHVEX_FAST_VOICE=1` from the private adapter launch configuration and local `.env`, then restart the idle adapter. Existing original voice engines remain available. Restore the prior application commit to disable speculative browser requests as part of a full rollback. Do not publish the earlier local fixed-owner prototype routes.

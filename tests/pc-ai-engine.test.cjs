@@ -16,6 +16,8 @@ test('PC transport restricts destinations and operations and strips caller crede
     let calls=0;
     global.fetch=async(url,init)=>{calls++;assert.equal(url.href,'https://ai.example.com/engine/8767/voices');assert.equal(init.headers.get('cookie'),null);assert.equal(init.headers.get('authorization'),null);assert.equal(init.headers.get('x-shahvex-ai-key'),'s'.repeat(32));assert.equal(init.redirect,'error');return new Response('{}');};
     await mod.exports.pcAiEngine(8767,'/voices',{headers:{cookie:'user-session',authorization:'user-token'}});
+    global.fetch=async(url,init)=>{assert.ok(['/tester/draft','/tester/commit','/tester/cancel'].includes(url.pathname));assert.equal(init.headers.get('x-shahvex-owner'),'owner');assert.equal(init.headers.get('cookie'),null);return new Response('{}');};
+    for(const action of ['draft','commit','cancel'])await mod.exports.pcAiRequest('/tester/'+action,{method:'POST',body:'{}',headers:{cookie:'private'}},'owner');
     await assert.rejects(mod.exports.pcAiEngine(8767,'/voices?url=evil'));
     await assert.rejects(mod.exports.pcAiEngine(1234,'/voices'));
     process.env.SHAHVEX_PC_AI_URL='http://ai.example.com';
