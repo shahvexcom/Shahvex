@@ -45,14 +45,14 @@ export class BrowserSpeechCapture {
     this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 12) this.pre.shift();
     let recording: { blob: Blob; durationMs: number; voicedMs: number; id: string; speechEndedAtMs: number } | undefined;
     let draft: { blob: Blob; id: string; speechEndedAtMs: number } | undefined;
-    // Speculative processing only. Keep recording and the original 500 ms
+    // Speculative processing only. Keep recording through the 300 ms
     // finalization guard; a draft must never be played or committed on its own.
     if (this.speculative && this.talking && this.quiet >= 5 && this.voiced >= 10 && !this.draftSent) {
       draft = { blob: speechWav(this.frames), id: crypto.randomUUID(), speechEndedAtMs: this.lastSpeechAtMs };
       this.draftSent = true;
     }
-    // 500 ms of trailing silence; retain the existing speech/echo safeguards.
-    if (this.talking && (this.quiet >= 25 || this.frames.length >= 1000)) {
+    // 300 ms of trailing silence; retain the existing speech/echo safeguards.
+    if (this.talking && (this.quiet >= 15 || this.frames.length >= 1000)) {
       if (this.voiced >= 10) recording = { blob: speechWav(this.frames), durationMs: this.frames.length * 20, voicedMs: this.voiced * 20, id: crypto.randomUUID(), speechEndedAtMs: this.lastSpeechAtMs };
       this.reset();
     }

@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { ConversationRecorder } from "@/lib/browser-conversation-recorder";
 import { AdminSkeleton } from "./admin-skeleton";
 import { BrowserSpeechCapture } from "@/lib/browser-speech-capture";
+import { cancelBrowserTurn } from "@/lib/browser-turn-cancellation";
 import { ConversationSilence } from "@/lib/conversation-silence";
 import { conversationStyles, detailLabels, emptyScriptDetails, type ScriptDetails } from "@/lib/agent-script-details";
 import Image from "next/image";
@@ -120,18 +121,17 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
   };
   const interrupt = (preserveRecording = false) => {
     const cancelledDraft = speechDraft.current;
+    const audibleInterruption = Boolean(player.current?.hasAudio);
     const cancelledToken = cancelledDraft?.id || (working.current ? browserTurn.current.turnId : "");
     cancelledDraft?.reject(Error("Speech resumed")); speechDraft.current = null;
     if (!preserveRecording) capture.current.reset();
     generation.current++; clearAudio(); abort.current?.abort();
     working.current = false; setBusy(false);
     if (session.current) {
-      interruption.current = fetch(`${base}?action=${cancelledToken ? "cancel" : "interrupt"}&id=${session.current}${cancelledToken ? `&turnId=${cancelledToken}` : ""}`, { method: "POST" }).then(async r => {
-        if (!r.ok) throw Error((await r.json()).error || "Unable to interrupt the previous turn");
-      });
+      interruption.current = cancelBrowserTurn(`${base}?action=${cancelledToken ? "cancel" : "interrupt"}&id=${session.current}${cancelledToken ? `&turnId=${cancelledToken}` : ""}`);
       void interruption.current.catch(() => {});
     }
-    setStatus("Interrupted — listening");
+    setStatus(audibleInterruption ? "Interrupted — listening" : "Listening");
   };
   useEffect(() => () => { if (silenceTimer.current) clearInterval(silenceTimer.current); speechDraft.current?.reject(Error("Closed")); speechDraft.current = null; active.current = false; startupAbort.current?.abort(); abort.current?.abort(); mic.current?.getTracks().forEach(t => t.stop()); player.current?.dispose(); void context.current?.close(); previewAbort.current?.abort(); try { preview.current?.stop(); } catch {} if (previewContext.current?.state !== "closed") void previewContext.current?.close().catch(() => {}); previewContext.current = null; if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true }); }, []);
   useEffect(() => {
@@ -167,7 +167,10 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     const stamp = generation.current, control = new AbortController(); abort.current = control; const turnId = recordingId || crypto.randomUUID();
     browserTurn.current = { started: performance.now(), firstPlayback: false, turnId, speechEndedAtMs: speechEndedAtMs || 0 };
     try {
-      await interruption.current; control.signal.throwIfAborted();
+      const pendingCancellation = interruption.current;
+      try { await pendingCancellation; }
+      finally { if (interruption.current === pendingCancellation) interruption.current = Promise.resolve(); }
+      control.signal.throwIfAborted();
       if (remote) {
         if (!audio) throw Error("The connected gateway requires customer speech first.");
         const input = new FormData(); input.append("audio", audio, "speech.wav"); input.append("agentId", agentId); input.append("sessionId", session.current); input.append("turnId", turnId);
@@ -223,7 +226,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
   };
   const start = async () => {
     if (!config || !extractionReady || (demoToken && !consent) || recordFinalizing || active.current) return;
-    stopPreview(); setAudioError(""); capture.current.reset(); silence.current.reset(); endAfterPlayback.current = false;
+    stopPreview(); setAudioError(""); interruption.current = Promise.resolve(); capture.current.reset(); silence.current.reset(); endAfterPlayback.current = false;
     const startup = new AbortController(); startupAbort.current = startup;
     turnRef.current = turn;
     active.current = true; setRunning(true); setLines([]); setStatus("Connecting…"); mute.current = false; setMuted(false);
