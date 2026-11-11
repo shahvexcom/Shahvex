@@ -17,9 +17,17 @@ test('resumed speech invalidates the draft and preserves the complete utterance'
 test('production/default capture never produces speculative requests',()=>{
  const c=new BrowserSpeechCapture();for(let i=0;i<20;i++)c.feed(speech(),false);for(let i=0;i<25;i++)assert.equal(c.feed(silence(),false).draft,undefined);
 });
-test('barge-in needs three voiced frames, rejects a short noise and ignores correlated playback echo',()=>{
+test('barge-in needs sustained speech, rejects short noise and ignores correlated playback echo',()=>{
  const c=new BrowserSpeechCapture();assert.equal(c.feed(speech(),true).started,false);assert.equal(c.feed(speech(),true).started,false);assert.equal(c.feed(silence(),true).started,false);
- assert.equal(c.feed(speech(),true).started,false);assert.equal(c.feed(speech(),true).started,false);assert.equal(c.feed(speech(),true).started,true);
+ for(let i=0;i<9;i++)assert.equal(c.feed(speech(),true).started,false);
+ assert.equal(c.feed(speech(),true).started,true);
  const echo=new BrowserSpeechCapture(),reference=Float32Array.from({length:320},(_,i)=>Math.sin(i/5)*.1);echo.playback(reference);
  const echoed=Int16Array.from(reference,x=>Math.round(x*32768));for(let i=0;i<10;i++){const r=echo.feed(echoed,true);assert.equal(r.echo,true);assert.equal(r.started,false);}
+});
+test('brief speaker noise never interrupts or creates a clarification request',()=>{
+ const c=new BrowserSpeechCapture(true);
+ for(let burst=0;burst<20;burst++){
+   for(let i=0;i<8;i++){const e=c.feed(speech(),true);assert.equal(e.started,false);assert.equal(e.draft,undefined);}
+   for(let i=0;i<25;i++){const e=c.feed(silence(),true);assert.equal(e.recording,undefined);assert.equal(e.draft,undefined);}
+ }
 });

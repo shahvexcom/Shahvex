@@ -8,6 +8,21 @@ const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(
 const { streamAgentReply } = mod.exports;
 const pcmHeaders = { 'x-audio-format': 'pcm_s16le', 'x-sample-rate': '24000', 'x-channels': '1' };
 const enc = new TextEncoder();
+
+test('split emoji/status tags never reach TTS and marker-only output starts no audio job',async()=>{
+  const spoken=[];
+  const options={messages:[],voice:'lissa',signal:new AbortController().signal,onText:()=>{},send:async()=>{},timing:async()=>{},
+    engine:async(port,path,init)=>{
+      if(port===11434)return new Response(['Hello 😊 [inter','rupted] there.',' [interrupted]'].map((text,i)=>JSON.stringify({message:{content:text},done:i===2})).join('\n')+'\n');
+      spoken.push(JSON.parse(init.body).text);
+      return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+    }};
+  await streamAgentReply(options);
+  assert.deepEqual(spoken,['Hello there.']);
+  spoken.length=0;
+  await streamAgentReply({...options,fixedSpeech:'[interrupted] 😊'});
+  assert.equal(spoken.length,0);
+});
 test('local phrase mode starts TTS before the rest of a long sentence arrives without changing text',{timeout:3000},async()=>{
   const first='The consultation fee for your first clinic visit is 2,000 PKR,';
   const rest=' and our staff must confirm your preferred appointment time.';

@@ -16,6 +16,7 @@ function release(id: string, d: Draft) {
     d.parent.messages = d.shadow.messages;
     d.parent.recordingHashes = d.shadow.recordingHashes;
     d.parent.turns = d.shadow.turns;
+    d.parent.timeOfferMade = d.shadow.timeOfferMade;
   }
   d.parent.busy = false; d.parent.activeTurnId = undefined;
   drafts.delete(id);

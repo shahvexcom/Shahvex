@@ -18,7 +18,32 @@ function amount(raw,currency){
   const cents=Number((fraction||'').padEnd(2,'0'));
   return words(n)+' '+unit+(n===1?'':'s')+(cents?' and '+words(cents)+' '+(cents===1?sub:sub==='paisa'?'paisa':sub==='penny'?'pence':sub+'s'):'');
 }
-function speechText(text){
-  return text.replace(/\b(PKR|USD|GBP|EUR|Rs\.?)\s*(\d[\d,]*(?:\.\d{1,2})?)\b|\b(\d[\d,]*(?:\.\d{1,2})?)\s*(PKR|USD|GBP|EUR|rupees?)\b/gi,(original,prefix,first,second,suffix)=>amount(first||second,prefix||suffix)||original);
+/** @param {string} text
+ * @param {{voice?:string, expressive?:boolean, allowEffect?:()=>boolean}} [options]
+ */
+function speechText(text,options={}){
+  const effect=label=>{
+    const key=label.toLowerCase().replace(/[ _-]/g,'');
+    const native=/^(?:laugh|laughs|laughing|laughter|chuckle|chuckles)$/.test(key)?'[laughter]':/^(?:breath|breathing|quickbreath)$/.test(key)?'[quick_breath]':key==='sigh'?'[sigh]':'';
+    return native&&options.voice==='lissa'&&options.expressive&&(!options.allowEffect||options.allowEffect())?' '+native+' ':' ';
+  };
+  const controls='interrupted(?: by (?:user|customer))?|interupted|interrupt|breath|breathing|quick[_ -]breath|laugh|laughs|laughing|laughter|chuckle|chuckles|sigh|gasp|surprise|surprised|happy|sad|angry|calm|warm|pause|emotion';
+  let cleaned=text
+    .replace(/<\|[^<>\r\n]*\|>/g,' ')
+    .replace(new RegExp('\\[('+controls+')(?:\\s*[:=][^\\]\\r\\n]{0,80})?\\]','gi'),(_,label)=>effect(label))
+    .replace(new RegExp('<(/?)('+controls+')(?:\\s[^<>]*)?>','gi'),(_,closing,label)=>closing?' ':effect(label))
+    .replace(new RegExp('\\*('+controls+')\\*','gi'),(_,label)=>effect(label))
+    .replace(/[#*0-9]\uFE0F?\u20E3/gu,' ')
+    .replace(/[\p{Extended_Pictographic}\p{Regional_Indicator}\p{Emoji_Modifier}\u200D\uFE0E\uFE0F\u{E0020}-\u{E007F}]/gu,' ')
+    .replace(/[ \t]+/g,' ').replace(/ +([,.!?;:])/g,'$1').trim();
+  return cleaned.replace(/\b(PKR|USD|GBP|EUR|Rs\.?)\s*(\d[\d,]*(?:\.\d{1,2})?)\b|\b(\d[\d,]*(?:\.\d{1,2})?)\s*(PKR|USD|GBP|EUR|rupees?)\b/gi,(original,prefix,first,second,suffix)=>amount(first||second,prefix||suffix)||original);
 }
-module.exports={speechText};
+/** Native effects are opt-in until the voice's quality/latency gate passes.
+ * One effect per reply; no extra inference, prefixed filler or playback delay.
+ * @param {{voice:string, expressive?:boolean}} options
+ */
+function createSpeechRenderer(options){
+  let remaining=1;
+  return text=>speechText(text,{...options,allowEffect:()=>remaining>0?Boolean(remaining--):false});
+}
+module.exports={speechText,createSpeechRenderer};

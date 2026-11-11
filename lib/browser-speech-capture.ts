@@ -11,6 +11,7 @@ export class BrowserSpeechCapture {
   private draftSent = false;
   private reference: number[] = [];
   private referenceAt = 0;
+  get isSpeaking() { return this.talking; }
   reset() { this.frames = []; this.pre = []; this.voiced = 0; this.quiet = 0; this.talking = false; this.lastSpeechAtMs = 0; this.draftSent = false; }
   playback(samples: Float32Array) { this.reference.push(...samples); if (this.reference.length > 12000) this.reference.splice(0, this.reference.length - 12000); this.referenceAt = performance.now(); }
   private echo(frame: Int16Array) {
@@ -28,15 +29,20 @@ export class BrowserSpeechCapture {
   }
   feed(frame: Int16Array, playbackActive: boolean) {
     let power = 0; for (const x of frame) power += x * x;
-    const rms = Math.sqrt(power / frame.length), echo = this.echo(frame), speech = !echo && rms > (playbackActive ? 1000 : 500);
+    // Keep the stronger gate through the speaker's short acoustic tail too.
+    const speakerActive = playbackActive || (this.reference.length > 0 && performance.now() - this.referenceAt < 350);
+    const rms = Math.sqrt(power / frame.length), echo = this.echo(frame), speech = !echo && rms > (speakerActive ? 1000 : 500);
     const draftInvalidated = speech && this.draftSent;
     if (speech) this.draftSent = false;
     if (speech) { this.voiced++; this.quiet = 0; this.lastSpeechAtMs = performance.now(); } else this.quiet++;
     let started = false;
-    if (!this.talking && speech && this.voiced >= (playbackActive ? 3 : 5)) { this.talking = true; this.frames = [...this.pre]; started = true; }
+    // Require 200 ms of consecutive near-end speech while the agent speaks.
+    // The previous 60 ms gate cancelled replies for clicks/brief echo bursts
+    // that were too short to produce a valid customer recording afterwards.
+    if (!this.talking && speech && this.voiced >= (speakerActive ? 10 : 5)) { this.talking = true; this.frames = [...this.pre]; started = true; }
     if (!this.talking && !speech) this.voiced = 0;
     if (this.talking) this.frames.push(echo ? new Int16Array(frame.length) : frame);
-    this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 8) this.pre.shift();
+    this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 12) this.pre.shift();
     let recording: { blob: Blob; durationMs: number; voicedMs: number; id: string; speechEndedAtMs: number } | undefined;
     let draft: { blob: Blob; id: string; speechEndedAtMs: number } | undefined;
     // Speculative processing only. Keep recording and the original 500 ms

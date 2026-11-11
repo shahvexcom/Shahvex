@@ -1,7 +1,7 @@
-import { speechText } from "../gateway/speech-text.cjs";
+import { createSpeechRenderer } from "../gateway/speech-text.cjs";
 import { speechBoundary } from "../gateway/speech-boundary.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
-type Options = { messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean };
+type Options = { messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
 
 function sentenceBoundary(text: string) {
   for (const match of text.matchAll(/[.!?](?:["')\]]*)(?=\s|$)/g)) {
@@ -12,8 +12,9 @@ function sentenceBoundary(text: string) {
 }
 
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
-export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText, phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
+export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText, fixedSpeech, phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
   const queue: string[] = [];
+  const renderSpeech = createSpeechRenderer({ voice, expressive: process.env.SHAHVEX_LISSA_EXPRESSIVE === "1" });
   let finished = false, failure: unknown, wake: (() => void) | undefined, space: (() => void) | undefined;
   let firstSentence = true, firstPCM = true, sentenceIndex = 0;
   const notify = () => { wake?.(); wake = undefined; space?.(); space = undefined; };
@@ -26,7 +27,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
         if (!text) { await new Promise<void>(resolve => { wake = resolve; }); continue; }
         const index = sentenceIndex++;
         await timing("tts-request-started", { sentenceIndex: index, characters: text.length });
-        const response = await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: speechText(text), voice_id: voice }) });
+        const response = await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice }) });
         if (!response.ok || !response.body) throw Error("CosyVoice streaming synthesis failed");
         const rate = Number(response.headers.get("x-sample-rate"));
         if (response.headers.get("x-audio-format") !== "pcm_s16le" || rate !== 24000 || response.headers.get("x-channels") !== "1") { await response.body.cancel(); throw Error("Unexpected CosyVoice PCM format"); }
@@ -56,9 +57,9 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
     } catch (error) { failure = error; notify(); }
   })();
   const enqueue = async (text: string) => {
-    if (!text.trim()) return;
+    let spoken = renderSpeech(text).trim();
+    if (!spoken || !/[\p{L}\p{N}]/u.test(spoken.replace(/\[[^\]]*\]/g, ""))) return;
     if (firstSentence) { firstSentence = false; await timing(phraseStreaming ? "first-speakable-phrase" : "first-complete-sentence"); }
-    let spoken = speechText(text).trim();
     while (spoken) {
       let at = spoken.length <= 480 ? spoken.length : spoken.lastIndexOf(" ", 450);
       if (at <= 0) at = 450;
@@ -69,6 +70,16 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
   };
   let answer = "", phrase = "", pending = "", firstToken = true, done = false;
   try {
+    // Trusted server-selected presence checks use the same ordered, cancellable
+    // voice path, without inventing a customer utterance or invoking the LLM.
+    if (fixedSpeech !== undefined) {
+      signal.throwIfAborted(); onText(fixedSpeech);
+      await send({ type: "delta", text: fixedSpeech });
+      await enqueue(fixedSpeech); finished = true; notify(); await worker;
+      if (failure) throw failure;
+      await timing("total-synthesis-completed");
+      return;
+    }
     const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.SHAHVEX_TEST_OLLAMA_MODEL || "qwen3:4b-instruct", messages, stream: true, think: false, keep_alive: "30m", options: { num_predict: -1, temperature: 0 } }) });
     if (!response.ok || !response.body) throw Error("Ollama response unavailable");
     const decoder = new TextDecoder();
