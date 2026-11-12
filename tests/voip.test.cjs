@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const ts=require('typescript');const http=require('node:http');
-function load(file,deps={}){const m={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;new Function('require','module','exports',code)(n=>Object.hasOwn(deps,n)?deps[n]:require(n),m,m.exports);return m.exports;}
+function load(file,deps={}){const m={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;new Function('require','module','exports',code)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./vicidial-config'?load('lib/vicidial-config.ts'):n==='./vicidial-bridge'?load('lib/vicidial-bridge.ts',{'server-only':{},'./vicidial':vici}):require(n),m,m.exports);return m.exports;}
 const vici=load('lib/vicidial.ts',{'server-only':{}});
 test('VICIdial destination validation and credential-aware verification reject false positives',()=>{
   assert.throws(()=>vici.vicidialURL('https://user:secret@dialer.example.com'));
@@ -21,7 +21,7 @@ test('controller VoIP saves connection and multiple agent routes atomically and 
  const saved=process.env.CREDENTIAL_ENCRYPTION_KEY;process.env.CREDENTIAL_ENCRYPTION_KEY='fixture-only-key-with-sufficient-test-entropy';
  const crypto=load('lib/credential-crypto.ts',{'server-only':{}});let invalid=false,fail=false;const calls=[];
  const tx={release(){calls.push('release')},async query(sql,p=[]){calls.push(sql);if(sql.startsWith('SELECT a.id')){assert.match(sql,/bpo_created_agents/);assert.match(sql,/tenant.role='BPO'/);return{rowCount:invalid?0:2,rows:[]};}if(sql.startsWith('INSERT INTO voip_connections')){assert.notEqual(p[5],'private-secret');return{rows:[{id:p[0],name:p[2]}]};}if(sql.startsWith('UPDATE voip_connections'))return{rows:[]};if(sql.startsWith('INSERT INTO voip_agent_assignments')&&fail)throw Error('fixture assignment failure');return{rows:[]};}};
- const pool={connect:async()=>tx,query:async sql=>{if(sql.startsWith('SELECT id,admin_role'))return{rows:[{admin_role:'SUPER_ADMIN'}]};throw Error('Unexpected query')}};
+ const pool={connect:async()=>tx,query:async sql=>{if(sql.startsWith('SELECT q.agent_id'))return{rows:[]};if(sql.startsWith('SELECT id,admin_role'))return{rows:[{admin_role:'SUPER_ADMIN'}]};throw Error('Unexpected query')}};
  const controller=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'test'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',BPO_SESSION_COOKIE:'bpo',readSession:async()=>({role:'ADMIN',agentId:'admin-a'})},'./database':{db:async()=>pool},'./credential-crypto':crypto,'./vicidial':vici});
  const body={action:'save-assigned',name:'Dialer',serverUrl:'https://dialer.example.com',username:'apiuser',secret:'private-secret',method:'NON_AGENT_API',enabled:true,agentIds:['agent-a','agent-b'],direction:'OUTBOUND',campaignId:'DEMO',inboundDid:'',inGroup:'',routingDestination:''};
  const req=(value=body)=>new Request('http://localhost:3000/api/admin/voip',{method:'POST',headers:{origin:'http://localhost:3000','Content-Type':'application/json'},body:JSON.stringify(value)});
@@ -40,4 +40,17 @@ test('BPO VoIP lists only tenant-owned connections and BPO-created agents',async
  const c=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'test'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',BPO_SESSION_COOKIE:'bpo',readSession:async()=>({role:'BPO',agentId:'bpo-a'})},'./database':{db:async()=>client},'./credential-crypto':{encryptCredential:()=>'',decryptCredential:()=>''},'./vicidial':vici});
  const result=await(await c.getVoip(new Request('http://localhost:3000/api/bpo/voip'),'bpo')).json();assert.equal(result.connections[0].id,'own-connection');assert.equal(result.agents[0].id,'own-agent');
  const denied=await c.postVoip(new Request('http://localhost:3000/api/bpo/voip',{method:'POST',headers:{origin:'http://localhost:3000'},body:JSON.stringify({action:'test',id:'other-tenant-connection'})}),'bpo');assert.equal(denied.status,404);
+});
+test('connection creation needs no agents and delete/disable stay owner scoped while retaining history',async()=>{
+ const writes=[],previous=process.env.CREDENTIAL_ENCRYPTION_KEY;process.env.CREDENTIAL_ENCRYPTION_KEY='fixture-only-encryption';
+ const client={query:async(sql,p=[])=>{writes.push({sql,p});if(sql.startsWith('SELECT id,admin_role'))return {rows:[{admin_role:'SUPER_ADMIN'}]};if(sql.startsWith('INSERT INTO voip_connections'))return {rows:[{id:'saved-connection'}]};if(sql.startsWith('SELECT id FROM voip_connections'))return {rows:p[0]==='saved-connection'?[{id:p[0]}]:[]};return {rows:[]};}};
+ const c=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'fixture'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',readSession:async()=>({role:'ADMIN',agentId:'owner'})},'./database':{db:async()=>client},'./credential-crypto':{encryptCredential:()=> 'encrypted'},'./vicidial':vici});
+ const request=value=>new Request('https://site.example.test/api/admin/voip',{method:'POST',headers:{origin:'https://site.example.test'},body:JSON.stringify(value)});
+ try{
+  const r=await c.postVoip(request({action:'save',name:'Saved connection',serverUrl:'https://dialer.example.test',username:'apiuser',secret:'fixture',method:'NON_AGENT_API',enabled:true}),'admin');assert.equal(r.status,201);assert.ok(!writes.some(w=>w.sql.includes('INSERT INTO voip_agent_assignments')));
+  assert.equal((await c.postVoip(request({action:'disable',id:'foreign'}),'admin')).status,404);
+  assert.equal((await c.postVoip(request({action:'disable',id:'saved-connection'}),'admin')).status,200);
+  assert.equal((await c.postVoip(request({action:'delete',id:'saved-connection'}),'admin')).status,200);
+  const archived=writes.find(w=>w.sql.startsWith('UPDATE voip_connections SET enabled=FALSE')&&w.p[2]===true);assert.ok(archived);assert.equal(archived.p[1],'owner');assert.ok(!writes.some(w=>/DELETE FROM (?:agent_calls|voip_connections)/.test(w.sql)));
+ }finally{if(previous===undefined)delete process.env.CREDENTIAL_ENCRYPTION_KEY;else process.env.CREDENTIAL_ENCRYPTION_KEY=previous;}
 });

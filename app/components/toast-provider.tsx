@@ -3,9 +3,10 @@
 import { Toaster, ToastBar, toast } from "react-hot-toast";
 import styles from "./toast-provider.module.css";
 
-export function ToastProvider() {
+export function ToastProvider({toasterId}:{toasterId?:string}={}) {
   return (
     <Toaster
+      toasterId={toasterId}
       position="top-right"
       gutter={10}
       toastOptions={{
@@ -22,7 +23,8 @@ export function ToastProvider() {
         success: { iconTheme: { primary: "#16a36a", secondary: "#fff" } },
         error: { iconTheme: { primary: "#dc3f4f", secondary: "#fff" } },
       }}
-      children={(t) => <div onClick={() => toast.dismiss(t.id)} role="button" tabIndex={0} aria-label="Dismiss notification"><ToastBar toast={t} /></div>}
-    />
+    >
+      {(t) => <div onClick={() => toast.dismiss(t.id,t.toasterId)} role="button" tabIndex={0} aria-label="Dismiss notification"><ToastBar toast={t} /></div>}
+    </Toaster>
   );
 }

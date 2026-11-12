@@ -1,0 +1,10 @@
+; Install only after the isolated manual test bridge is configured and running.
+; 3524 is an example: verify it is unused and include this context in the phone's
+; actual dialing context. Keep the existing production 3523 route unchanged.
+[shahvex-ai-manual-test]
+exten => 3524,1,Answer()
+ same => n,AGI(/var/lib/asterisk/agi-bin/register-call.py,manual-test,--manual-test)
+ same => n,GotoIf($["${SHAHVEX_AUDIO_UUID}" = ""]?failed)
+ same => n,AudioSocket(${SHAHVEX_AUDIO_UUID},127.0.0.1:9020)
+ same => n,Hangup()
+ same => n(failed),Hangup()

@@ -95,27 +95,28 @@ export async function POST(request: Request) {
   try {
     const form = await request.formData();
     const script = form.get("script");
-    const leads = form.get("leads");
-    if (!(script instanceof File) || !(leads instanceof File)) return Response.json({ message: "Upload both an agent script and leads sheet." }, { status: 400 });
-    if (script.size > MAX_SIZE || leads.size > MAX_SIZE) return Response.json({ message: "Each file must be 5MB or smaller." }, { status: 400 });
+    const leadFile = form.get("leads");
+    const leads = leadFile instanceof File && leadFile.size>0 ? leadFile : null;
+    if (!(script instanceof File)) return Response.json({ message: "Upload an agent script. A number sheet is not required for VICIdial campaigns." }, { status: 400 });
+    if (script.size > MAX_SIZE || (leads?.size||0) > MAX_SIZE) return Response.json({ message: "Each file must be 5MB or smaller." }, { status: 400 });
 
     const client = await db();
     const storage = await getBpoStorageSummary(client, current.agentId);
-    const incomingBytes = script.size + leads.size;
+    const incomingBytes = script.size + (leads?.size||0);
     if (!storage.hasActivePlan) return Response.json({ message: "Buy a plan before uploading workspace files." }, { status: 403 });
     if (storage.usedBytes + incomingBytes > storage.limitBytes) {
       const shortfall = storage.usedBytes + incomingBytes - storage.limitBytes;
       return Response.json({ message: `Not enough storage. Free ${formatSize(shortfall)} or choose a plan with more storage.` }, { status: 413 });
     }
     const parsedScript = await parse(script, true);
-    const parsedLeads = await parse(leads);
+    const parsedLeads = leads ? await parse(leads) : {headers:[],rows:[]};
     await client.query(
       "INSERT INTO script_assignments (id,agent_id,lead_file_name,script_file_name,lead_file_type,script_file_type,lead_headers,lead_rows,script_text,lead_file_size,script_file_size,created_by) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$2)",
-      [randomUUID(), current.agentId, leads.name, script.name, leads.name.split(".").pop()?.toUpperCase() || "FILE", script.name.split(".").pop()?.toUpperCase() || "FILE", JSON.stringify(parsedLeads.headers), JSON.stringify(parsedLeads.rows), parsedScript.text.slice(0, 100000), leads.size, script.size],
+      [randomUUID(), current.agentId, leads?.name || "", script.name, leads?.name.split(".").pop()?.toUpperCase() || "", script.name.split(".").pop()?.toUpperCase() || "FILE", JSON.stringify(parsedLeads.headers), JSON.stringify(parsedLeads.rows), parsedScript.text.slice(0, 100000), leads?.size||0, script.size],
     );
 
     const profile = await client.query("SELECT name,email FROM agents WHERE id=$1", [current.agentId]);
-    if (profile.rows[0]?.email) {
+    if (profile.rows[0]?.email && leads) {
       const fileDetails = (file: File) => ({
         name: file.name,
         size: `${(file.size / 1024).toFixed(1)} KB`,
@@ -133,7 +134,7 @@ export async function POST(request: Request) {
         console.error("BPO upload email error:", mailError);
       }
     }
-    return Response.json({ message: "Script and leads uploaded successfully." }, { status: 201 });
+    return Response.json({ message: leads ? "Script and leads uploaded successfully." : "Script uploaded. VICIdial manages campaign numbers." }, { status: 201 });
   } catch (error) {
     return Response.json({ message: error instanceof Error ? error.message : "Upload failed." }, { status: 500 });
   }

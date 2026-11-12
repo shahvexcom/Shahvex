@@ -11,7 +11,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ message: "Invalid call ID." }, { status: 400 });
-  const result = await (await db()).query(`SELECT c.call_type,c.recording_id,c.recording_url,t.secret_ciphertext
+  const result = await (await db()).query(`SELECT c.telephony_provider,c.call_type,c.recording_id,c.recording_url,t.secret_ciphertext
     FROM agent_calls c
     LEFT JOIN agent_credentials ac ON ac.agent_id=c.agent_id AND ac.provider='TELNYX'
     LEFT JOIN ai_credentials t ON t.id=ac.credential_id
@@ -22,6 +22,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const call = result.rows[0];
   if (!call) return Response.json({ message: "Call not found." }, { status: 404 });
 
+  if(call.telephony_provider==='VICIDIAL')return (await import("@/lib/vicidial-recording")).vicidialRecordingResponse(id,request);
   let audioUrl = String(call.recording_url || "");
   if (call.recording_id && call.secret_ciphertext && call.call_type !== "QUICK_DIAL") {
     const metadata = await fetch(`https://api.telnyx.com/v2/recordings/${encodeURIComponent(call.recording_id)}`, {

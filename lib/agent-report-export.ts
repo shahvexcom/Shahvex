@@ -1,7 +1,8 @@
-type AgentRow = { name: string; username: string; dialed_calls: number; total_leads: number; status: string; call_limit_minutes: number; daily_call_limit: number; local_voice_name?: string; local_voice_id?: string };
+import { agentScriptCategory } from "./agent-script-category";
+type AgentRow = { name: string; username: string; dialed_calls: number; total_leads: number; status: string; call_limit_minutes: number; daily_call_limit: number; local_voice_name?: string; local_voice_id?: string; agent_script?: string };
 const escape = (value: unknown) => String(value ?? "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
-const headings = ["Agent", "Username", "Dialed calls", "Total leads", "Status", "Call access", "Daily limit", "Voice"];
-const values = (a: AgentRow) => [a.name, `@${a.username}`, a.dialed_calls, a.total_leads, a.status, a.call_limit_minutes ? `${a.call_limit_minutes} min / call` : "Unlimited", a.daily_call_limit, a.local_voice_name || a.local_voice_id || "Unassigned"];
+const headings = ["Agent", "Username", "Category", "Dialed calls", "Total leads", "Status", "Call access", "Daily limit", "Voice"];
+const values = (a: AgentRow) => [a.name, `@${a.username}`, agentScriptCategory(a.agent_script), a.dialed_calls, a.total_leads, a.status, a.call_limit_minutes ? `${a.call_limit_minutes} min / call` : "Unlimited", a.daily_call_limit, a.local_voice_name || a.local_voice_id || "Unassigned"];
 const safeCell = (value: unknown) => /^[=+\-@\t\r]/.test(String(value)) ? `'${value}` : String(value);
 
 export async function exportAgentReport(format: "csv" | "xls" | "doc" | "pdf", agents: AgentRow[], report?: {title:string;headings:string[];rows:(string|number)[][];summary:string}) {

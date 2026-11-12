@@ -11,6 +11,16 @@ function sentenceBoundary(text: string) {
   return 0;
 }
 
+// Runtime status is never model-authored dialogue, even when copied from history.
+function withoutInterruptionMarkers(text: string) {
+  return text.replace(/\[\s*(?:interrupted(?: by (?:user|customer))?|interupted|interrupt)\s*\]/gi, "");
+}
+
+/** Block availability-to-talk questions before transcript, memory, or TTS. */
+function isTimePermission(text: string) {
+  return /\b(?:(?:is|would|will)\s+(?:it|this|that|now|right now|this time|the time)\b[^.!?]{0,100}\b(?:good|okay|ok|convenient|right|bad)\b[^.!?]{0,40}\btime|(?:is|would)\s+(?:now|this|that|it)\b[^.!?]{0,60}\b(?:okay|ok|convenient)\b|(?:do|would|can|could|may|have|are)\s+(?:you|I|we)\b[^.!?]{0,60}\b(?:minute|moment|time to (?:talk|chat|speak)|time for (?:a|this)|time right now|time now|have (?:the |some |any |a little )?time|free to (?:talk|chat)|available to (?:talk|chat))|(?:can|may|could)\s+(?:I|we)\s+(?:talk|speak|chat)|is\s+(?:the\s+)?time\s+(?:good|okay|ok|convenient))\b/i.test(text);
+}
+
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
 export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText, fixedSpeech, phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
   const queue: string[] = [];
@@ -91,16 +101,18 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       if (typeof delta !== "string") throw Error("Invalid Ollama text");
       if (delta) {
         if (firstToken) { firstToken = false; await timing("llm-first-token"); }
-        answer += delta; phrase += delta; onText(answer);
-        if (answer.length > 64000) throw Error("Response exceeds session safety limit; ask for the remaining detail in a follow-up");
-        await send({ type: "delta", text: delta });
-        // Sentence terminators are usable even when Ollama ends a delta at punctuation.
-        // Avoid splitting decimal numbers and common abbreviated titles.
+        phrase += delta;
+        if (answer.length + phrase.length > 64000) throw Error("Response exceeds session safety limit; ask for the remaining detail in a follow-up");
         let boundary: number;
-        while ((boundary = phraseStreaming ? speechBoundary(phrase, true) : sentenceBoundary(phrase)) || phrase.length > 480) {
-          let at = boundary || phrase.lastIndexOf(" ", 450);
-          if (at <= 0 || at > 480) at = phrase.lastIndexOf(" ", 450) > 0 ? phrase.lastIndexOf(" ", 450) : 450;
-          await enqueue(phrase.slice(0, at)); phrase = phrase.slice(at).trimStart();
+        // Hold questions until complete so split tokens cannot leak into text or audio.
+        const phraseAllowed = () => phraseStreaming && !/^\s*(?:is|are|do|would|will|can|could|may|have)\b/i.test(phrase);
+        while ((boundary = phraseAllowed() ? speechBoundary(phrase, true) : sentenceBoundary(phrase))) {
+          const part = withoutInterruptionMarkers(phrase.slice(0, boundary));
+          phrase = phrase.slice(boundary);
+          if (isTimePermission(part)) continue;
+          answer += part; onText(answer);
+          await send({ type: "delta", text: part });
+          await enqueue(part);
         }
       }
       if (data.done) {
@@ -113,7 +125,13 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       let at; while ((at = pending.indexOf("\n")) >= 0) { const line = pending.slice(0, at); pending = pending.slice(at + 1); await consume(line); }
     }
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
-    await enqueue(phrase); finished = true; notify(); await worker;
+    phrase = withoutInterruptionMarkers(phrase);
+    if (phrase && !isTimePermission(phrase)) {
+      answer += phrase; onText(answer);
+      await send({ type: "delta", text: phrase });
+      await enqueue(phrase);
+    }
+    finished = true; notify(); await worker;
     if (failure) throw failure;
     await timing("total-synthesis-completed");
   } finally { finished = true; queue.length = 0; notify(); await worker; signal.removeEventListener("abort", abort); }

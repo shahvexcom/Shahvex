@@ -33,6 +33,20 @@ async def main():
         raise AssertionError('Expected failure')
     except RuntimeError:
         pass
+    cancelled = threading.Event()
+    def cooperative(stopped):
+        while not stopped.is_set():
+            time.sleep(.002)
+            yield b'pcm'
+        cancelled.set()
+    stream = threaded_pcm(cooperative, cooperative=True)
+    assert await asyncio.wait_for(anext(stream), 2) == b'pcm'
+    await stream.aclose()
+    for _ in range(100):
+        if cancelled.is_set():
+            break
+        await asyncio.sleep(.005)
+    assert cancelled.is_set(), 'Disconnect must reach the native cancellation event'
     print('PASS 30 interrupted lock-owning streams, subsequent synthesis, thread affinity, error propagation')
 
 asyncio.run(main())

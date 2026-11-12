@@ -58,6 +58,11 @@ type BpoCallOptions = { bpoId?: string; dialingSource?: "MANUAL" | "AUTO"; maxCa
 
 export async function startAgentCall(agentId: string, options: BpoCallOptions = {}) {
   const pool = await db();
+  const assigned = await pool.query("SELECT c.live_config FROM voip_agent_assignments v JOIN voip_connections c ON c.id=v.connection_id AND c.owner_id=v.owner_id WHERE v.agent_id=$1",[agentId]);
+  if (assigned.rows[0]?.live_config?.enabled) {
+    try { return await (await import("./vicidial-live")).startVicidialAgent(agentId,options); }
+    catch (error) { throw new CallStartError(error instanceof Error ? error.message : "VICIdial start failed",409); }
+  }
   const client = await pool.connect();
   const id = randomUUID();
   let reserved: { name: string; to: string; from: string; key: string; connectionId: string };

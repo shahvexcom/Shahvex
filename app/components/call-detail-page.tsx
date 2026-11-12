@@ -6,12 +6,13 @@ import { FiArrowLeft, FiDownload, FiFileText, FiMic, FiPause, FiPhoneOff, FiPlay
 
 type Turn = { role: "user" | "assistant"; content: string; at?: string };
 type Call = {
+  telephony_provider?:string; collected_fields?:Record<string,{value:string}>; vicidial_sync_status?:string; transfer_status?:string; transfer_consent?:boolean;
   id: string; status: string; conversation_state?: string; agent_name: string; agent_avatar?: string; lead_name: string; lead_number: string;
   recording_url?: string; recording_id?: string; recording_active?: boolean; on_hold?: boolean; duration_seconds?: number;
   summary: string; notes: string; start_note?: string; mid_note?: string; final_note?: string; outcome?: string;
   transcript?: string; conversation_history?: Turn[]; script_lead_headers?: string[]; script_text?: string; created_at: string; answered_at?: string; ended_at?: string;
 };
-type Command = "hangup" | "record-start" | "record-stop" | "hold" | "resume";
+type Command = "transfer" | "sync-comments" | "hangup" | "record-start" | "record-stop" | "hold" | "resume";
 
 const live = (status: string) => ["INITIATED", "RINGING", "ANSWERED"].includes(status);
 const initials = (name: string) => name.trim().split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase() || "CU";
@@ -31,7 +32,7 @@ const fallbackTurns = (transcript = ""): Turn[] => transcript.split("\n").map(li
   return match ? { role: match[1].toUpperCase() === "AGENT" ? "assistant" : "user", content: match[2] } as Turn : null;
 }).filter((turn): turn is Turn => Boolean(turn?.content));
 
-const downloadLead = (call: Call, turns: Turn[]) => downloadText(`lead-${call.id.slice(0, 8)}.txt`, `LEAD DETAILS\nName: ${call.lead_name || "Not provided"}\nPhone: ${call.lead_number || "Not provided"}\n\nCLIENT ANSWERS\n${turns.filter(turn => turn.role === "user").map(turn => `- ${cleanTranscriptText(turn.content)}`).join("\n") || "No client answers recorded."}`);
+const downloadLead = (call: Call, turns: Turn[]) => downloadText(`lead-${call.id.slice(0, 8)}.txt`, `LEAD DETAILS\nName: ${call.lead_name || "Not provided"}\nPhone: ${call.lead_number || "Not provided"}\n\n${call.collected_fields ? "COLLECTED FIELDS\n"+Object.entries(call.collected_fields).map(([name,field])=>`${name}: ${field.value}`).join("\n")+"\n\n" : ""}CLIENT ANSWERS\n${turns.filter(turn => turn.role === "user").map(turn => `- ${cleanTranscriptText(turn.content)}`).join("\n") || "No client answers recorded."}`);
 
 const cleanTranscriptText = (value: string) => value
   .replace(/<\/?(?:emotion|break|prosody|say-as|phoneme|speak)(?:\s[^>]*)?>/gi, " ")
@@ -189,6 +190,7 @@ export default function CallDetailPage({ portal = "admin" }: { portal?: "admin" 
   return <main className="admin-page call-detail-page">
     <button className="admin-outline call-back" onClick={goBack}><FiArrowLeft /> Back</button>
     <div className="call-detail-title"><div><p>{active ? "LIVE CALL CONTROL" : "COMPLETED CALL"}</p><h1>{call.agent_name} <span>→</span> {customer}</h1></div><span className="call-live-timer">{time}</span></div>
+    {call.telephony_provider==="VICIDIAL"&&<section className="admin-card"><h3>Collected lead details</h3>{Object.entries(call.collected_fields||{}).map(([name,field])=><p key={name}><strong>{name}:</strong> {field.value}</p>)}<p>VICIdial comments: {call.vicidial_sync_status||"PENDING"} ? Transfer: {call.transfer_status||"Not requested"}</p>{!active&&<button disabled={busy} onClick={()=>command("sync-comments")}>Retry comments sync</button>}</section>}
     <section className="call-detail-columns">
       <article className="admin-card detail-column conversation-column">
         <header className="detail-card-head"><div><h2>Conversation</h2><p>Live agent and client transcript</p></div><span className={active ? "conversation-live" : ""}>{active ? "LIVE" : call.status}</span></header>
@@ -202,7 +204,8 @@ export default function CallDetailPage({ portal = "admin" }: { portal?: "admin" 
         <div className="call-versus"><div className="versus-person agent">{call.agent_avatar ? <img src={call.agent_avatar} alt="" /> : <span>{initials(call.agent_name)}</span>}<small>Agent</small><b>{call.agent_name}</b></div><i>VS</i><div className="versus-person client"><span>{initials(customer)}</span><small>Client</small><b>{customer}</b></div></div><p>{call.lead_number || "Number unavailable"}</p>
         <hr /><small>Answered</small><p>{call.answered_at ? new Date(call.answered_at).toLocaleString() : "Awaiting answer"}</p>
         {active ? <div className="dialer-controls" aria-label="Live call controls">
-          <button className={call.recording_active ? "control-active" : ""} disabled={busy || call.status !== "ANSWERED"} onClick={() => command(call.recording_active ? "record-stop" : "record-start")} data-tooltip={call.recording_active ? "Stop recording" : "Start recording"} aria-label={call.recording_active ? "Stop recording" : "Start recording"}><FiMic /></button>
+          {call.telephony_provider==="VICIDIAL"&&<><button disabled={busy||call.status!=="ANSWERED"||!call.transfer_consent||["SUBMITTED","UNCERTAIN"].includes(call.transfer_status||"")} onClick={()=>command("transfer")}>Transfer to human</button><button disabled={busy} onClick={()=>command("sync-comments")}>Sync lead comments</button></>}
+          <button className={call.recording_active ? "control-active" : ""} disabled={busy || call.status !== "ANSWERED" || call.telephony_provider === "VICIDIAL"} onClick={() => command(call.recording_active ? "record-stop" : "record-start")} data-tooltip={call.recording_active ? "Stop recording" : "Start recording"} aria-label={call.recording_active ? "Stop recording" : "Start recording"}><FiMic /></button>
           <button className={call.on_hold ? "control-active" : ""} disabled={busy || call.status !== "ANSWERED"} onClick={() => command(call.on_hold ? "resume" : "hold")} data-tooltip={call.on_hold ? "Resume call" : "Hold call"} aria-label={call.on_hold ? "Resume call" : "Hold call"}>{call.on_hold ? <FiPlay /> : <FiPause />}</button>
           <button className="danger" disabled={busy} onClick={() => command("hangup")} data-tooltip="End call" aria-label="End call"><FiPhoneOff /></button>
         </div> : <div className="ended-downloads">

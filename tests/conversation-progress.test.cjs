@@ -95,3 +95,13 @@ test('real tester sends progress in the first system message and uses only the l
     assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').length,3);
   }finally{if(id)await call('stop',{});global.fetch=original;}
 });
+
+test('comprehension checks use the previous customer words instead of looping on failed hearing', () => {
+  const history = [user('My appointment is on Friday.'), assistant("I didn't catch that. Could you say it again? [interrupted]")];
+  for (const text of ["You didn't catch that what I said to you?", "What I told you, you didn't get that?", "You did not understand me?"]) {
+    const reply = directConversationReply(history, text).text;
+    assert.match(reply, /My appointment is on Friday/);
+    assert.doesNotMatch(reply, /didn't catch|Could you say it again|\[interrupted\]/);
+  }
+  assert.equal(directConversationReply(history, 'What time is my appointment?'), undefined);
+});

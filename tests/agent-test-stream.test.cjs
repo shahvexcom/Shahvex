@@ -103,3 +103,39 @@ test('empty or silent upstream PCM reports a synthesis error', async () => {
     ?new Response(JSON.stringify({message:{content:'A full answer.'},done:true})+'\n')
     :new Response(new Uint8Array(4800),{headers:pcmHeaders})}),/empty or silent/);
 });
+
+test('time-permission questions split across model tokens never reach transcript, memory or speech', async () => {
+  for (const phraseStreaming of [false, true]) {
+    for (const question of ['Is now an okay time?', 'Is this a good time?', 'Do you have a quick minute?', 'Is time good?', 'Are you available to talk?', 'Can we talk?', 'Is now okay?']) {
+      let full = ''; const events = [], spoken = [];
+      const output = 'I am calling about rebate updates. ' + question;
+      await streamAgentReply({phraseStreaming, messages: [], voice: 'selected', signal: new AbortController().signal,
+        onText: text => { full = text; }, send: async event => { events.push(event); }, timing: async () => {},
+        engine: async (port, path, init) => {
+          if (port === 11434) return new Response([...output].map((text, i) => JSON.stringify({message: {content: text}, done: i === output.length - 1})).join('\n') + '\n');
+          spoken.push(JSON.parse(init.body).text);
+          return new Response(new Uint8Array(1920).fill(12), {headers: pcmHeaders});
+        },
+      });
+      assert.equal(full.trim(), 'I am calling about rebate updates.', question);
+      assert.equal(events.filter(e => e.type === 'delta').map(e => e.text).join('').trim(), full.trim());
+      assert.deepEqual(spoken, ['I am calling about rebate updates.']);
+    }
+  }
+});
+
+test('model-generated interruption markers never reach transcript or stored answer', async () => {
+  let full = ''; const deltas = [], spoken = [];
+  const chunks = ["I heard you. [inter", "rupted] [interrupted]", " [interrupted by customer]"];
+  await streamAgentReply({messages: [], voice: 'selected', signal: new AbortController().signal,
+    onText: text => { full = text; }, send: async event => { if(event.type === 'delta') deltas.push(event.text); }, timing: async () => {},
+    engine: async (port, path, init) => {
+      if(port === 11434) return new Response(chunks.map((text,i) => JSON.stringify({message:{content:text},done:i===chunks.length-1})).join('\n')+'\n');
+      spoken.push(JSON.parse(init.body).text);
+      return new Response(new Uint8Array(1920).fill(12), {headers:pcmHeaders});
+    },
+  });
+  assert.equal(full.trim(), 'I heard you.');
+  assert.equal(deltas.join('').trim(), 'I heard you.');
+  assert.deepEqual(spoken, ['I heard you.']);
+});

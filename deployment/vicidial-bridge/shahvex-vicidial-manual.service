@@ -1,0 +1,16 @@
+[Unit]
+Description=Shahvex isolated manual AudioSocket test (temporary)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+WorkingDirectory=/opt/shahvex-vicidial
+ExecStart=/usr/bin/node /opt/shahvex-vicidial/manual-test-server.cjs /etc/shahvex-vicidial-manual.json
+Restart=no
+StateDirectory=shahvex-vicidial
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true

@@ -1,3 +1,6 @@
+import { saveBpoAgentProfile } from "@/lib/bpo-agent-profile";
+import { conversationStyles } from "@/lib/agent-script-details";
+import { saveAgentCampaign } from "@/lib/agent-campaign-assignment";
 import { localVoices } from "@/lib/agent-test";
 import { randomUUID } from "node:crypto";
 import { hash } from "bcryptjs";
@@ -12,16 +15,18 @@ const agentFormSchema = z.object({
   connectionId: z.string().uuid(),
   campaignId: z.string().trim().min(1).max(80),
   voiceId: z.string().min(1).max(64),
-  scriptId: z.string().uuid(),
-  leadSheetId: z.string().uuid(),
+  scriptId: z.string().uuid().optional().or(z.literal('')),
+  campaignDefinitionId:z.string().uuid().optional().or(z.literal('')),
+  leadSheetId: z.string().uuid().optional().or(z.literal("")),
   dialingMode: z.enum(["AUTO", "MANUAL", "BOTH"]),
   avatarUrl: z.string().url().max(500).optional().or(z.literal("")),
 });
-const createSchema = agentFormSchema;
+const profileSchema=z.object({profileOnly:z.literal(true),name:z.string().trim().min(2).max(80),gender:z.enum(['MALE','FEMALE','OTHER']),voiceId:z.string().min(1).max(64),conversationStyle:z.enum(conversationStyles).default('Professional'),speaksFirst:z.enum(['ai','customer']).default('customer'),avatarUrl:z.string().url().max(500).optional().or(z.literal(''))});
+const createSchema = z.union([profileSchema,agentFormSchema]);
 const activitySchema = z.object({ action: z.literal("activity"), agentId: z.string().uuid(), isActive: z.boolean() });
 const editSchema = agentFormSchema.extend({ action: z.literal("edit"), agentId: z.string().uuid() });
 
-const agentFields = `a.id,a.name,a.gender,a.accent,a.status,a.created_at,COALESCE(a.avatar_url,'') avatar_url,
+const agentFields = `a.conversation_style,a.speaks_first,(SELECT d.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id WHERE x.agent_id=a.id) campaign_name,(SELECT k.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id JOIN campaign_categories k ON k.id=d.category_id WHERE x.agent_id=a.id) category_name,(SELECT campaign_id FROM campaign_agent_assignments x WHERE x.agent_id=a.id AND x.enabled) campaign_definition_id,a.id,a.name,a.gender,a.accent,a.status,a.created_at,COALESCE(a.avatar_url,'') avatar_url,
   COALESCE(a.local_voice_id,b.voice_id) voice_id,b.voice_name,b.source_script_id,b.script_name,b.source_lead_id,b.lead_file_name,b.is_active,b.dialing_mode,
   COALESCE(lv.status,v.status,'INACTIVE') voice_status,
   tc.label telnyx_label,gc.label groq_label,
@@ -104,7 +109,7 @@ export async function GET() {
     ]);
 
     const local=await localVoices(session.agentId);
-    const [connections,voipAssignments]=await Promise.all([client.query("SELECT id,name,enabled,status FROM voip_connections WHERE owner_id=$1 ORDER BY name",[session.agentId]),client.query("SELECT va.agent_id,va.connection_id,va.campaign_id FROM voip_agent_assignments va JOIN bpo_created_agents b ON b.agent_id=va.agent_id AND b.bpo_id=va.owner_id WHERE va.owner_id=$1",[session.agentId])]);
+    const [connections,voipAssignments]=await Promise.all([client.query("SELECT id,name,enabled,status,live_config FROM voip_connections WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY name",[session.agentId]),client.query("SELECT va.agent_id,va.connection_id,va.campaign_id FROM voip_agent_assignments va JOIN bpo_created_agents b ON b.agent_id=va.agent_id AND b.bpo_id=va.owner_id WHERE va.owner_id=$1",[session.agentId])]);
     voices.rows.push(...local.voices.map(v=>({...v,telnyx_label:null,groq_label:null})));
     return Response.json({
       agents: agents.rows.map(row => {
@@ -127,6 +132,7 @@ export async function POST(request: Request) {
   const parsed = createSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ message: parsed.error.issues[0]?.message || "Enter valid agent details." }, { status: 400 });
 
+  if('profileOnly' in parsed.data)return saveBpoAgentProfile(session.agentId,parsed.data);
   const agentId = randomUUID();
   const username = `bpo-${agentId.replaceAll("-", "").slice(0, 20)}`;
   const passwordHash = await hash(randomUUID(), 12);
@@ -140,7 +146,7 @@ export async function POST(request: Request) {
       return Response.json({ message: "Your BPO account is not approved." }, { status: 403 });
     }
 
-    const voip=await client.query("SELECT id FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[parsed.data.connectionId,session.agentId]);
+    const voip=await client.query("SELECT id,live_config FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[parsed.data.connectionId,session.agentId]);
     if(!voip.rows[0]){await client.query("ROLLBACK");return Response.json({message:"Save an enabled VoIP connection in your BPO workspace before creating an agent."},{status:400});}
     const [plan, existing, voice, sourceScript, sourceLeads, duplicateName] = await Promise.all([
       bpoEntitlements(client, session.agentId),
@@ -150,10 +156,10 @@ export async function POST(request: Request) {
         WHERE x.bpo_id=$1 AND x.is_active=TRUE AND v.id=$2 AND v.status='ACTIVE'
         UNION ALL SELECT id,name,accent,NULL,NULL,TRUE FROM local_voice_registry
         WHERE id=$2 AND status='ACTIVE' AND (is_global=TRUE OR owner_id=$1)`, [session.agentId, parsed.data.voiceId]),
-      client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
+      parsed.data.campaignDefinitionId ? campaignSource(client,session.agentId,parsed.data) : client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
         FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [parsed.data.scriptId, session.agentId]),
-      client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
-        FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [parsed.data.leadSheetId, session.agentId]),
+      !voip.rows[0].live_config?.enabled && parsed.data.leadSheetId ? client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
+        FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [parsed.data.leadSheetId, session.agentId]) : Promise.resolve({rows:[]}),
       client.query("SELECT id FROM agents WHERE name=$1 FOR UPDATE", [parsed.data.name]),
     ]);
     const agentLimit = plan.agents;
@@ -180,7 +186,7 @@ export async function POST(request: Request) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Choose a script uploaded in your BPO workspace." }, { status: 403 });
     }
-    const leads = sourceLeads.rows[0];
+    const leads = voip.rows[0].live_config?.enabled ? {id:null,lead_file_name:'',lead_file_url:null,lead_file_type:null,lead_headers:[],lead_rows:[],lead_file_size:0} : sourceLeads.rows[0];
     if (!leads) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Choose a customer sheet uploaded in your BPO workspace." }, { status: 403 });
@@ -206,6 +212,7 @@ export async function POST(request: Request) {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, [agentId, session.agentId, selectedVoice.is_local?null:selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, parsed.data.dialingMode]);
 
     await client.query("INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id) VALUES($1,$2,$3,$4,'OUTBOUND',$5)",[randomUUID(),session.agentId,agentId,parsed.data.connectionId,parsed.data.campaignId]);
+    await saveAgentCampaign(client,agentId,session.agentId,parsed.data.campaignDefinitionId);
     await client.query("COMMIT");
     return Response.json({ message: `${parsed.data.name} is ready for your calling team.`, agentId }, { status: 201 });
   } catch (error) {
@@ -224,6 +231,8 @@ export async function PATCH(request: Request) {
   const session = await requireApprovedBpo();
   if (!session) return Response.json({ message: "Unauthenticated" }, { status: 401 });
   const body = await request.json().catch(() => null);
+  const profileEdit=profileSchema.extend({action:z.literal('edit'),agentId:z.string().uuid()}).safeParse(body);
+  if(profileEdit.success)return saveBpoAgentProfile(session.agentId,profileEdit.data,profileEdit.data.agentId);
   const parsedActivity = activitySchema.safeParse(body);
   const parsedEdit = parsedActivity.success ? null : editSchema.safeParse(body);
   if (!parsedActivity.success && !parsedEdit?.success) return Response.json({ message: "Choose valid calling agent details." }, { status: 400 });
@@ -251,7 +260,7 @@ export async function PATCH(request: Request) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Calling agent not found." }, { status: 404 });
     }
-    const voip=await client.query("SELECT id FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[data.connectionId,session.agentId]);
+    const voip=await client.query("SELECT id,live_config FROM voip_connections WHERE id=$1 AND owner_id=$2 AND enabled=TRUE FOR UPDATE",[data.connectionId,session.agentId]);
     if(!voip.rows[0]){await client.query("ROLLBACK");return Response.json({message:"Choose an enabled VoIP connection from your workspace."},{status:400});}
     const [voice, sourceScript, sourceLeads, duplicateName] = await Promise.all([
       client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id,FALSE is_local
@@ -259,10 +268,10 @@ export async function PATCH(request: Request) {
         WHERE x.bpo_id=$1 AND x.is_active=TRUE AND v.id=$2 AND v.status='ACTIVE'
         UNION ALL SELECT id,name,accent,NULL,NULL,TRUE FROM local_voice_registry
         WHERE id=$2 AND status='ACTIVE' AND (is_global=TRUE OR owner_id=$1)`, [session.agentId, data.voiceId]),
-      client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
+      data.campaignDefinitionId ? campaignSource(client,session.agentId,data) : client.query(`SELECT id,script_file_name,script_file_url,script_file_type,script_text,script_file_size
         FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [data.scriptId, session.agentId]),
-      client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
-        FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [data.leadSheetId, session.agentId]),
+      !voip.rows[0].live_config?.enabled && data.leadSheetId ? client.query(`SELECT id,lead_file_name,lead_file_url,lead_file_type,lead_headers,lead_rows,lead_file_size
+        FROM script_assignments WHERE id=$1 AND agent_id=$2 AND created_by=$2 FOR UPDATE`, [data.leadSheetId, session.agentId]) : Promise.resolve({rows:[]}),
       client.query("SELECT id FROM agents WHERE name=$1 AND id<>$2 FOR UPDATE", [data.name, data.agentId]),
     ]);
     if (duplicateName.rows[0]) {
@@ -274,7 +283,7 @@ export async function PATCH(request: Request) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Choose an active voice from the Voices tab." }, { status: 403 });
     }
-    const script = sourceScript.rows[0], leads = sourceLeads.rows[0];
+    const script = sourceScript.rows[0], leads = voip.rows[0].live_config?.enabled ? {id:null,lead_file_name:'',lead_file_url:null,lead_file_type:null,lead_headers:[],lead_rows:[],lead_file_size:0} : sourceLeads.rows[0];
     if (!script || !leads) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Choose a script and customer sheet uploaded in your BPO workspace." }, { status: 403 });
@@ -296,7 +305,9 @@ export async function PATCH(request: Request) {
     await client.query(`UPDATE bpo_created_agents SET voice_id=$1,voice_name=$2,source_script_id=$3,script_name=$4,source_lead_id=$5,lead_file_name=$6,dialing_mode=$7
       WHERE agent_id=$8 AND bpo_id=$9`, [selectedVoice.is_local?null:selectedVoice.id, selectedVoice.name, script.id, script.script_file_name, leads.id, leads.lead_file_name, data.dialingMode, data.agentId, session.agentId]);
     await client.query("INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id) VALUES($1,$2,$3,$4,'OUTBOUND',$5) ON CONFLICT(owner_id,agent_id) DO UPDATE SET connection_id=EXCLUDED.connection_id,direction='OUTBOUND',campaign_id=EXCLUDED.campaign_id,updated_at=NOW()",[randomUUID(),session.agentId,data.agentId,data.connectionId,data.campaignId]);
+    await saveAgentCampaign(client,data.agentId,session.agentId,data.campaignDefinitionId);
     await client.query("COMMIT");
+    try{await (await import('@/lib/vicidial-live')).stopVicidialAgent(data.agentId);}catch{return Response.json({message:`${data.name} saved. Native intake pause is unconfirmed; verify VoIP before resuming.`},{status:207});}
     return Response.json({ message: `${data.name} has been updated.` });
   } catch (error) {
     await client.query("ROLLBACK").catch(() => undefined);
@@ -305,4 +316,9 @@ export async function PATCH(request: Request) {
   } finally {
     client.release();
   }
+}
+
+async function campaignSource(client:import('pg').PoolClient,owner:string,input:{campaignDefinitionId?:string;connectionId:string;campaignId:string}){
+ return client.query(`SELECT NULL::text id,name script_file_name,NULL::text script_file_url,NULL::text script_file_type,script script_text,0 script_file_size
+ FROM campaign_definitions WHERE id=$1 AND owner_id=$2 AND connection_id=$3 AND external_campaign_id=$4 AND enabled=TRUE AND LENGTH(TRIM(script))>0 FOR SHARE`,[input.campaignDefinitionId,owner,input.connectionId,input.campaignId]);
 }

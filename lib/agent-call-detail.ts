@@ -8,24 +8,27 @@ import { syncLiveAssistantTranscript } from "@/lib/call-start";
 export async function agentCallDetail(id: string, agentId: string) {
   if (!z.string().uuid().safeParse(id).success) return Response.json({ message: "Invalid call ID." }, { status: 400 });
   const client = await db();
-  const result = await client.query(`SELECT c.id,c.status,c.conversation_state,c.failure_reason,c.lead_name,c.lead_number,c.recording_url,c.recording_id,c.recording_active,c.on_hold,c.duration_seconds,c.summary,c.notes,c.start_note,c.mid_note,c.final_note,c.outcome,c.transcript,c.conversation_history,c.created_at,c.answered_at,c.ended_at,c.updated_at,a.name agent_name,COALESCE(a.avatar_url,'') agent_avatar,COALESCE(ac.config->>'outboundNumber','') agent_number,COALESCE(tc.label,'Telnyx') telnyx_credential,COALESCE(gc.label,'Not assigned') groq_credential FROM agent_calls c JOIN agents a ON a.id=c.agent_id LEFT JOIN agent_credentials at ON at.agent_id=a.id AND at.provider='TELNYX' LEFT JOIN ai_credentials ac ON ac.id=at.credential_id LEFT JOIN ai_credentials tc ON tc.id=at.credential_id LEFT JOIN agent_credentials ag ON ag.agent_id=a.id AND ag.provider='GROQ' LEFT JOIN ai_credentials gc ON gc.id=ag.credential_id WHERE c.call_type='LEAD' AND c.id=$1 AND c.agent_id=$2`, [id,agentId]);
+  const result = await client.query(`SELECT c.telephony_provider,c.collected_fields,c.vicidial_sync_status,c.transfer_status,c.transfer_consent,c.script_snapshot,c.id,c.status,c.conversation_state,c.failure_reason,c.lead_name,c.lead_number,c.recording_url,c.recording_id,c.recording_active,c.on_hold,c.duration_seconds,c.summary,c.notes,c.start_note,c.mid_note,c.final_note,c.outcome,c.transcript,c.conversation_history,c.created_at,c.answered_at,c.ended_at,c.updated_at,a.name agent_name,COALESCE(a.avatar_url,'') agent_avatar,COALESCE(ac.config->>'outboundNumber','') agent_number,CASE WHEN c.telephony_provider='VICIDIAL' THEN 'VICIdial' ELSE COALESCE(tc.label,'Telnyx') END telnyx_credential,COALESCE(gc.label,'Not assigned') groq_credential FROM agent_calls c JOIN agents a ON a.id=c.agent_id LEFT JOIN agent_credentials at ON at.agent_id=a.id AND at.provider='TELNYX' LEFT JOIN ai_credentials ac ON ac.id=at.credential_id LEFT JOIN ai_credentials tc ON tc.id=at.credential_id LEFT JOIN agent_credentials ag ON ag.agent_id=a.id AND ag.provider='GROQ' LEFT JOIN ai_credentials gc ON gc.id=ag.credential_id WHERE c.call_type='LEAD' AND c.id=$1 AND c.agent_id=$2`, [id,agentId]);
   const call = result.rows[0];
   if (!call) return Response.json({ message: "Call not found." }, { status: 404 });
   const script = await client.query("SELECT lead_headers,script_text FROM script_assignments WHERE agent_id=$1 ORDER BY created_at DESC LIMIT 1", [agentId]);
   call.script_lead_headers = script.rows[0]?.lead_headers || [];
-  call.script_text = script.rows[0]?.script_text || "";
+  call.script_text = call.script_snapshot?.script || script.rows[0]?.script_text || "";
   const assistant = await client.query("SELECT telnyx_ai_conversation_id FROM agent_calls WHERE id=$1 AND agent_id=$2", [id,agentId]);
   call.telnyx_ai_conversation_id = assistant.rows[0]?.telnyx_ai_conversation_id;
   await syncLiveAssistantTranscript(call,client);
   return Response.json({ calls: [call] }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
-const commandSchema = z.object({ id: z.string().uuid(), action: z.enum(["hangup","record-start","record-stop","hold","resume"]) });
+const commandSchema = z.object({ id: z.string().uuid(), action: z.enum(["hangup","record-start","record-stop","hold","resume","transfer","sync-comments"]) });
 export async function agentCallCommand(body: unknown, agentId: string) {
   const parsed = commandSchema.safeParse(body);
   if (!parsed.success) return Response.json({ message: "Invalid call action." }, { status: 400 });
   const { id, action } = parsed.data;
   const client = await db();
+  const vicidial = await (await import("./vicidial-controls")).vicidialCallCommand(id,action,agentId);
+  if(vicidial)return vicidial;
+  if(action==="transfer"||action==="sync-comments")return Response.json({message:"This action requires a VICIdial call."},{status:409});
   const result = await client.query(`SELECT c.status,c.telnyx_call_control_id,ac.secret_ciphertext FROM agent_calls c
     JOIN agent_credentials a ON a.agent_id=c.agent_id AND a.provider='TELNYX'
     JOIN ai_credentials ac ON ac.id=a.credential_id WHERE c.id=$1 AND c.agent_id=$2`, [id,agentId]);

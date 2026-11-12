@@ -1,0 +1,18 @@
+; Example for a dedicated Remote Agent phone extension, NOT a carrier route.
+; Include this context in the actual VICIdial remote phone's dialplan context.
+; Give each remote user its own extension/AGI argument; one line per AI agent.
+; Confirm caller-id NAME contains VICIdial's caller-code on this leg.
+[shahvex-ai-remote]
+exten => 8371,1,Answer()
+ same => n,AGI(/opt/shahvex-vicidial/register-call.py,9001)
+ same => n,GotoIf($["${SHAHVEX_AUDIO_UUID}" = ""]?failed)
+ same => n,AudioSocket(${SHAHVEX_AUDIO_UUID},127.0.0.1:9019)
+ same => n,Hangup()
+ same => n(failed),Hangup()
+
+exten => 8372,1,Answer()
+ same => n,AGI(/opt/shahvex-vicidial/register-call.py,9002)
+ same => n,GotoIf($["${SHAHVEX_AUDIO_UUID}" = ""]?failed)
+ same => n,AudioSocket(${SHAHVEX_AUDIO_UUID},127.0.0.1:9019)
+ same => n,Hangup()
+ same => n(failed),Hangup()

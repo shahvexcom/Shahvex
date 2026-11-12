@@ -1,0 +1,21 @@
+[Unit]
+Description=Shahvex VICIdial AudioSocket bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=asterisk
+Group=asterisk
+WorkingDirectory=/opt/shahvex-vicidial
+EnvironmentFile=/etc/shahvex-vicidial.env
+ExecStart=/usr/bin/node /opt/shahvex-vicidial/server.cjs
+Restart=on-failure
+RestartSec=3
+StateDirectory=shahvex-vicidial
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

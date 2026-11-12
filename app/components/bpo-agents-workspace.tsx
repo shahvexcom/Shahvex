@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { FiVolume2, FiBarChart2, FiCamera, FiCheck, FiEdit3, FiFileText, FiKey, FiMic, FiPause, FiPhoneCall, FiPlay, FiRefreshCw, FiUserPlus, FiUsers, FiX } from "react-icons/fi";
+import { FiVolume2, FiChevronDown, FiCamera, FiCheck, FiEdit3, FiFileText, FiKey, FiMic, FiPause, FiPhoneCall, FiPlay, FiRefreshCw, FiUserPlus, FiUsers, FiX } from "react-icons/fi";
+import { conversationStyles } from "@/lib/agent-script-details";
 import { CustomDropdown } from "./custom-dropdown";
 import "./bpo-agents-workspace.css";
 import "./bpo-agent-form-polish.css";
@@ -10,7 +11,7 @@ import "./bpo-agent-progress.css";
 
 type Voice = { selectable?:boolean; id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
 type Script = { id: string; script_file_name: string; lead_file_name: string; created_at: string };
-type CallingAgent = { connection_id?:string;campaign_id?:string;
+type CallingAgent = {conversation_style?:string;speaks_first?:string;campaign_name?:string;category_name?:string;campaign_definition_id?:string; connection_id?:string;campaign_id?:string;
   id: string;
   name: string;
   gender: "MALE" | "FEMALE" | "OTHER";
@@ -31,7 +32,7 @@ type CallingAgent = { connection_id?:string;campaign_id?:string;
   groq_label: string | null;
   progress: { calls: number; leadsCompleted: number; leadsTotal: number; leadsPercent: number; tasksCompleted: number; tasksTotal: number; tasksPercent: number };
 };
-type Form = { connectionId:string;campaignId:string; name: string; gender: "MALE" | "FEMALE" | "OTHER"; voiceId: string; scriptId: string; leadSheetId: string; dialingMode: "AUTO" | "MANUAL" | "BOTH"; avatarUrl: string };
+type Form = {conversationStyle?:string;speaksFirst?:string;campaignDefinitionId?:string; connectionId:string;campaignId:string; name: string; gender: "MALE" | "FEMALE" | "OTHER"; voiceId: string; scriptId: string; leadSheetId: string; dialingMode: "AUTO" | "MANUAL" | "BOTH"; avatarUrl: string };
 
 const genderLabel = (gender: string) => gender.charAt(0) + gender.slice(1).toLowerCase();
 const initialForm: Form = {connectionId:"",campaignId:"", name: "", gender: "OTHER", voiceId: "", scriptId: "", leadSheetId: "", dialingMode: "BOTH", avatarUrl: "" };
@@ -43,7 +44,7 @@ export default function BpoAgentsWorkspace() {
   const stopPreview=useCallback(()=>{previewAbort.current?.abort();previewAudio.current?.pause();previewAudio.current=null;if(previewURL.current)URL.revokeObjectURL(previewURL.current);previewURL.current='';setPreviewing(false);},[]);
   useEffect(()=>()=>{previewAbort.current?.abort();previewAudio.current?.pause();if(previewURL.current)URL.revokeObjectURL(previewURL.current);},[]);
   const previewVoice=async()=>{stopPreview();setPreviewing(true);const abort=new AbortController();previewAbort.current=abort;try{const r=await fetch('/api/bpo/voice-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice:form.voiceId}),signal:abort.signal});if(!r.ok)throw Error((await r.json()).error);const blob=await r.blob();if(abort.signal.aborted)return;previewURL.current=URL.createObjectURL(blob);const audio=new Audio(previewURL.current);previewAudio.current=audio;audio.onended=stopPreview;audio.onerror=stopPreview;await audio.play();}catch(e){if(!abort.signal.aborted){stopPreview();setError(e instanceof Error?e.message:'Preview unavailable');}}};
-  const [connections,setConnections]=useState<{id:string;name:string;enabled:boolean;status:string}[]>([]);
+  const [connections,setConnections]=useState<{id:string;name:string;enabled:boolean;status:string;live_config?:{enabled?:boolean}}[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [agentLimit, setAgentLimit] = useState(0);
@@ -81,18 +82,10 @@ export default function BpoAgentsWorkspace() {
   useEffect(() => { void load(); }, [load]);
 
   const remainingSlots = Math.max(0, agentLimit - agents.length);
-  const readyAgents = agents.filter(agent => agent.telnyx_label || agent.groq_label).length;
-  const assignedScripts = agents.filter(agent => Boolean(agent.script_name)).length;
-  const canCreate = connections.some(c=>c.enabled) && remainingSlots > 0 && voices.length > 0 && scripts.length > 0;
-  const blocker = !connections.some(c=>c.enabled) ? "Add an enabled connection in Dialing > VoIP before creating an agent." : !agentLimit
-    ? "Buy a plan with agent slots to create a calling agent."
-    : !remainingSlots
-      ? "All plan agent slots are in use."
-      : !voices.length
-        ? "No approved voices are currently available. Please retry shortly."
-        : !scripts.length
-          ? "Upload a script and customer sheet first."
-          : "";
+  const readyAgents = agents.filter(agent => agent.is_active&&agent.voice_status==="ACTIVE").length;
+  const assignedScripts = agents.filter(agent => Boolean(agent.campaign_name)).length;
+  const canCreate = remainingSlots > 0 && voices.length > 0;
+  const blocker = !agentLimit?'Buy a plan with agent slots to create an agent.':!remainingSlots?'All plan agent slots are in use.':!voices.length?'No approved voices are available.':'';
 
   const openForm = () => {
     if (!canCreate) return;
@@ -107,7 +100,7 @@ export default function BpoAgentsWorkspace() {
     setMessage("");
     setError("");
     setEditingAgent(agent);
-    setForm({ connectionId:agent.connection_id||"",campaignId:agent.campaign_id||"",name: agent.name, gender: agent.gender, voiceId: agent.voice_id, scriptId: agent.source_script_id, leadSheetId: agent.source_lead_id || agent.source_script_id, dialingMode: agent.dialing_mode, avatarUrl: agent.avatar_url || "" });
+    setForm({ conversationStyle:agent.conversation_style||"Professional",speaksFirst:agent.speaks_first||"customer",connectionId:agent.connection_id||"",campaignId:agent.campaign_id||"",name: agent.name, gender: agent.gender, voiceId: agent.voice_id, scriptId: agent.source_script_id||"", leadSheetId: agent.source_lead_id || agent.source_script_id, dialingMode: agent.dialing_mode, avatarUrl: agent.avatar_url || "" });
     setAvatarPreview(agent.avatar_url || "");
     setShowForm(true);
   };
@@ -153,7 +146,7 @@ export default function BpoAgentsWorkspace() {
       const response = await fetch("/api/bpo/agents", {
         method: editingAgent ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(editingAgent ? { ...form, action: "edit", agentId: editingAgent.id } : form),
+        body: JSON.stringify({profileOnly:true,name:form.name,gender:form.gender,voiceId:form.voiceId,conversationStyle:form.conversationStyle||"Professional",speaksFirst:form.speaksFirst||"customer",avatarUrl:form.avatarUrl,...(editingAgent?{action:"edit",agentId:editingAgent.id}:{})}),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.message || `Unable to ${editingAgent ? "update" : "create"} calling agent.`);
@@ -187,7 +180,7 @@ export default function BpoAgentsWorkspace() {
 
   return <main className="bpo-agent-page">
     <div className="bpo-agent-heading">
-      <div><p className="bpo-eyebrow">DIALING TEAM</p><h1>Create calling agents</h1><p>Create an AI calling agent with a selected voice and an uploaded script from your workspace.</p></div>
+      <div><p className="bpo-eyebrow">DIALING TEAM</p><h1>Create calling agents</h1><p>Create an AI agent with a voice and conversation style. Assign campaigns in VoIP.</p></div>
       <div className="bpo-agent-heading-actions"><button type="button" className="bpo-agent-refresh" onClick={() => void load()}><FiRefreshCw /> Refresh</button><button type="button" className="bpo-agent-create" disabled={!canCreate} data-tooltip={blocker} onClick={openForm}><FiUserPlus /> Create agent</button></div>
     </div>
 
@@ -195,27 +188,27 @@ export default function BpoAgentsWorkspace() {
       <Kpi icon={<FiUsers />} tone="purple" label="Created agents" value={agents.length} />
       <Kpi icon={<FiUserPlus />} tone="blue" label="Available slots" value={`${remainingSlots} / ${agentLimit}`} />
       <Kpi icon={<FiKey />} tone="green" label="AI ready agents" value={readyAgents} />
-      <Kpi icon={<FiFileText />} tone="orange" label="Scripts assigned" value={assignedScripts} />
+      <Kpi icon={<FiFileText />} tone="orange" label="Campaign assigned" value={assignedScripts} />
     </section>
 
     {message && <p className="bpo-agent-message success"><FiCheck /> {message}</p>}
     {error && <p className="bpo-agent-message error">{error}</p>}
 
     <section className="bpo-agent-section">
-      <header><div><h2>Your calling agents</h2><p>Every agent keeps the AI credentials and script selected when it was created.</p></div><span>{agents.length} {agents.length === 1 ? "agent" : "agents"}</span></header>
-      {agents.length ? <div className="bpo-agent-grid">{agents.map(agent => <article className={`bpo-created-agent ${agent.is_active ? "" : "is-inactive"}`} key={agent.id}>
+      <header><div><h2>Your calling agents</h2><p>Agents are grouped by their assigned campaign. Open a group to view its agents.</p></div><span>{agents.length} {agents.length === 1 ? "agent" : "agents"}</span></header>
+      {agents.length ? <div>{[...new Set(agents.map(a=>a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents'))].map(group=><details className="bpo-agent-campaign-group" key={group}><summary><span className="agent-group-icon" aria-hidden="true"><FiUsers/></span><span className="agent-group-copy"><small>Campaign team</small><strong>{group}</strong></span><span className="agent-group-count">{agents.filter(a=>(a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents')===group).length}<small>agents</small></span><FiChevronDown className="agent-group-chevron" aria-hidden="true"/></summary><div className="bpo-agent-grid">{agents.filter(a=>(a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents')===group).map(agent=><article className={`bpo-created-agent ${agent.is_active ? "" : "is-inactive"}`} key={agent.id}>
         <header><span className="bpo-agent-avatar">{agent.avatar_url ? <img src={agent.avatar_url} alt="" /> : agent.name.slice(0, 2).toUpperCase()}</span><div><h3>{agent.name}</h3><p>{genderLabel(agent.gender)} · {agent.accent}</p></div><em className={agent.is_active && agent.voice_status === "ACTIVE" ? "ready" : "inactive"}>{agent.is_active ? agent.voice_status === "ACTIVE" ? "Ready" : "Voice inactive" : "Inactive"}</em></header>
         <dl>
           <div><dt><FiMic /> AI voice</dt><dd>{agent.voice_name}</dd></div>
-          <div><dt><FiFileText /> Assigned script</dt><dd data-tooltip={agent.script_name}>{agent.script_name}</dd></div>
-          <div><dt><FiUsers /> Customer sheet</dt><dd data-tooltip={agent.lead_file_name}>{agent.lead_file_name || "Not available"}</dd></div>
+          <div><dt><FiUsers /> Campaign</dt><dd>{agent.campaign_name||"Unassigned"}</dd></div>
+          <div><dt>Conversation style</dt><dd>{agent.conversation_style||"Professional"}</dd></div>
           <div><dt><FiPhoneCall /> Dialing access</dt><dd>{dialingLabel(agent.dialing_mode)}</dd></div>
         </dl>
-        <AgentProgress progress={agent.progress} />
+
         <footer><span><FiPhoneCall /> {agent.telnyx_label || "No VoIP"}</span><span><FiKey /> {agent.groq_label || "No Knowledge base"}</span></footer>
         <div className="bpo-agent-card-actions"><button className="bpo-agent-edit" type="button" onClick={() => openEdit(agent)}><FiEdit3 /> Edit agent</button><button className={`bpo-agent-activity ${agent.is_active ? "active" : "inactive"}`} type="button" disabled={activityBusy === agent.id} onClick={() => void setAgentActivity(agent)}>{activityBusy === agent.id ? "Saving..." : agent.is_active ? <><FiPause /> Set inactive</> : <><FiPlay /> Set active</>}</button></div>
-      </article>)}</div>
-        : <div className="bpo-agent-empty"><FiUsers /><h3>No calling agents yet</h3><p>{blocker || "Create your first agent to connect an AI voice and an uploaded script."}</p>{canCreate && <button type="button" onClick={openForm}><FiUserPlus /> Create agent</button>}</div>}
+      </article>)}</div></details>)}</div>
+        : <div className="bpo-agent-empty"><FiUsers /><h3>No calling agents yet</h3><p>{blocker || "Create your first AI agent, then assign it to a campaign in VoIP."}</p>{canCreate && <button type="button" onClick={openForm}><FiUserPlus /> Create agent</button>}</div>}
     </section>
 
     {showForm && <div className="bpo-agent-modal-backdrop" onMouseDown={event => event.target === event.currentTarget && closeForm()}>
@@ -232,12 +225,9 @@ export default function BpoAgentsWorkspace() {
         </div>
         <label>Agent voice<CustomDropdown value={form.voiceId} onChange={value => {stopPreview();setForm(current => ({ ...current, voiceId: value }));}} ariaLabel="Agent voice" options={voices.map(voice => ({ value: voice.id, label: `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
         <button type="button" className="bpo-agent-preview" disabled={previewing||!voices.find(v=>v.id===form.voiceId)?.selectable} onClick={()=>void previewVoice()}><FiVolume2/>{previewing?'Playing preview...':'Preview voice'}</button>
-        <label>VoIP connection<CustomDropdown value={form.connectionId} ariaLabel="VoIP connection" onChange={value=>setForm(current=>({...current,connectionId:value}))} placeholder="Select your connection" options={connections.filter(c=>c.enabled).map(c=>({value:c.id,label:`${c.name}${c.status==='CONNECTED'?' - API verified':''}`}))}/></label>
-        <label>VICIdial outbound campaign ID<input required maxLength={80} value={form.campaignId} onChange={e=>setForm(current=>({...current,campaignId:e.target.value}))}/></label>
-        <label>Dialing access<CustomDropdown value={form.dialingMode} onChange={value => setForm(current => ({ ...current, dialingMode: value as Form["dialingMode"] }))} ariaLabel="Dialing access" options={[{ value: "AUTO", label: "Auto dialing only" }, { value: "MANUAL", label: "Manual dialing only" }, { value: "BOTH", label: "Auto + manual dialing" }]} /></label>
-        <label>Uploaded script<CustomDropdown value={form.scriptId} onChange={value => setForm(current => ({ ...current, scriptId: value }))} ariaLabel="Uploaded script" options={scripts.map(script => ({ value: script.id, label: script.script_file_name }))} /></label>
-        <label>Customer sheet<CustomDropdown value={form.leadSheetId} onChange={value => setForm(current => ({ ...current, leadSheetId: value }))} ariaLabel="Customer sheet" options={scripts.map(script => ({ value: script.id, label: script.lead_file_name }))} /></label>
-        <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading || !connections.some(c=>c.enabled&&c.id===form.connectionId)}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>
+        <label>Conversation style<CustomDropdown value={form.conversationStyle||'Professional'} ariaLabel="Conversation style" onChange={value=>setForm(current=>({...current,conversationStyle:value}))} options={conversationStyles.map(value=>({value,label:value}))}/></label>
+        <label>Who speaks first<CustomDropdown value={form.speaksFirst||'customer'} ariaLabel="Who speaks first" onChange={value=>setForm(current=>({...current,speaksFirst:value}))} options={[{value:'customer',label:'Customer speaks first'},{value:'ai',label:'AI speaks first'}]}/></label>
+        <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading || !form.voiceId}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>
       </form>
     </div>}
   </main>;
@@ -245,14 +235,4 @@ export default function BpoAgentsWorkspace() {
 
 function Kpi({ icon, tone, label, value }: { icon: React.ReactNode; tone: string; label: string; value: string | number }) {
   return <article><span className={tone}>{icon}</span><div><small>{label}</small><strong>{value}</strong></div></article>;
-}
-
-function AgentProgress({ progress }: { progress: CallingAgent["progress"] }) {
-  const callPercent = progress.leadsTotal > 0 ? Math.min(100, Math.round((progress.calls / progress.leadsTotal) * 100)) : 0;
-  const rows = [
-    { label: "Calls made", value: `${progress.calls}`, percent: callPercent, tone: "calls" },
-    { label: "Customer sheet progress", value: `${progress.leadsCompleted} / ${progress.leadsTotal}`, percent: progress.leadsPercent, tone: "leads" },
-    { label: "Script tasks collected", value: `${progress.tasksCompleted} / ${progress.tasksTotal}`, percent: progress.tasksPercent, tone: "tasks" },
-  ];
-  return <section className="bpo-agent-progress" aria-label="Agent task progress"><header><span><FiBarChart2 /> Progress</span><small>Customer data collection</small></header>{rows.map(row => <div className={`bpo-agent-progress-row ${row.tone}`} key={row.label}><div><small>{row.label}</small><strong>{row.value}</strong><em>{row.percent}%</em></div><i><b style={{ width: `${row.percent}%` }} /></i></div>)}</section>;
 }

@@ -49,9 +49,11 @@ type ReadyAgent = {
 
 type CallMetrics = { calls_today?: number; completed?: number };
 type AgentSchedule = { isEnabled: boolean; startTime: string; endTime: string; isActive?: boolean };
-type RosterAgent = { id: string; name: string; avatar_url?: string; status?: string; telnyx_credential?: string; groq_credential?: string; outbound_number?: string; lead_name?: string; lead_number?: string; dialed_calls?: number; is_running?: boolean; is_ready?: boolean; schedule?: AgentSchedule };
+type RosterAgent = { telephony_provider?:string; is_queued?:boolean; id: string; name: string; avatar_url?: string; status?: string; telnyx_credential?: string; groq_credential?: string; outbound_number?: string; lead_name?: string; lead_number?: string; dialed_calls?: number; is_running?: boolean; is_ready?: boolean; schedule?: AgentSchedule };
 
 type AgentCard = {
+  telephony_provider?:string;
+  is_queued?:boolean;
   id: string;
   kind: "running" | "ready" | "idle";
   name: string;
@@ -83,6 +85,8 @@ function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAg
     const runningCall = calls.find((call) => call.agent_name === agent.name && activeStates.includes(call.status));
     return {
       id: agent.id,
+      is_queued: agent.is_queued,
+      telephony_provider: agent.telephony_provider,
       kind: isRunning ? "running" : isReady ? "ready" : "idle",
       name: agent.name,
       outbound_number: agent.outbound_number || "Number not configured",
@@ -288,7 +292,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
         {loading ? (
           <ReadySkeleton />
         ) : agents.length ? (
-          <ReadyAgents agents={agents} view={view} busy={busy} startingId={startingId} start={(id) => { setStartingId(id); void command({ action: "start-agent", agentId: id }).finally(() => setStartingId("")); }} viewCall={(id) => router.push(`/controler/calls/${id}?from=live`)} editSchedule={setScheduleAgent} />
+          <ReadyAgents agents={agents} view={view} busy={busy} startingId={startingId} start={(id) => { setStartingId(id); void command({ action: "start-agent", agentId: id }).finally(() => setStartingId("")); }} viewCall={(id) => router.push(`/controler/calls/${id}?from=live`)} editSchedule={setScheduleAgent} stopQueue={(id)=>void command({action:"stop-agent",agentId:id})} />
         ) : (
           <div className="agent-empty-state">
             <FiUserX />
@@ -400,7 +404,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
   );
 }
 
-function ReadyAgents({ agents, view, busy, startingId, start, viewCall, editSchedule }: { agents: AgentCard[]; view: string; busy: boolean; startingId: string; start: (id: string) => void; viewCall: (id: string) => void; editSchedule: (agent: AgentCard) => void }) {
+function ReadyAgents({ agents, view, busy, startingId, start, viewCall, editSchedule, stopQueue }: { agents: AgentCard[]; view: string; busy: boolean; startingId: string; start: (id: string) => void; viewCall: (id: string) => void; editSchedule: (agent: AgentCard) => void; stopQueue: (id:string)=>void }) {
   return (
     <div className={`ready-agent-grid ${view}`}>
       {agents.map((agent) => (
@@ -428,7 +432,7 @@ function ReadyAgents({ agents, view, busy, startingId, start, viewCall, editSche
             </div>
             <div className="agent-card-meta">
               <div className="agent-topline">
-                <span className={`agent-badge ${agent.kind}`}>{agent.kind === "running" ? "Running" : agent.kind === "ready" ? "Ready agent" : "Agent not ready"}</span>
+                <span className={`agent-badge ${agent.kind}`}>{agent.kind === "running" ? "Running" : agent.kind === "ready" ? "Ready agent" : agent.is_queued ? "Waiting for answered call" : "Agent not ready"}</span>
                 <span className="agent-calls">{agent.dialed_calls || 0} calls</span>
               </div>
               <b>{agent.name}</b>
@@ -439,8 +443,8 @@ function ReadyAgents({ agents, view, busy, startingId, start, viewCall, editSche
             </div>
           </div>
           <button type="button" className={`admin-outline agent-schedule-button ${agent.schedule.isEnabled ? "enabled" : ""}`} disabled={busy} onClick={() => editSchedule(agent)}><FiCalendar /><span>{agent.schedule.isEnabled ? "Edit schedule" : "Set schedule"}</span></button>
-          {agent.kind === "ready" ? (
-            <button className="admin-primary live-agent-start" disabled={busy || Boolean(startingId) || !agent.lead_number} onClick={() => start(agent.id)}>
+          {agent.is_queued && agent.kind!=="running" ? <button className="admin-outline live-agent-start" disabled={busy} onClick={()=>stopQueue(agent.id)}>Stop queue</button> : agent.kind === "ready" ? (
+            <button className="admin-primary live-agent-start" disabled={busy || Boolean(startingId) || (agent.telephony_provider!=="VICIDIAL"&&!agent.lead_number)} onClick={() => start(agent.id)}>
               <FiPlay />
               <span>{startingId === agent.id ? "Calling..." : "Start call"}</span>
             </button>

@@ -74,14 +74,14 @@ export default function BpoScriptPanel() {
   };
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    if (!script || !leads) {
-      setMessage("Upload both files first.");
+    if (!script) {
+      setMessage("Choose an agent script. A customer sheet is optional.");
       return;
     }
     setBusy(true);
     const body = new FormData();
     body.append("script", script);
-    body.append("leads", leads);
+    if(leads)body.append("leads", leads);
     const r = await fetch("/api/bpo/scripts", { method: "POST", body });
     const j = await r.json();
     setMessage(j.message || "");
@@ -153,7 +153,7 @@ export default function BpoScriptPanel() {
       </div>
       <section className="bpo-uploaded-section">
         <h2>Uploaded files</h2>
-        <p>Agent script and customer sheet saved in your workspace.</p>
+        <p>Saved calling scripts. VICIdial campaign numbers stay on the dialer.</p>
         {!items.length && <div className="bpo-script-empty"><div><FiFileText /></div><h3>Your scripts start here</h3><p>Keep agent scripts and customer lead sheets together, ready for your calling team.</p><button type="button" className="bpo-upload-btn" disabled={uploadBlocked} onClick={() => setShow(true)}><FiUpload /> Upload workspace files</button>{uploadBlocked && <small>{storage.hasPlan ? "Your plan storage is full." : "Choose a plan to unlock file storage."}</small>}</div>}
         {items.map((x) => (
           <div className="bpo-file-pair" key={x.id}>
@@ -168,7 +168,7 @@ export default function BpoScriptPanel() {
                 load();
               }}
             />
-            <BpoFileActions
+            {x.lead_file_name&&<BpoFileActions
               id={x.id}
               name={x.lead_file_name}
               type={x.lead_file_type}
@@ -180,7 +180,7 @@ export default function BpoScriptPanel() {
                 setLoading(true);
                 load();
               }}
-            />
+            />}
           </div>
         ))}
       </section>
@@ -198,7 +198,7 @@ export default function BpoScriptPanel() {
             <p className="bpo-eyebrow">NEW WORKSPACE DATA</p>
             <h2 id="bpo-upload-title">Upload workspace files</h2>
             <p className="bpo-modal-copy">
-              Files are checked against your remaining plan storage. Each file must be 5MB or smaller.
+              Upload a calling script; no customer sheet is needed for VICIdial campaigns. Files count against plan storage and must be 5MB or smaller.
             </p>
             <div className="bpo-modal-tabs">
               <button
@@ -229,7 +229,7 @@ export default function BpoScriptPanel() {
                 Agent Script {script ? "✓" : ""}
               </span>
               <span className={leads ? "done" : ""}>
-                Customer Sheet {leads ? "✓" : ""}
+                Customer Sheet (optional) {leads ? "✓" : ""}
               </span>
             </div>
             {message && <p className="bpo-upload-message">{message}</p>}

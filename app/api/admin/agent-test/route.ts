@@ -1,6 +1,6 @@
 import { handleTestSession } from "@/lib/agent-test-speculative";
 import { extractAgentScript } from "@/lib/agent-script-extraction";
-import { conversationStyles } from "@/lib/agent-script-details";
+import { scriptTestConfig } from "@/lib/agent-script-details";
 import { cookies } from "next/headers";
 import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
 import { db } from "@/lib/database";
@@ -53,12 +53,7 @@ export async function POST(request: Request) {
       await warmSelectedVoice(parsed.data.voice);
       const details = await extractAgentScript(owner, parsed.data.script, request.signal);
       request.signal.throwIfAborted();
-      const config = { ...parsed.data, name: found.rows[0].name,
-        goal: details.goals.join("\n"), task: details.tasks.join("\n"),
-        instructions: [...details.instructions, ...details.conversationFlow, ...details.restrictions].join("\n"),
-        knowledge: [...details.knowledge, ...details.faqs].join("\n"),
-        style: conversationStyles.includes(parsed.data.style as typeof conversationStyles[number]) ? parsed.data.style : "Professional",
-      };
+      const config = scriptTestConfig({...parsed.data,name:found.rows[0].name},details);
       if (process.env.SHAHVEX_PC_AI_URL) {
         const { pcAiRequest } = await import("@/lib/pc-ai-engine");
         return pcAiRequest("/tester/start", { method: "POST", signal: request.signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ agentId: body.agentId, config }) }, owner);

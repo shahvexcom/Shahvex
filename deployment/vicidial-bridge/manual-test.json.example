@@ -1,0 +1,23 @@
+{
+  "enabled": false,
+  "secret": "",
+  "controlUrl": "http://127.0.0.1:8792",
+  "controlPort": 8792,
+  "audioHost": "127.0.0.1",
+  "audioPort": 9020,
+  "testWindowSeconds": 600,
+  "callLimitSeconds": 120,
+  "tester": {
+    "url": "https://YOUR-SECURE-TESTER-HOST/",
+    "secret": "",
+    "cfClientId": "",
+    "cfClientSecret": ""
+  },
+  "agent": {
+    "name": "Manual audio test",
+    "voice": "YOUR_APPROVED_LOCAL_VOICE_ID",
+    "first": "ai",
+    "style": "Professional",
+    "script": "PASTE YOUR TEST SCRIPT HERE"
+  }
+}

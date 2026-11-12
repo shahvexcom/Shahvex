@@ -30,7 +30,7 @@ export function verifyVicidialUser(csv: string, username: string) {
   return rows.slice(1).some(row => row[0] === username && row[4] === "Y");
 }
 /** Read-only authenticated user_details probe. No dialer mutations or media claims. */
-export async function testVicidial(server: string, username: string, secret: string) {
+export async function vicidialRequest(server: string, username: string, secret: string, fields: Record<string, string>, agentApi = false) {
   const url = vicidialURL(server), host = url.hostname.replace(/^\[|\]$/g, "");
   let dnsTimer: ReturnType<typeof setTimeout> | undefined;
   const addresses = await Promise.race([
@@ -38,8 +38,9 @@ export async function testVicidial(server: string, username: string, secret: str
     new Promise<never>((_resolve,reject)=>{dnsTimer=setTimeout(()=>reject(Error("VICIdial DNS verification timed out")),8000);}),
   ]).finally(()=>clearTimeout(dnsTimer));
   if (!addresses.length || (!allowedVoipHost(url.hostname) && addresses.some(a => !publicAddress(a.address)))) throw Error("VICIdial host is private or reserved and requires server-side approval");
+  if (agentApi) url.pathname = url.pathname.replace(/\/vicidial\/non_agent_api\.php$/, "/agc/api.php");
   const selected = addresses[0];
-  const data = new URLSearchParams({ source: "shahvex", function: "user_details", user: username, pass: secret, agent_user: username, stage: "csv", header: "YES" }).toString();
+  const data = new URLSearchParams({ ...fields, source: "shahvex", user: username, pass: secret }).toString();
   const body = await new Promise<string>((resolve, reject) => {
     const transport = url.protocol === "https:" ? https : http;
     const req = transport.request(url, { method: "POST", agent: false, lookup: (_host, options, cb) => {
@@ -55,6 +56,21 @@ export async function testVicidial(server: string, username: string, secret: str
     req.on("close", () => clearTimeout(timer)); req.on("error", () => reject(Error("VICIdial verification failed; check server access, TLS and API permissions")));
     req.end(data);
   });
+  return body;
+}
+export function requireVicidialSuccess(body: string, operation: string) {
+  if (!body.trim().startsWith(`SUCCESS: ${operation} `)) throw Error(`VICIdial ${operation} did not confirm success. Check API permissions and dialer logs.`);
+  return body;
+}
+/** Read-only verification never enables remote agents or places calls. */
+export async function testVicidial(server: string, username: string, secret: string) {
+  const body = await vicidialRequest(server, username, secret, { function: "user_details", agent_user: username, stage: "csv", header: "YES" });
   if (!verifyVicidialUser(body, username)) throw Error("API authentication/permission verification failed. Enable Agent API Access and view reports for a supported API user.");
   return { status: "CONNECTED", message: "Authenticated read-only API verified. SIP/media routing remains unverified." };
+}
+export async function readVicidialVersion(server:string,username:string,secret:string){
+  const body=await vicidialRequest(server,username,secret,{function:'version'});
+  const match=/^VERSION:\s*([\w.+-]+)\|BUILD:\s*([\w-]+)/.exec(body.trim());
+  if(!match)throw Error('Native API version response is unsupported; engineer verification required');
+  return `${match[1]} / ${match[2]}`;
 }

@@ -8,7 +8,7 @@ function load(file, dependencies, fetchMock, transform = source => source) {
   const source = transform(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'));
   const code = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   const mod = { exports: {} };
-  new Function('require', 'module', 'exports', 'fetch', code)(name => dependencies[name] ?? require(name), mod, mod.exports, fetchMock);
+  new Function('require', 'module', 'exports', 'fetch', code)(name => dependencies[name] ?? (name === "./vicidial-controls" ? { vicidialCallCommand: async () => null } : require(name)), mod, mod.exports, fetchMock);
   return mod.exports;
 }
 

@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('fs'),ts=require('typescript'),assert=require('assert/strict'),{chromium}=require('playwright');
 const compile=file=>ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.ES2022,target:ts.ScriptTarget.ES2022}}).outputText;
-(async()=>{if(process.env.SHAHVEX_BROWSER_BARGE_TEST!=='1')throw Error('Explicit browser opt-in required');const browser=await chromium.launch({channel:'chrome',headless:true,args:['--autoplay-policy=no-user-gesture-required']});try{const page=await browser.newPage();await page.goto(process.env.SHAHVEX_BARGE_SITE||'http://127.0.0.1:3000');const result=await page.evaluate(async({playerCode,captureCode,audioCode,worklet,publicWorklet})=>{
+(async()=>{if(process.env.SHAHVEX_BROWSER_BARGE_TEST!=='1')throw Error('Explicit browser opt-in required');const browser=await chromium.launch({channel:'chrome',headless:true,args:['--autoplay-policy=no-user-gesture-required']});try{const page=await browser.newPage();if(!process.env.SHAHVEX_BARGE_SITE)await page.route('http://127.0.0.1:3000/**',route=>route.fulfill({contentType:'text/html',body:'<!doctype html><title>Voice worklet test</title>'}));await page.goto(process.env.SHAHVEX_BARGE_SITE||'http://127.0.0.1:3000');const result=await page.evaluate(async({playerCode,captureCode,audioCode,worklet,publicWorklet,soakMs})=>{
  const moduleUrl=code=>'data:text/javascript;base64,'+btoa(code);
  const {BrowserPCMPlayer}=await import(moduleUrl(playerCode)),{BrowserSpeechCapture}=await import(moduleUrl(captureCode.replace('./agent-test-audio',moduleUrl(audioCode))));
  const ctx=new AudioContext({sampleRate:16000});await ctx.resume();await ctx.audioWorklet.addModule(publicWorklet?'/shahvex-playback-worklet.js?v=2':moduleUrl(worklet));
@@ -17,5 +17,13 @@ const compile=file=>ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOpt
  const after=levels.filter(x=>x.time>clearAt+.025);if(!after.length||after.some(x=>x.power>.000001))throw Error('Audio continued after local interruption');if(!cancelPending)throw Error('Test did not isolate slow server cancellation');
  await player.push(frame,0,signal);await new Promise(r=>setTimeout(r,30));if(levels.filter(x=>x.time>clearAt+.025).some(x=>x.power>.000001))throw Error('Stale epoch resumed audio');
  const resumeAt=ctx.currentTime;for(let i=0;i<4;i++)await player.push(frame,1,signal);player.end(1);await new Promise(r=>setTimeout(r,120));if(!levels.some(x=>x.time>resumeAt&&x.power>.001))throw Error('Next epoch audio did not resume');
- const result={syntheticSpeechToClearMs:Math.round((clearAt-onset)*1000),silentWithinMs:25,serverCancellationStillPending:cancelPending,staleAudioRejected:true,nextAudioResumed:true};player.dispose();await ctx.close();return result;
- },{publicWorklet:Boolean(process.env.SHAHVEX_BARGE_SITE),playerCode:compile('lib/browser-pcm-player.ts'),captureCode:compile('lib/browser-speech-capture.ts'),audioCode:compile('lib/agent-test-audio.ts'),worklet:fs.readFileSync('public/shahvex-playback-worklet.js','utf8')});console.log(JSON.stringify(result));assert.ok(result.syntheticSpeechToClearMs<=300);}finally{await browser.close();}})().catch(e=>{console.error(e.message);process.exitCode=1;});
+ const cancellationPendingAtClear=cancelPending,soakStart=performance.now();let rounds=0;
+ while(performance.now()-soakStart<soakMs){
+   const epoch=++rounds+1;player.clear(epoch);const at=ctx.currentTime;
+   for(let i=0;i<8;i++)await player.push(frame,epoch,signal);
+   player.end(epoch);await new Promise(r=>setTimeout(r,1000));
+   if(!levels.some(x=>x.time>at&&x.power>.001))throw Error('Audio stopped during soak round '+rounds);
+   levels.length=0;
+ }
+ const result={syntheticSpeechToClearMs:Math.round((clearAt-onset)*1000),silentWithinMs:25,serverCancellationStillPending:cancellationPendingAtClear,staleAudioRejected:true,nextAudioResumed:true,soakMs:Math.round(performance.now()-soakStart),rounds};player.dispose();await ctx.close();return result;
+ },{soakMs:Number(process.env.SHAHVEX_BARGE_SOAK_MS||0),publicWorklet:Boolean(process.env.SHAHVEX_BARGE_SITE),playerCode:compile('lib/browser-pcm-player.ts'),captureCode:compile('lib/browser-speech-capture.ts'),audioCode:compile('lib/agent-test-audio.ts'),worklet:fs.readFileSync('public/shahvex-playback-worklet.js','utf8')});console.log(JSON.stringify(result));assert.ok(result.syntheticSpeechToClearMs<=300);}finally{await browser.close();}})().catch(e=>{console.error(e.message);process.exitCode=1;});

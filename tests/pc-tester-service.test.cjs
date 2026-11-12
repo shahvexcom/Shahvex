@@ -26,6 +26,18 @@ test('HTTP service rejects anonymous session requests',async()=>{
   try { const r=await fetch(`http://127.0.0.1:${server.address().port}/tester/start`,{method:'POST',body:'{}'});assert.equal(r.status,401); }
   finally {await new Promise(resolve=>server.close(resolve));}
 });
+test('manual start derives the same script configuration and rechecks shared capacity after extraction',async()=>{
+ const fs=require('node:fs'),ts=require('typescript');
+ const loadTs=(file,deps={})=>{const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:require(n),m,m.exports);return m.exports;};
+ const shared=loadTs('lib/agent-test.ts',{'server-only':{}}),details=loadTs('lib/agent-script-details.ts'),sessions=new Map();let captured,extracts=0,race=false;
+ const ai={testConfig:shared.testConfig,sessions,pruneSessions(){},warmSelectedVoice:async()=>{},newTest:(owner,_id,c)=>{captured=c;sessions.set('session',{owner,lastSeen:Date.now()});return 'session';}};
+ const modules={'agent-test':ai,'agent-test-speculative':{},'agent-script-details':details,'agent-script-extraction':{extractAgentScript:async()=>{extracts++;if(race)sessions.set('busy',{owner:'other',lastSeen:Date.now()});return {goals:['Help with bookings.'],tasks:[],instructions:['Follow the script.'],conversationFlow:[],restrictions:[],knowledge:[],faqs:[]};}}};
+ const {dispatch}=createTesterService({secret,maxSessions:1,load:n=>{assert.ok(Object.hasOwn(modules,n));return modules[n];}});
+ const start=()=>dispatch(request('start','manual-owner',{agentId:'manual-audio-test',config,deriveFromScript:true}));
+ sessions.set('busy',{owner:'other',lastSeen:Date.now()});assert.equal((await start()).status,429);assert.equal(extracts,0);sessions.clear();
+ const response=await start();assert.equal(response.status,200);assert.equal((await response.json()).derivedFromScript,true);assert.equal(captured.goal,'Help with bookings.');assert.equal(captured.instructions,'Follow the script.');
+ sessions.clear();race=true;assert.equal((await start()).status,429);assert.equal(sessions.has('session'),false);
+});
 test('same owner can switch agents; abandoned leases free capacity and live heartbeats retain it',async()=>{
   const {dispatch}=createTesterService({secret,leaseMs:100});
   const first=await(await dispatch(request('start','switch-owner',{agentId:'a',config}))).json();

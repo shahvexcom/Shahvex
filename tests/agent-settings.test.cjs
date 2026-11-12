@@ -2,19 +2,21 @@ const {test}=require('node:test');const assert=require('node:assert/strict');con
 function load(file,deps={}){const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:require(n),m,m.exports);return m.exports;}
 const details=load('lib/agent-script-details.ts');
 test('create without a script; edit preserves Scripts-page assignment while saving voice and style',async()=>{
- let saved,voiceCalls=0;const voice={id:'dynamic-voice',name:'Dynamic',gender:'male',accent:'Irish English',language:'English'};
+ let saved,voiceCalls=0; const campaignConfig=load('lib/campaign-config.ts');const voice={id:'dynamic-voice',name:'Dynamic',gender:'male',accent:'Irish English',language:'English'};
  const pool={query:async(sql,p=[])=>{
   if(sql.startsWith('WITH created')){assert.match(sql,/local_voice_id,agent_script,conversation_style,speaks_first,language/);assert.match(sql,/owner_id,verified/);saved={id:'agent-new',name:p[1],username:p[2],gender:p[4],accent:p[5],local_voice_id:p[12],agent_script:p[13],conversation_style:p[14],speaks_first:p[15],language:'English'};return{rows:[{id:saved.id}]};}
   if(sql.startsWith('SELECT password_hash'))return{rows:[{password_hash:'existing-hash'}]};
   if(sql.startsWith('UPDATE agents a SET name=')){saved={...saved,name:p[0],gender:p[2],accent:p[3],local_voice_id:p[10],agent_script:p[11]??saved.agent_script,conversation_style:p[12],speaks_first:p[13],language:p[14]};return{rows:[saved]};}
-  if(sql.startsWith('SELECT a.id'))return{rows:[saved]};throw Error('Unexpected SQL');
+  if(['BEGIN','COMMIT','ROLLBACK'].includes(sql)||sql.startsWith('UPDATE agents SET company_name'))return {rows:[]};
+  if(sql.startsWith('SELECT (SELECT d.name')||sql.startsWith('SELECT a.company_name')||sql.startsWith('SELECT a.id'))return{rows:[saved]};throw Error('Unexpected SQL');
  }};
- const route=load('app/api/admin/agents/route.ts',{'next/headers':{cookies:async()=>({get:()=>({value:'test'})})},'@/lib/session':{readSession:async()=>({role:'ADMIN',agentId:'admin-owner'})},'@/lib/database':{db:async()=>pool},'@/lib/agent-script-details':details,'@/lib/agent-test':{localVoices:async owner=>{assert.equal(owner,'admin-owner');voiceCalls++;return{voices:[voice]};}}});
+ pool.connect=async()=>({...pool,release(){}});
+ const route=load('app/api/admin/agents/route.ts',{'@/lib/campaign-config':campaignConfig,'@/lib/agent-campaign-assignment':{saveAgentCampaign:async()=>{}},'@/lib/vicidial-live':{stopVicidialAgent:async()=>{}},'next/headers':{cookies:async()=>({get:()=>({value:'test'})})},'@/lib/session':{readSession:async()=>({role:'ADMIN',agentId:'admin-owner'})},'@/lib/database':{db:async()=>pool},'@/lib/agent-script-details':details,'@/lib/agent-test':{localVoices:async owner=>{assert.equal(owner,'admin-owner');voiceCalls++;return{voices:[voice]};}}});
  const input={name:'Configured Agent',username:'configured.agent',password:'fixture-password',gender:'FEMALE',accent:'Wrong accent',avatar_url:'',status:'APPROVED',call_limit_minutes:0,daily_call_limit:25,local_voice_id:voice.id,conversation_style:'Consultative',speaks_first:'ai',language:'English'};
  const req=(body,method='POST')=>new Request('http://localhost/api/admin/agents',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  const created=await route.POST(req(input));assert.equal(created.status,201);assert.equal(saved.local_voice_id,voice.id);assert.equal(saved.agent_script,'');assert.equal(saved.conversation_style,'Consultative');assert.equal(saved.speaks_first,'ai');assert.equal(saved.accent,voice.accent);assert.equal(saved.gender,'MALE');
  saved.agent_script='Assigned through Scripts';
- const updated=await route.PATCH(req({...input,agent_script:'Must not overwrite assignment',id:saved.id,password:'',conversation_style:'Calm & Patient',speaks_first:'customer'},'PATCH'));assert.equal(updated.status,200);assert.equal(saved.conversation_style,'Calm & Patient');assert.equal(saved.speaks_first,'customer');assert.equal(saved.agent_script,'Assigned through Scripts');assert.equal(voiceCalls,2);
+ const updated=await route.PATCH(req({...input,id:saved.id,password:'',conversation_style:'Calm & Patient',speaks_first:'customer'},'PATCH'));assert.equal(updated.status,200);assert.equal(saved.conversation_style,'Calm & Patient');assert.equal(saved.speaks_first,'customer');assert.equal(saved.agent_script,'Assigned through Scripts');assert.equal(voiceCalls,2);
  const invalid=await route.POST(req({...input,language:'Urdu'}));assert.equal(invalid.status,400);
 });
 test('voice references require matching ordered speech and registered metadata remains tenant-scoped',async()=>{

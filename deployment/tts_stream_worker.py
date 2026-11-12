@@ -9,7 +9,7 @@ import queue
 import threading
 
 
-async def threaded_pcm(factory):
+async def threaded_pcm(factory, *, cooperative=False):
     output = queue.Queue(maxsize=4)
     stopped = threading.Event()
     done = threading.Event()
@@ -17,7 +17,7 @@ async def threaded_pcm(factory):
 
     def produce():
         try:
-            for chunk in factory():
+            for chunk in (factory(stopped) if cooperative else factory()):
                 # Keep iterating on disconnect, but do not enqueue stale audio.
                 while not stopped.is_set():
                     try:

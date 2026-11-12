@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { ensureVoipSchema } from "./voip-schema";
 
-const SCHEMA_VERSION = 27;
+const SCHEMA_VERSION = 32;
 const globalForDb = globalThis as unknown as { pool?: Pool; schemaReady?: Promise<void>; schemaVersion?: number };
 // pg v8 warns for `sslmode=require`; `verify-full` preserves its current
 // behaviour and is the explicit mode required by the upcoming pg release.

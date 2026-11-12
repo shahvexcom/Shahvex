@@ -82,10 +82,19 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }
       const parsed = ai.testConfig.safeParse(input.config);
       if (!parsed.success || typeof input.agentId !== 'string' || !/^[a-zA-Z0-9_-]{1,128}$/.test(input.agentId)) return json(400, { error: 'Invalid configuration' });
+      let config=parsed.data;
+      if(input.deriveFromScript===true){
+        if([...ai.sessions.values()].filter(s=>s.owner!==owner).length>=maxSessions)return json(429,{error:'Another test session is active. End that session and try again.',code:'CAPACITY'});
+        try{
+          const details=await load('agent-script-extraction').extractAgentScript(owner,config.script,request.signal);
+          config=ai.testConfig.parse(load('agent-script-details').scriptTestConfig(config,details));
+          await ai.warmSelectedVoice(config.voice);
+        }catch{return json(503,{error:'Script extraction or selected voice is unavailable'});}
+      }
       // No awaits between admission and allocation; single-process admission is atomic.
       const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
       if (others >= maxSessions) return json(429, { error: 'Another test session is active. End that session and try again.', code:'CAPACITY' });
-      return json(200, { id: ai.newTest(owner, input.agentId, parsed.data) });
+      return json(200, { id: ai.newTest(owner, input.agentId, config),...(input.deriveFromScript===true?{derivedFromScript:true}:{}) });
     }
     const id = request.headers.get('x-shahvex-session') || '';
     const turn = request.headers.get('x-shahvex-turn') || crypto.randomUUID();

@@ -1,0 +1,24 @@
+.agent-script-group{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 20px;background:#faf1e6;border-block:1px solid #eadac6;color:#79543a}
+.agent-script-group strong{font-size:12px;font-weight:700}
+.agent-script-group small{font-size:11px;color:#97785e}
+.agents-table .lead-person b .agent-script-category{display:block;width:fit-content;max-width:100%;margin-top:6px;padding:3px 7px;border:1px solid #ead8c1;border-radius:6px;background:#fcf3e8;color:#9a5a2a;font-size:10px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
+.agent-tools{flex-wrap:wrap}
+@media(max-width:600px){.agent-script-group{padding:12px 16px}.agent-tools>.custom-dropdown{flex:1 1 145px;min-width:0}}
+
+/* Agent campaign groups */
+.agents-table .agent-campaign-group{margin:14px 0;border:1px solid #eadfd1;border-radius:16px;background:#fffdf9;box-shadow:0 3px 12px #603d1c05;overflow:hidden;transition:border-color .18s,box-shadow .18s}
+.agents-table .agent-campaign-group:hover{border-color:#dfbf9c;box-shadow:0 5px 18px #603d1c09}
+.agents-table .agent-campaign-group>summary{display:flex;align-items:center;gap:14px;padding:18px 20px;background:linear-gradient(110deg,#fffdf9,#fff6ea);cursor:pointer;list-style:none}
+.agents-table .agent-campaign-group>summary::-webkit-details-marker{display:none}
+.agents-table .agent-campaign-group>summary:focus-visible{outline:2px solid #e97832;outline-offset:-3px;border-radius:14px}
+.agents-table .agent-campaign-group>summary>.agent-group-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;margin:0;border:1px solid #f4d5b7;border-radius:12px;background:#ffedda;color:#cc641f;font-size:19px}
+.agents-table .agent-campaign-group>summary>.agent-group-copy{display:grid;flex:1;min-width:0;gap:4px;margin:0}
+.agents-table .agent-campaign-group>summary>.agent-group-copy small{color:#a48a71;font-size:10px;font-weight:650;letter-spacing:1px;text-transform:uppercase}
+.agents-table .agent-campaign-group>summary>.agent-group-copy strong{color:#624932;font-size:14px;font-weight:650;line-height:1.5;overflow-wrap:anywhere}
+.agents-table .agent-campaign-group>summary>.agent-group-count{display:flex;align-items:center;gap:6px;flex-shrink:0;margin:0;padding:7px 11px;border:1px solid #ebdbc8;border-radius:20px;background:#fffdf9;color:#8b5f36;font-size:13px;font-weight:700}
+.agents-table .agent-campaign-group>summary>.agent-group-count small{color:#a1876e;font-size:11px;font-weight:450}
+.agents-table .agent-campaign-group>summary>.agent-group-chevron{flex-shrink:0;width:27px;height:27px;padding:5px;border-radius:50%;background:#f8ecdf;color:#a47d55;transition:transform .18s}
+.agents-table .agent-campaign-group[open]>summary{border-bottom:1px solid #eee0d0}
+.agents-table .agent-campaign-group[open]>summary>.agent-group-chevron{transform:rotate(180deg)}
+@media(max-width:600px){.agents-table .agent-campaign-group>summary{padding:14px 12px;gap:10px}.agents-table .agent-campaign-group>summary>.agent-group-icon{flex-basis:36px;width:36px;height:36px;border-radius:10px;font-size:17px}.agents-table .agent-campaign-group>summary>.agent-group-copy strong{font-size:12px}.agents-table .agent-campaign-group>summary>.agent-group-count{padding:5px 8px}.agents-table .agent-campaign-group>summary>.agent-group-count small{font-size:10px}}
+@media(prefers-reduced-motion:reduce){.agents-table .agent-campaign-group,.agents-table .agent-campaign-group>summary>.agent-group-chevron{transition:none}}
