@@ -1,4 +1,5 @@
-﻿"use client";
+"use client";
+import "./live-call-workspace.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { EndedCalls } from "./ended-calls";
@@ -21,6 +22,8 @@ import {
 
 type Call = {
   id: string;
+  agent_id?: string;
+  updated_at?: string;
   status: string;
   agent_name: string;
   agent_number: string;
@@ -49,9 +52,10 @@ type ReadyAgent = {
 
 type CallMetrics = { calls_today?: number; completed?: number };
 type AgentSchedule = { isEnabled: boolean; startTime: string; endTime: string; isActive?: boolean };
-type RosterAgent = { telephony_provider?:string; is_queued?:boolean; id: string; name: string; avatar_url?: string; status?: string; telnyx_credential?: string; groq_credential?: string; outbound_number?: string; lead_name?: string; lead_number?: string; dialed_calls?: number; is_running?: boolean; is_ready?: boolean; schedule?: AgentSchedule };
+type RosterAgent = { deleted_at?:string;local_voice_id?:string;local_voice_name?:string;extension_route?:string;remote_user?:string;campaign_name?:string;campaign_category?:string; telephony_provider?:string; is_queued?:boolean; id: string; name: string; avatar_url?: string; status?: string; telnyx_credential?: string; groq_credential?: string; outbound_number?: string; lead_name?: string; lead_number?: string; dialed_calls?: number; is_running?: boolean; is_ready?: boolean; schedule?: AgentSchedule };
 
 type AgentCard = {
+  local_voice_name?:string;extension_route?:string;remote_user?:string;campaign_name?:string;campaign_category?:string;
   telephony_provider?:string;
   is_queued?:boolean;
   id: string;
@@ -77,14 +81,15 @@ function duration(call: Call, now: number) {
 }
 
 function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAgent[]) {
-  const rosterCards: AgentCard[] = (allAgents || []).map((agent) => {
+  const rosterCards: AgentCard[] = (allAgents || []).filter(agent=>!agent.deleted_at).map((agent) => {
     const readyAgent = ready.find((item) => item.id === agent.id);
-    const isRunning = Boolean(agent.is_running);
+    const runningCall = calls.find((call) => (call.agent_id?call.agent_id===agent.id:call.agent_name===agent.name) && activeStates.includes(call.status));
+    const isRunning = Boolean(runningCall);
     const schedule = agent.schedule || { isEnabled: false, startTime: "09:00", endTime: "17:00", isActive: false };
-    const isReady = Boolean(agent.is_ready) && (!schedule.isEnabled || Boolean(schedule.isActive));
-    const runningCall = calls.find((call) => call.agent_name === agent.name && activeStates.includes(call.status));
+    const isReady = Boolean(agent.is_ready);
     return {
       id: agent.id,
+      local_voice_name:agent.local_voice_name||agent.local_voice_id,extension_route:agent.extension_route,remote_user:agent.remote_user,campaign_name:agent.campaign_name,campaign_category:agent.campaign_category,
       is_queued: agent.is_queued,
       telephony_provider: agent.telephony_provider,
       kind: isRunning ? "running" : isReady ? "ready" : "idle",
@@ -121,7 +126,7 @@ function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAg
     }));
 
   const seen = new Set<string>();
-  return [...rosterCards, ...runningExtras].filter((item) => {
+  return [...rosterCards, ...runningExtras].sort((a,b)=>(Number(a.remote_user)||999999)-(Number(b.remote_user)||999999)||a.name.localeCompare(b.name)).filter((item) => {
     if (seen.has(item.id)) return false;
     seen.add(item.id);
     return true;
@@ -131,17 +136,18 @@ function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAg
 export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: string, kind?: "success" | "error") => void; onLiveCount: (count: number) => void }) {
   const router = useRouter();
   const [calls, setCalls] = useState<Call[]>([]), [ready, setReady] = useState<ReadyAgent[]>([]), [allAgents, setAllAgents] = useState<RosterAgent[]>([]), [metrics, setMetrics] = useState<CallMetrics>({});
-  const [busy, setBusy] = useState(false), [startingId, setStartingId] = useState(""), [loading, setLoading] = useState(true), [view, setView] = useState<"grid" | "list" | "table">("grid");
+  const [busy, setBusy] = useState(false), [startingId, setStartingId] = useState(""), [loading, setLoading] = useState(true), [view, setView] = useState<"grid" | "list">("grid");
   const [query, setQuery] = useState(""), [searchOpen, setSearchOpen] = useState(false), [filter, setFilter] = useState<"all" | "running" | "ready">("all");
   const [now, setNow] = useState<number>(0);
-  const [currentTime, setCurrentTime] = useState(""), [scheduleAgent, setScheduleAgent] = useState<AgentCard | null>(null), [savingSchedule, setSavingSchedule] = useState(false);
-  const scheduleCheckRunning = useRef(false);
+  const [currentTime, setCurrentTime] = useState("");
 
+  const fullLoadBusy=useRef(false);
   const load = useCallback(async () => {
+    if(fullLoadBusy.current)return;fullLoadBusy.current=true;
     try {
       const r = await fetch("/api/admin/calls", { cache: "no-store", signal: AbortSignal.timeout(15000) }), d = await r.json();
       if (r.ok) {
-        setCalls(d.calls || []);
+        setCalls(previous=>{const prior=new Map(previous.map(c=>[c.id,c]));return (d.calls||[]).map((c:Call)=>{const old=prior.get(c.id);return old&&Date.parse(old.updated_at||'')>Date.parse(c.updated_at||'')?{...c,...old}:c;});});
         setReady(d.readyAgents || []);
         setAllAgents(d.allAgents || []);
         setMetrics(d.metrics || {});
@@ -153,12 +159,12 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
     } catch {
       onAction("Unable to load live calls.", "error");
     } finally {
-      setLoading(false);
+      fullLoadBusy.current=false;setLoading(false);
     }
   }, [onAction, onLiveCount]);
 
   useEffect(() => {
-    const refresh = window.setInterval(() => { void load(); }, 5000);
+    const refresh = window.setInterval(() => { void load(); }, 30000);
     const clock = window.setInterval(() => setNow(Date.now()), 1000);
     const boot = window.setTimeout(() => {
       void load();
@@ -171,21 +177,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
     };
   }, [load]);
 
-  useEffect(() => {
-    const run = async () => {
-      if (scheduleCheckRunning.current) return;
-      scheduleCheckRunning.current = true;
-      try {
-        const response = await fetch("/api/admin/calls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "run-schedules" }) });
-        const result = await response.json();
-        if (response.ok && result.started?.length) await load();
-      } catch { /* The regular refresh keeps the controller usable if a schedule check fails. */ }
-      finally { scheduleCheckRunning.current = false; }
-    };
-    const boot = window.setTimeout(() => { void run(); }, 1200);
-    const timer = window.setInterval(() => { void run(); }, 15000);
-    return () => { window.clearTimeout(boot); window.clearInterval(timer); };
-  }, [load]);
+
 
   const command = async (body: object) => {
     setBusy(true);
@@ -200,26 +192,25 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
     }
   };
 
-  const saveSchedule = async (schedule: AgentSchedule) => {
-    if (!scheduleAgent) return;
-    setSavingSchedule(true);
-    try {
-      const response = await fetch("/api/admin/calls", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "save-schedule", agentId: scheduleAgent.id, ...schedule }) });
-      const result = await response.json();
-      onAction(result.message || (response.ok ? "Schedule saved." : "Schedule could not be saved."), response.ok ? "success" : "error");
-      if (response.ok) { setScheduleAgent(null); await load(); }
-    } catch { onAction("Unable to save the agent schedule.", "error"); }
-    finally { setSavingSchedule(false); }
-  };
+  useEffect(()=>{
+    let stopped=false,timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
+    const refresh=async()=>{try{
+      const response=await fetch('/api/admin/calls?updates=1',{cache:'no-store',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(8000)])});
+      if(!response.ok)return;const data=await response.json();if(stopped)return;
+      setCalls(previous=>{const old=new Map(previous.map(c=>[c.id,c]));return (data.calls||[]).map((c:Call)=>{const prior=old.get(c.id);return prior&&Date.parse(prior.updated_at||'')>Date.parse(c.updated_at||'')?prior:{...prior,...c};});});
+      setMetrics(data.metrics||{});setCurrentTime(data.currentTime||'');onLiveCount((data.calls||[]).filter((c:Call)=>activeStates.includes(c.status)).length);
+    }catch{/* Existing status stays visible while the next poll reconnects. */}finally{if(!stopped)timer=setTimeout(refresh,1000);}};
+    void refresh();return()=>{stopped=true;controller.abort();clearTimeout(timer);};
+  },[onLiveCount]);
 
-  const live = calls.filter((c) => activeStates.includes(c.status));
-  const readyAgents = useMemo(() => allAgents.filter((agent) => Boolean(agent.is_ready) && !agent.is_running && (!agent.schedule?.isEnabled || agent.schedule.isActive)), [allAgents]);
+  const live = calls.filter(c=>activeStates.includes(c.status));
+  const readyAgents = useMemo(() => allAgents.filter((agent) => Boolean(agent.is_ready) && !agent.is_running && !agent.deleted_at), [allAgents]);
   const agents = useMemo(() => {
     const candidate = buildAgentCards(calls, ready, allAgents);
     const searchValue = query.trim().toLowerCase();
     return candidate.filter((agent) => {
       const matchesFilter = filter === "all" || agent.kind === filter;
-      const matchesQuery = !searchValue || [agent.name, agent.lead_name, agent.lead_number, agent.outbound_number, agent.telnyx_credential, agent.groq_credential, String(agent.dialed_calls || 0)].join(" ").toLowerCase().includes(searchValue);
+      const matchesQuery = !searchValue || [agent.name, agent.lead_name, agent.lead_number, agent.outbound_number, agent.telnyx_credential, agent.groq_credential,agent.extension_route,agent.remote_user,agent.campaign_name, String(agent.dialed_calls || 0)].join(" ").toLowerCase().includes(searchValue);
       return matchesFilter && matchesQuery;
     });
   }, [calls, ready, allAgents, query, filter]);
@@ -235,11 +226,12 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
   };
 
   return (
-    <>
+    <div className="live-workspace">
       <div className="admin-page-head">
         <div>
           <p>REAL-TIME MONITORING</p>
           <h1>Live calls</h1>
+          <a href="/controler/live-monitor" className="admin-outline">Open live conversation monitor</a>
           <small className="live-pakistan-clock">Pakistan time {currentTime || "--:--"}</small>
         </div>
         <button className="admin-outline danger-outline" disabled={busy || loading || !live.length} onClick={() => command({ action: "hangup-all" })}>
@@ -275,7 +267,6 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
             <div className="view-switch" aria-label="Ready agent layout">
               <button className={view === "grid" ? "active" : ""} onClick={() => setView("grid")}><FiGrid /></button>
               <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}><FiList /></button>
-              <button className={view === "table" ? "active" : ""} onClick={() => setView("table")}>Table</button>
             </div>
             <div className="agent-filter" aria-label="Agent filter">
               <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>All</button>
@@ -292,7 +283,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
         {loading ? (
           <ReadySkeleton />
         ) : agents.length ? (
-          <ReadyAgents agents={agents} view={view} busy={busy} startingId={startingId} start={(id) => { setStartingId(id); void command({ action: "start-agent", agentId: id }).finally(() => setStartingId("")); }} viewCall={(id) => router.push(`/controler/calls/${id}?from=live`)} editSchedule={setScheduleAgent} stopQueue={(id)=>void command({action:"stop-agent",agentId:id})} />
+          <ReadyAgents agents={agents} view={view} busy={busy} startingId={startingId} start={(id) => { setStartingId(id); void command({ action: "start-agent", agentId: id }).finally(() => setStartingId("")); }} viewCall={(id) => router.push(`/controler/calls/${id}?from=live`)} stopQueue={(id)=>void command({action:"stop-agent",agentId:id})} />
         ) : (
           <div className="agent-empty-state">
             <FiUserX />
@@ -399,71 +390,21 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
       </section>
 
       <EndedCalls calls={calls.filter((c) => c.status === "COMPLETED")} />
-      {scheduleAgent && <ScheduleModal agent={scheduleAgent} saving={savingSchedule} onClose={() => setScheduleAgent(null)} onSave={saveSchedule} />}
-    </>
-  );
-}
-
-function ReadyAgents({ agents, view, busy, startingId, start, viewCall, editSchedule, stopQueue }: { agents: AgentCard[]; view: string; busy: boolean; startingId: string; start: (id: string) => void; viewCall: (id: string) => void; editSchedule: (agent: AgentCard) => void; stopQueue: (id:string)=>void }) {
-  return (
-    <div className={`ready-agent-grid ${view}`}>
-      {agents.map((agent) => (
-        <article key={`${agent.kind}-${agent.id}`} className={`agent-card ${agent.kind}`}>
-          <div className="agent-header-row">
-            <div className="agent-avatar-wrap">
-              {agent.avatar_url ? (
-                <span
-                  className="agent-avatar"
-                  aria-label={agent.name}
-                  data-tooltip={agent.name}
-                  style={{
-                    backgroundImage: `url(${agent.avatar_url})`,
-                    backgroundSize: "cover",
-                    backgroundPosition: "center",
-                    backgroundRepeat: "no-repeat",
-                    color: "transparent",
-                  }}
-                >
-                  {agent.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}
-                </span>
-              ) : (
-                <span className="agent-avatar initials" aria-label={agent.name} data-tooltip={agent.name}>{agent.name.split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}</span>
-              )}
-            </div>
-            <div className="agent-card-meta">
-              <div className="agent-topline">
-                <span className={`agent-badge ${agent.kind}`}>{agent.kind === "running" ? "Running" : agent.kind === "ready" ? "Ready agent" : agent.is_queued ? "Waiting for answered call" : "Agent not ready"}</span>
-                <span className="agent-calls">{agent.dialed_calls || 0} calls</span>
-              </div>
-              <b>{agent.name}</b>
-              <small>From: {agent.outbound_number}</small>
-              <small>Client: {agent.lead_name} · {agent.lead_number}</small>
-              <small>AI: {agent.groq_credential} · SIP: {agent.telnyx_credential}</small>
-              {agent.schedule.isEnabled && <small className={`agent-schedule-status ${agent.schedule.isActive ? "active" : "waiting"}`}><FiClock /> {agent.schedule.startTime}–{agent.schedule.endTime} PKT · {agent.schedule.isActive ? "Active" : "Waiting"}</small>}
-            </div>
-          </div>
-          <button type="button" className={`admin-outline agent-schedule-button ${agent.schedule.isEnabled ? "enabled" : ""}`} disabled={busy} onClick={() => editSchedule(agent)}><FiCalendar /><span>{agent.schedule.isEnabled ? "Edit schedule" : "Set schedule"}</span></button>
-          {agent.is_queued && agent.kind!=="running" ? <button className="admin-outline live-agent-start" disabled={busy} onClick={()=>stopQueue(agent.id)}>Stop queue</button> : agent.kind === "ready" ? (
-            <button className="admin-primary live-agent-start" disabled={busy || Boolean(startingId) || (agent.telephony_provider!=="VICIDIAL"&&!agent.lead_number)} onClick={() => start(agent.id)}>
-              <FiPlay />
-              <span>{startingId === agent.id ? "Calling..." : "Start call"}</span>
-            </button>
-          ) : agent.kind === "running" ? (
-            <button className="admin-primary live-agent-start live-view-button" type="button" onClick={() => agent.callId && viewCall(agent.callId)} disabled={!agent.callId}>
-              <FiExternalLink />
-              <span>Live view</span>
-            </button>
-          ) : null}
-        </article>
-      ))}
     </div>
   );
 }
 
-function ScheduleModal({ agent, saving, onClose, onSave }: { agent: AgentCard; saving: boolean; onClose: () => void; onSave: (schedule: AgentSchedule) => Promise<void> }) {
-  const [form, setForm] = useState<AgentSchedule>({ isEnabled: agent.schedule.isEnabled, startTime: agent.schedule.startTime || "09:00", endTime: agent.schedule.endTime || "17:00" });
-  return <div className="agent-modal-backdrop schedule-modal-backdrop" onMouseDown={onClose}><section className="agent-modal agent-schedule-modal" onMouseDown={(event) => event.stopPropagation()} aria-modal="true" role="dialog" aria-labelledby="schedule-title"><header><div><p>OPTIONAL AUTO CALLING</p><h2 id="schedule-title">Schedule {agent.name}</h2></div><button type="button" onClick={onClose} aria-label="Close schedule"><FiX /></button></header><p className="schedule-help">When enabled, this agent automatically starts the next eligible lead call inside the selected Pakistan-time window. A call already in progress can finish after the end time.</p><label className="schedule-enable"><span><b>Use call schedule</b><small>Turn this off to keep normal manual calling.</small></span><input type="checkbox" checked={form.isEnabled} onChange={(event) => setForm(current => ({ ...current, isEnabled: event.target.checked }))} /></label><div className="schedule-time-grid"><label>Start time<input type="time" value={form.startTime} onChange={(event) => setForm(current => ({ ...current, startTime: event.target.value }))} /></label><label>End time<input type="time" value={form.endTime} onChange={(event) => setForm(current => ({ ...current, endTime: event.target.value }))} /></label></div><small className="schedule-note"><FiClock /> Pakistan Standard Time (PKT). Overnight windows such as 22:00–06:00 are supported.</small><footer><button type="button" className="admin-outline" disabled={saving} onClick={onClose}>Cancel</button><button type="button" className="admin-primary" disabled={saving || !form.startTime || !form.endTime || (form.isEnabled && form.startTime === form.endTime)} onClick={() => void onSave(form)}><FiSave /> {saving ? "Saving..." : "Save schedule"}</button></footer></section></div>;
+function ReadyAgents({ agents, view, busy, startingId, start, viewCall, stopQueue }: { agents: AgentCard[]; view: string; busy: boolean; startingId: string; start: (id: string) => void; viewCall: (id: string) => void; stopQueue: (id:string)=>void }) {
+ const groups=[...new Set(agents.map(a=>a.campaign_category||a.campaign_name||'Unassigned agents'))].sort((a,b)=>Math.min(...agents.filter(x=>(x.campaign_category||x.campaign_name||'Unassigned agents')===a).map(x=>Number(x.remote_user)||999999))-Math.min(...agents.filter(x=>(x.campaign_category||x.campaign_name||'Unassigned agents')===b).map(x=>Number(x.remote_user)||999999))||a.localeCompare(b));
+ return <div className="call-agent-groups">{groups.map(group=><section className="call-agent-group" key={group}><header className="call-agent-group-title"><div><span>Campaign team</span><h3>{group}</h3></div><b>{agents.filter(a=>(a.campaign_category||a.campaign_name||'Unassigned agents')===group).length} agents</b></header><div className={`ready-agent-grid ${view}`}>{agents.filter(a=>(a.campaign_category||a.campaign_name||'Unassigned agents')===group).sort((a,b)=>(Number(a.remote_user)||999999)-(Number(b.remote_user)||999999)||a.name.localeCompare(b.name)).map(agent=><article key={agent.id} className={`call-agent-card ${agent.kind}`}>
+  <header className="call-agent-heading"><div className="call-agent-avatar">{agent.avatar_url?<img src={agent.avatar_url} alt=""/>:agent.name.split(' ').map(p=>p[0]).join('').slice(0,2)}</div><div className="call-agent-identity"><span className="call-agent-state"><i/>{agent.kind==='running'?'On a call':agent.kind==='ready'?'Ready to call':agent.is_queued?'Waiting for a call':agent.extension_route?'Not ready':'Route needed'}</span><h3>{agent.name}</h3><p>{agent.campaign_category||agent.campaign_name||'No campaign assigned'}{agent.outbound_number&&agent.campaign_name?` · ${agent.outbound_number}`:''}</p></div></header>
+  <div className="call-agent-routing"><div><span>Extension route</span><strong>{agent.extension_route||'Not assigned'}</strong></div><div><span>Remote agent</span><strong>{agent.remote_user||'Not assigned'}</strong></div></div>
+  <div className="call-agent-detail"><span>Voice <b>{agent.local_voice_name||'Not selected'}</b></span><span><b>{agent.dialed_calls||0}</b> calls</span></div>
+  {agent.kind==='running'&&<p className="call-agent-customer">{agent.lead_name} <span>{agent.lead_number}</span></p>}
+  <footer>{agent.kind==='running'?<button className="admin-primary" onClick={()=>agent.callId&&viewCall(agent.callId)}><FiExternalLink/>Open live call</button>:agent.is_queued?<button className="admin-outline" disabled={busy} onClick={()=>stopQueue(agent.id)}><FiPhoneOff/>Stop queue</button>:agent.kind==='ready'?<button className="admin-primary" disabled={busy||Boolean(startingId)} onClick={()=>start(agent.id)}><FiPlay/>{startingId===agent.id?'Starting…':'Start agent'}</button>:<span className="call-agent-setup">{agent.extension_route?'Complete calling setup to start':'Assign a route in VoIP to receive calls'}</span>}</footer>
+ </article>)}</div></section>)}</div>;
 }
+
 
 function Kpi({ icon, tone, label, value }: { icon: React.ReactNode; tone: string; label: string; value: number }) {
   return (

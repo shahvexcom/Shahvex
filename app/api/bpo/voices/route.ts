@@ -1,3 +1,4 @@
+import { localVoices } from "@/lib/agent-test";
 import { db } from "@/lib/database";
 import { requireApprovedBpo } from "@/lib/bpo-session";
 import { z } from "zod";
@@ -17,7 +18,10 @@ export async function GET() {
     LEFT JOIN ai_credentials gc ON gc.id=v.groq_credential_id
     WHERE x.bpo_id=$1
     ORDER BY x.is_active DESC,(v.status='ACTIVE') DESC,v.name`, [session.agentId]);
-  return Response.json({ voices: result.rows }, { headers: { "Cache-Control": "private, no-store" } });
+  const local = await localVoices(session.agentId).catch(() => null);
+  const shared = (local?.voices || []).map(voice => ({...voice, status: "ACTIVE", is_active: true, is_local: true, telnyx_label: null, groq_label: null, assigned_at: null}));
+  const localIds = new Set(shared.map(voice => voice.id));
+  return Response.json({ voices: [...result.rows.filter(voice => !localIds.has(voice.id)), ...shared], localVoiceError: local && local.serviceReady !== false ? null : "Shared voices are temporarily unavailable. Refresh when the voice service is ready." }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function PATCH(request: Request) {

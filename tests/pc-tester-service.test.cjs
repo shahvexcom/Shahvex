@@ -70,7 +70,7 @@ test('PC tester streams existing PCM protocol, remembers follow-ups and rejects 
     assert.ok(events.some(e=>e.type==='done'));
     assert.ok(!events.some(e=>e.type==='user'));
     const follow=await turn({text:'What did you say?'},'followup');await follow.text();
-    assert.ok(prompts[1].some(m=>m.role==='assistant'&&m.content.includes('bookings')));
+    assert.ok(prompts[0].some(m=>m.role==='assistant'&&m.content.includes('this is Test')));
     assert.equal((await turn({text:'again'},'followup')).status,409);
     await dispatch(request('stop','owner-a',{},id));
   } finally {global.fetch=previous;}
@@ -139,3 +139,12 @@ test('persistent script extraction reuses owner-scoped grounded results across r
   assert.equal(calls,1);assert.equal((await run('other-extract-owner')).status,200);assert.equal(calls,2);
  }finally{global.fetch=original;}
 });
+
+test('configured capacity admits 300 distinct owners and rejects the 301st',async()=>{
+ const {dispatch}=createTesterService({secret,maxSessions:300});const sessions=[];
+ try{for(let i=0;i<300;i++){const owner='capacity-'+i;const r=await dispatch(request('start',owner,{agentId:'agent-'+i,config}));assert.equal(r.status,200,`admit ${i+1}`);sessions.push({owner,id:(await r.json()).id});}
+ const status=await dispatch(new Request('http://localhost/internal/status',{headers:{'x-shahvex-ai-key':secret}}));const data=await status.json();assert.equal(data.capacity,300);assert.equal(data.sessions,300);assert.equal((await dispatch(request('start','capacity-overflow',{agentId:'overflow',config}))).status,429);
+ }finally{for(const {owner,id}of sessions)await dispatch(request('stop',owner,{},id));}
+});
+
+test('authenticated capacity updates validate range and apply without changing existing sessions',async()=>{let persisted=100;const control={read:async limit=>({limit,consistent:true}),set:async limit=>{persisted=limit;return{limit,consistent:true};}};const {dispatch}=createTesterService({secret,maxSessions:100,capacityControl:control});const manage=(limit,key=secret)=>new Request('http://localhost/internal/capacity',{method:'POST',headers:{'x-shahvex-ai-key':key},body:JSON.stringify({limit})});assert.equal((await dispatch(manage(200,'wrong'))).status,401);for(const limit of [0,301,1.5,'200'])assert.equal((await dispatch(manage(limit))).status,400);assert.equal((await dispatch(manage(200))).status,200);assert.equal(persisted,200);assert.equal((await(await dispatch(new Request('http://localhost/internal/status',{headers:{'x-shahvex-ai-key':secret}}))).json()).capacity,200);});

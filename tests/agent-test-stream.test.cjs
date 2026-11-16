@@ -109,7 +109,7 @@ test('time-permission questions split across model tokens never reach transcript
     for (const question of ['Is now an okay time?', 'Is this a good time?', 'Do you have a quick minute?', 'Is time good?', 'Are you available to talk?', 'Can we talk?', 'Is now okay?']) {
       let full = ''; const events = [], spoken = [];
       const output = 'I am calling about rebate updates. ' + question;
-      await streamAgentReply({phraseStreaming, messages: [], voice: 'selected', signal: new AbortController().signal,
+      await streamAgentReply({allowTimePermission:false, phraseStreaming, messages: [], voice: 'selected', signal: new AbortController().signal,
         onText: text => { full = text; }, send: async event => { events.push(event); }, timing: async () => {},
         engine: async (port, path, init) => {
           if (port === 11434) return new Response([...output].map((text, i) => JSON.stringify({message: {content: text}, done: i === output.length - 1})).join('\n') + '\n');
@@ -138,4 +138,95 @@ test('model-generated interruption markers never reach transcript or stored answ
   assert.equal(full.trim(), 'I heard you.');
   assert.equal(deltas.join('').trim(), 'I heard you.');
   assert.deepEqual(spoken, ['I heard you.']);
+});
+
+test('approved expression uses metadata, exactly one existing LLM request and unchanged transcript',async(t)=>{
+ const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
+ const spoken=[],events=[];let llm=0,answer='';const text='That really made me smile. Thank you for sharing that.';
+ await streamAgentReply({messages:[],voice:'lissa',customerText:'Hahaha, that was funny.',emotionState:{turn:0},signal:new AbortController().signal,onText:t=>{answer=t},timing:async()=>{},send:async e=>events.push(e),engine:async(port,_path,init)=>{
+  if(port===11434){llm++;return new Response(JSON.stringify({message:{content:text},done:true})+'\n')}
+  spoken.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});
+ assert.equal(llm,1);assert.equal(answer,text);assert.equal(spoken.filter(x=>x.emotion==='laugh').length,1);assert.equal(spoken[1].emotion,undefined);
+ assert.ok(spoken.every(x=>!x.text.includes('[laughter]')));assert.equal(events.filter(x=>x.type==='delta').map(x=>x.text).join(''),text);
+});
+test('fixed presence checks and non-Lissa voices keep the original voice request',async(t)=>{
+ const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
+ for(const voice of ['lissa','af_heart']){
+  const calls=[];await streamAgentReply({messages:[],voice,customerText:'hahaha that was funny',fixedSpeech:'That was funny.',signal:new AbortController().signal,onText:()=>{},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});}});
+  assert.deepEqual(calls,[{text:'That was funny.',voice_id:voice}]);
+ }
+});
+test('approved calm reassurance stays metadata-only and uses no additional LLM call',async(t)=>{
+ const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
+ let llm=0,answer='';const calls=[];const text='I understand. We can take this one step at a time.';
+ await streamAgentReply({messages:[],voice:'lissa',customerText:'I feel confused and worried.',emotionState:{turn:0},signal:new AbortController().signal,onText:t=>{answer=t},send:async()=>{},timing:async()=>{},engine:async(port,_path,init)=>{if(port===11434){llm++;return new Response(JSON.stringify({message:{content:text},done:true})+'\n')}calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders})}});
+ assert.equal(llm,1);assert.equal(answer,text);assert.equal(calls.filter(c=>c.emotion==='reassure').length,1);assert.ok(calls.every(c=>!c.text.includes('[')));
+});
+test('explicit expression demonstration laughs on the fixed answer without an LLM request',async(t)=>{
+ const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
+ const calls=[];let answer='';await streamAgentReply({messages:[],voice:'lissa',customerText:'Do you have expressions?',fixedSpeech:'Yes, I do have expressions.',emotionState:{turn:5,lastTurn:5,total:6},signal:new AbortController().signal,onText:s=>{answer=s},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders})}});
+ assert.equal(answer,'Yes, I do have expressions.');assert.deepEqual(calls,[{text:answer,voice_id:'lissa',emotion:'laugh'}]);
+});
+
+test('situational filler words reach cloning TTS unchanged for every selectable clone',async()=>{
+ for(const voice of ['lissa','emma','olivia']){
+  const spoken=[];
+  await streamAgentReply({messages:[],voice,signal:new AbortController().signal,onText:()=>{},send:async()=>{},timing:async()=>{},
+   engine:async(port,path,init)=>{
+    if(port===11434)return new Response(JSON.stringify({message:{content:'Mm-hmm, what time are you usually free?'},done:true})+'\n');
+    const body=JSON.parse(init.body);assert.equal(body.voice_id,voice);spoken.push(body.text);
+    return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+   }});
+  assert.deepEqual(spoken,['Mm-hmm, what time are you usually free?']);
+ }
+});
+
+test('split patience filler is removed before transcript and TTS while the actual question stays intact',async()=>{
+ for(const phraseStreaming of [false,true]){
+  let answer='';const spoken=[],deltas=[];
+  await streamAgentReply({phraseStreaming,messages:[],voice:'lissa',signal:new AbortController().signal,onText:t=>{answer=t},send:async e=>{if(e.type==='delta')deltas.push(e.text)},timing:async()=>{},engine:async(port,_path,init)=>{
+   if(port===11434)return new Response(['Got it, thank',' you for your patience. ','Do you have Medicare Part A or Part B?'].map((content,i)=>JSON.stringify({message:{content},done:i===2})).join('\n')+'\n');
+   spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  }});
+  assert.equal(answer.trim(),'Do you have Medicare Part A or Part B?');assert.equal(deltas.join('').trim(),answer.trim());assert.deepEqual(spoken,['Do you have Medicare Part A or Part B?']);
+ }
+});
+
+test('answered questions are removed before text and TTS; the next unanswered question remains',async()=>{
+ const spoken=[],events=[];let final='';
+ await streamAgentReply({completedQuestions:['Do you have Medicaid?'],messages:[],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async e=>events.push(e),timing:async()=>{},
+ engine:async(port,path,init)=>{
+  if(port===11434)return new Response(JSON.stringify({message:{content:'Do you currently have Medicaid? What is your age?'},done:true})+'\n');
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});
+ assert.equal(final.trim(),'What is your age?');assert.deepEqual(spoken,['What is your age?']);
+ assert.ok(!events.filter(e=>e.type==='delta').some(e=>/Medicaid/.test(e.text)));
+});
+test('a reply containing only an answered question gets one bounded correction attempt',async()=>{
+ let models=0,final='';
+ await streamAgentReply({completedQuestions:['Do you have Medicaid?'],messages:[{role:'system',content:'Follow the script.'}],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},
+ engine:async(port,path,init)=>{
+  if(port===11434){models++;return new Response(JSON.stringify({message:{content:models===1?'Do you have Medicaid?':'What is your age?'},done:true})+'\n');}
+  return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});assert.equal(models,2);assert.equal(final,'What is your age?');
+});
+
+test('repeated self-introduction and paraphrased permission are suppressed after permission was answered',async()=>{
+ let final='';const spoken=[];
+ await streamAgentReply({completedQuestions:['May I ask you a few questions?'],introducedName:'Alex',messages:[],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},
+ engine:async(port,path,init)=>{
+  if(port===11434)return new Response(JSON.stringify({message:{content:"I'm Alex from Wellness Team. Would you mind if I ask you a few questions? Do you have Medicare Part A and Part B?"},done:true})+'\n');
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});
+ assert.equal(final.trim(),'Do you have Medicare Part A and Part B?');assert.equal(spoken.length,1);
+});
+
+test('outbound goal speech stays short while retaining the actual question and suppressing inbound service-desk wording',async()=>{
+ let final='';const spoken=[];
+ await streamAgentReply({messages:[],voice:'lissa',maxStatementSentences:3,outbound:true,signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},engine:async(port,path,init)=>{
+  if(port===11434)return new Response(JSON.stringify({message:{content:'First purpose sentence. Second purpose sentence. Third purpose sentence. Fourth unnecessary sentence. Fifth unnecessary sentence. How can I assist you today? May I know your exact age?'},done:true})+'\n');
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});
+ assert.match(final,/May I know your exact age/);assert.doesNotMatch(final,/Fourth|Fifth|assist/);assert.equal(spoken.length,4);
 });

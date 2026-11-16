@@ -24,7 +24,6 @@ const updateSchema = detailsSchema.extend({ id: z.string().min(1) });
 
 type CredentialConfig = { ttsModel?: string; sttModel?: string; chatModel?: string; connectionId?: string; outboundNumber?: string; assistantId?: string };
 
-export { decryptCredential } from "@/lib/credential-crypto";
 function maskSecret(secret: string) { return secret.length < 8 ? "••••••••" : `${secret.slice(0, 4)}••••••••${secret.slice(-4)}`; }
 function configFor(data: z.infer<typeof detailsSchema>): CredentialConfig {
   return data.provider === "GROQ" ? { ttsModel: data.ttsModel || "", sttModel: data.sttModel || "", chatModel: data.chatModel || "" } : { connectionId: data.connectionId || "", outboundNumber: data.outboundNumber || "", assistantId: data.assistantId || "" };

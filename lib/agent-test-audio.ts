@@ -25,3 +25,32 @@ export function speechWav(frames: Int16Array[]) {
   let at = 44; for (const frame of frames) for (const sample of frame) { view.setInt16(at, sample, true); at += 2; }
   return new Blob([buffer], { type: "audio/wav" });
 }
+
+/** Retry unresolved short recordings with quiet margins, preserving every sample. */
+export function speechRetryWav(bytes: Uint8Array) {
+  inspectSpeechWav(bytes);
+  const view=new DataView(bytes.buffer,bytes.byteOffset,bytes.byteLength);
+  for(let at=12;at+8<=bytes.length;){
+    const size=view.getUint32(at+4,true);
+    if(String.fromCharCode(...bytes.subarray(at,at+4))==='data'){
+      const samples=new Int16Array(size/2+8000);
+      for(let i=0;i<size/2;i++)samples[i+4000]=view.getInt16(at+8+i*2,true);
+      return speechWav([samples]);
+    }
+    at+=8+size+size%2;
+  }
+  throw Error('Missing speech samples');
+}
+
+/** A short backchannel must not hide a longer spoken request. Retry the same
+ * waveform with quiet margins; never invent missing words or merge transcripts. */
+export async function recognizeSpeechWav(bytes:Uint8Array, recognize:(audio:Blob)=>Promise<string>){
+  const stats=inspectSpeechWav(bytes);
+  const first=(await recognize(new Blob([new Uint8Array(bytes)],{type:'audio/wav'}))).trim();
+  const brief=/^(?:(?:uh|um|erm|hmm|hm|mm|mhm|yeah|yep|yes|okay|ok|right|sure)[\s,.!?-]*)+$/i;
+  if(!first||(stats.voicedMs>=400&&brief.test(first))){
+    try{const second=(await recognize(speechRetryWav(bytes))).trim();
+    if(second&&(!first||(!brief.test(second)&&second.split(/\s+/).length>1)))return second;}catch{/* Preserve a usable first transcription if the retry is unavailable. */}
+  }
+  return first;
+}

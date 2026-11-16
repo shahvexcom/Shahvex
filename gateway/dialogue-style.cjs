@@ -27,7 +27,7 @@ function prepareStyleRequest(messages,policy={}){
   const applied=policy.allowOptionalPhrasing===true&&selected.styleAllowed;
   const decision=Object.freeze({...selected,applied});
   if(!applied)return {messages,decision};
-  const hint='\n\nOPTIONAL DELIVERY ONLY: '+HINTS[selected.intent]+' Preserve every mandatory script word, disclosure, fact, condition and workflow exactly. Change only permitted optional language. If no safe optional wording exists, follow the original response. Never add stage directions, emotion tags, filler or unsupported promises.';
+  const hint='\n\nOPTIONAL DELIVERY ONLY: '+HINTS[selected.intent]+' Preserve every mandatory script word, disclosure, fact, condition and workflow exactly. Change only permitted optional language. If no safe optional wording exists, follow the original response. Never add stage directions, emotion tags or unsupported promises. Where optional conversational language is permitted, use a brief situation-appropriate mm-hmm to acknowledge meaningful information, or hmm when considering a point. Use umm only for a natural brief hesitation. Do not use fillers in greetings, exact wording, disclosures, refusals, serious or urgent replies, or every turn; never use them to imply consent or replace the substantive answer.';
   return {messages:[{...messages[0],content:messages[0].content+hint},...messages.slice(1)],decision};
 }
 module.exports={selectIntent,prepareStyleRequest};

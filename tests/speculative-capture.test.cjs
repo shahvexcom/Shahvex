@@ -2,16 +2,16 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 function load(file){const mod={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name==='./agent-test-audio'?load('lib/agent-test-audio.ts'):require(name),mod,mod.exports);return mod.exports;}
 const {BrowserSpeechCapture}=load('lib/browser-speech-capture.ts');
 const speech=()=>new Int16Array(320).fill(2000),silence=()=>new Int16Array(320);
-test('early draft waits for 300ms silence before finalizing speech capture',()=>{
+test('early draft waits for 700ms silence before finalizing speech capture',()=>{
  const c=new BrowserSpeechCapture(true);for(let i=0;i<20;i++)c.feed(speech(),false);
  let draft;for(let i=0;i<5;i++){const e=c.feed(silence(),false);assert.equal(e.recording,undefined);draft=e.draft||draft;}
- assert.ok(draft);for(let i=0;i<9;i++)assert.equal(c.feed(silence(),false).recording,undefined);
+ assert.ok(draft);for(let i=0;i<29;i++)assert.equal(c.feed(silence(),false).recording,undefined);
  const final=c.feed(silence(),false).recording;assert.ok(final);assert.ok(final.blob.size>draft.blob.size);
 });
 test('resumed speech invalidates the draft and preserves the complete utterance',()=>{
  const c=new BrowserSpeechCapture(true);for(let i=0;i<20;i++)c.feed(speech(),false);for(let i=0;i<12;i++)c.feed(silence(),false);
  assert.equal(c.feed(speech(),false).draftInvalidated,true);for(let i=0;i<15;i++)c.feed(speech(),false);
- let final;for(let i=0;i<25;i++)final=c.feed(silence(),false).recording||final;
+ let final;for(let i=0;i<35;i++)final=c.feed(silence(),false).recording||final;
  assert.ok(final);assert.equal(final.voicedMs,36*20);
 });
 test('production/default capture never produces speculative requests',()=>{
@@ -31,3 +31,7 @@ test('brief speaker noise never interrupts or creates a clarification request',(
    for(let i=0;i<25;i++){const e=c.feed(silence(),true);assert.equal(e.recording,undefined);assert.equal(e.draft,undefined);}
  }
 });
+
+test('a half-second pause inside a request retains its leading words and resumes the same recording',async()=>{const c=new BrowserSpeechCapture();for(let i=0;i<20;i++)c.feed(speech(),false);for(let i=0;i<25;i++)assert.equal(c.feed(silence(),false).recording,undefined);for(let i=0;i<20;i++)c.feed(speech(),false);let result;for(let i=0;i<35;i++)result=c.feed(silence(),false).recording||result;assert.ok(result);assert.equal(result.voicedMs,800);});
+
+test('browser emits early barge-in probes without ending or discarding the full recording',()=>{const c=new BrowserSpeechCapture();const probes=[];for(let i=0;i<32;i++){const e=c.feed(speech(),true);if(e.probe)probes.push(e.probe);assert.equal(e.recording,undefined);}assert.equal(probes.length,2);assert.ok(c.isSpeaking);let final;for(let i=0;i<35;i++)final=c.feed(silence(),false).recording||final;assert.ok(final);assert.equal(final.voicedMs,640);});

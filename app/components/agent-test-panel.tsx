@@ -1,4 +1,5 @@
 "use client";
+import { interruptionKind } from '../../gateway/conversation-flow.cjs';
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ConversationRecorder } from "@/lib/browser-conversation-recorder";
@@ -38,6 +39,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
   const agentId=selectedAgentId,agentName=profile?.name||selectedAgent?.name||initialName,avatarUrl=profile?.avatarUrl||selectedAgent?.avatar_url||initialAvatar;
   const hiddenTurns=useRef(new Set<string>());
   const [recordedAgentName,setRecordedAgentName]=useState("");
+  const [voiceServiceReady,setVoiceServiceReady]=useState(true);
   const [open, setOpen] = useState(false), [config, setConfig] = useState<TestConfig>(), [voices, setVoices] = useState<{ id: string; name: string; gender?: string;language?:string;accent?:string }[]>([]);
   const [status, setStatus] = useState(""), [running, setRunning] = useState(false), [busy, setBusy] = useState(false), [lines, setLines] = useState<Line[]>([]), [muted, setMuted] = useState(false);
   const [level, setLevel] = useState(0), [playing, setPlaying] = useState(false), [mobilePanel,setMobilePanel] = useState<"configuration"|"conversation">("configuration");
@@ -119,6 +121,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     if (session.current) void fetch(`${base}?action=stop&id=${session.current}`, { method: "POST", keepalive: true });
     session.current = ""; working.current = false; setRunning(false); setBusy(false); setLevel(0); setStatus("Ready");
   };
+  const overlappingSpeech = useRef(false),bargeProbeBusy=useRef(false);
   const interrupt = (preserveRecording = false) => {
     const cancelledDraft = speechDraft.current;
     const audibleInterruption = Boolean(player.current?.hasAudio);
@@ -156,7 +159,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     const version=++loadVersion.current;setSelectedAgentId(id);setConfig(undefined);setProfile(null);setLines([]);setTimings([]);hiddenTurns.current.clear();followChat.current=true;
     if(!id){setStatus("Create an agent before starting a test.");return;}
     setStatus("Loading agent configuration...");
-    try{const r=await fetch(`${base}?agentId=${encodeURIComponent(id)}`,{signal:AbortSignal.timeout(20000)}),d=await r.json();if(!r.ok)throw Error(d.error);if(loadVersion.current!==version)return;setRemote(d.transport === "shahvex");setConfig(d.config);setVoices(d.voices);setProfile(d.agent||null);setStatus("Ready");}
+    try{const r=await fetch(`${base}?agentId=${encodeURIComponent(id)}`,{signal:AbortSignal.timeout(20000)}),d=await r.json();if(!r.ok)throw Error(d.error);if(loadVersion.current!==version)return;setRemote(d.transport === "shahvex");setConfig(d.config);setVoices(d.voices);setVoiceServiceReady(d.serviceReady!==false);setProfile(d.agent||null);setStatus("Ready");}
     catch(e){if(loadVersion.current===version)setStatus(e instanceof Error?e.message:"Unable to load agent");}
   };
   const show = async () => {setAudioError("");setOpen(true);setMobilePanel(demoToken ? "conversation" : "configuration");await loadAgent(agentId||agents[0]?.id||initialAgentId||"");};
@@ -266,7 +269,14 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
         if (mute.current) { if (speechDraft.current) interrupt(); capture.current.reset(); setLevel(0); return; }
         const frame = new Int16Array(event.data), result = capture.current.feed(frame, Boolean(player.current?.hasAudio));
         setLevel(Math.min(1, result.rms / 5000));
-        if (result.started) { silence.current.speech(); endAfterPlayback.current = false; if (working.current || player.current?.hasAudio) interrupt(true); setStatus("Listening"); }
+        if (result.started) { silence.current.speech(); endAfterPlayback.current = false; overlappingSpeech.current=Boolean(working.current||player.current?.hasAudio); if(remote&&overlappingSpeech.current)interrupt(true); if(!overlappingSpeech.current)setStatus("Listening"); }
+        if(result.probe&&!remote&&!bargeProbeBusy.current&&(working.current||player.current?.hasAudio)){
+          const currentSession=session.current,stamp=generation.current;bargeProbeBusy.current=true;
+          void(async()=>{try{const response=await fetch(`${base}?action=listen&id=${currentSession}`,{method:'POST',headers:{'Content-Type':'audio/wav'},body:result.probe!.blob,signal:AbortSignal.timeout(5000)});
+            if(!response.ok||!active.current||currentSession!==session.current||generation.current!==stamp)return;
+            const heard=await response.json();if(interruptionKind(heard.text)==='interrupt'&&(working.current||player.current?.hasAudio))interrupt(true);
+          }catch{/* Final recognition still receives the complete utterance. */}finally{bargeProbeBusy.current=false;}})();
+        }
         if (result.draftInvalidated && speechDraft.current) interrupt(true);
         if (result.draft && !remote && !working.current && !player.current?.hasAudio) {
           const gate = speechDraftGate(result.draft.id); speechDraft.current = gate;
@@ -285,6 +295,18 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
                 gate.resolve();
               } catch (error) { gate.reject(error instanceof Error ? error : Error("Speech confirmation failed")); }
             })();
+          } else if(!remote&&overlappingSpeech.current){
+            const recording=result.recording,stamp=generation.current,currentSession=session.current;overlappingSpeech.current=false;
+            void(async()=>{try{
+              const response=await fetch(`${base}?action=listen&id=${currentSession}`,{method:"POST",headers:{"Content-Type":"audio/wav"},body:recording.blob,signal:AbortSignal.timeout(15000)});
+              if(!response.ok||!active.current||session.current!==currentSession||generation.current!==stamp)return;
+              const heard=await response.json();heard.kind=interruptionKind(heard.text);
+              if(!heard.text||["ignore","filler"].includes(heard.kind))return;
+              const speaking=working.current||player.current?.hasAudio;
+              if(heard.kind==="acknowledgment"&&speaking)return;
+              if(speaking)interrupt(true);
+              await turnRef.current(undefined,heard.text,false,recording.id,recording.speechEndedAtMs);
+            }catch{/* Keep existing playback when the speech probe is unavailable. */}})();
           } else void turnRef.current(result.recording.blob, undefined, false, result.recording.id, result.recording.speechEndedAtMs);
         }
       };
@@ -294,8 +316,8 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
       if (!remote) silenceTimer.current = setInterval(() => {
         if (!active.current || context.current !== ctx) return;
         const blocked = working.current || Boolean(player.current?.hasAudio) || capture.current.isSpeaking || mute.current || ctx.state !== "running";
-        if (endAfterPlayback.current && !blocked) { stop(); setStatus("Call ended — no response"); return; }
         const step = silence.current.tick(performance.now(), blocked);
+        if(step===4){if(endAfterPlayback.current){stop();setStatus("Call ended — no response");}else silence.current.reset();return;}
         if (step) void turn(undefined, undefined, false, undefined, undefined, undefined, step);
       }, 100);
     } catch (e) { if (startup.signal.aborted) return; stop(); setAudioError(e instanceof Error ? e.message : "Unable to start microphone"); setStatus("Microphone Error"); }
@@ -332,7 +354,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
               {(Object.keys(detailLabels) as (keyof ScriptDetails)[]).map(key => <details key={key}><summary>{detailLabels[key]}<FiChevronDown/></summary><div>{extractionReady && extraction.details[key].length ? extraction.details[key].map((value, i) => <p key={i}>{value}</p>) : extractionReady ? <p>Not specified in script</p> : extraction.status === "error" ? <p>Details unavailable. Retry extraction.</p> : <AdminSkeleton rows={1} compact label={`Loading ${detailLabels[key]}`}/>}</div></details>)}
             </section>}
             <label>Selected local voice<CustomSelect aria-label="Selected local voice" disabled={running} value={config.voice} onChange={e => { stopPreview(); setConfig({ ...config, voice: e.target.value }); }}>{voices.map(v => <option key={v.id} value={v.id}>{v.name}{v.gender ? ` - ${v.gender}` : ""}</option>)}</CustomSelect></label>
-            <div className="sv-test-preview"><button type="button" disabled={running || previewing} onClick={() => void previewVoice()}><FiVolume2/>{previewing ? "Playing preview..." : "Preview voice"}</button></div>
+            {!voiceServiceReady&&<p role="status">Emma and Olivia previews are available. Start the voice service, then reopen Test Agent for live calls.</p>}<div className="sv-test-preview"><button type="button" disabled={running || previewing || (!voiceServiceReady && !["emma","olivia"].includes(config.voice))} onClick={() => void previewVoice()}><FiVolume2/>{previewing ? "Playing preview..." : "Preview voice"}</button></div>
             <label>Who speaks first?<CustomSelect aria-label="Who speaks first?" disabled={running} value={config.first} onChange={e => setConfig({ ...config, first: e.target.value as "ai" | "customer" })}><option value="customer">Customer Speaks First</option><option value="ai">AI Speaks First</option></CustomSelect></label>
             <label>Conversation Style<CustomSelect aria-label="Conversation Style" disabled={running} value={config.style} onChange={e => setConfig({ ...config, style: e.target.value })}>{conversationStyles.map(style => <option key={style} value={style}>{style}</option>)}</CustomSelect></label>
           </div></fieldset><p className="sv-test-note">{remote ? "Using the saved configuration verified on the physical server. This gateway does not accept configuration edits or return transcript text." : "Settings apply to this session. Stop and restart to apply changes."}</p></>}
@@ -354,6 +376,6 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     </div>
     <section className="sv-test-recording" aria-label="Conversation recording"><div role="status">{recording&&<i className="sv-record-dot"/>}{recording?"Recording":recordFinalizing?"Finalizing recording...":recordURL?"Recording ready":"Browser-only recording"} <span>{Math.floor(recordSeconds/60)}:{String(recordSeconds%60).padStart(2,"0")}</span></div>{recordError&&<p role="alert">{recordError}</p>}{recordURL&&<><RecordingPlayer key={recordURL} src={recordURL} durationHint={recordSeconds}/><a className="sv-record-download" href={recordURL} download={`shahvex-${(recordedAgentName||agentName).replace(/[^a-z0-9_-]/gi,"-")}-${new Date().toISOString().slice(0,10)}.${recordExtension}`}><FiDownload/><span>Download recording<small>{recordExtension.toUpperCase()} audio</small></span></a></>}</section>
     {demoToken && !running && <label style={{padding:"16px",display:"block"}}><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/> I consent to microphone processing by Shahvex AI and recording this conversation on this device. Audio is sent for transcription; the downloadable recording stays in this browser. I have permission from everyone participating.</label>}
-    <footer className="sv-test-footer">{running?<button className="sv-voice-stop" onClick={stop}><FiSquare/>End Session</button>:<button className="sv-voice-start" disabled={(Boolean(demoToken) && !consent) || !config || !voices.some(v=>v.id===config?.voice) || !extractionReady || previewing || recordFinalizing} onClick={()=>void start()}><FiMic/>Start Test</button>}<span>Private test session | Use headphones | Speak, then pause</span><details hidden={Boolean(demoToken)}><summary>Timing logs</summary><div>{timings.length ? timings.map((t, i) => <p key={i}>{t.stage}: {t.elapsedMs ?? 0} ms</p>) : <p>Timings appear when a response starts.</p>}</div></details></footer>
+    <footer className="sv-test-footer">{running?<button className="sv-voice-stop" onClick={stop}><FiSquare/>End Session</button>:<button className="sv-voice-start" disabled={(Boolean(demoToken) && !consent) || !config || !voices.some(v=>v.id===config?.voice) || !extractionReady || !voiceServiceReady || previewing || recordFinalizing} onClick={()=>void start()}><FiMic/>Start Test</button>}<span>Private test session | Use headphones | Speak, then pause</span><details hidden={Boolean(demoToken)}><summary>Timing logs</summary><div>{timings.length ? timings.map((t, i) => <p key={i}>{t.stage}: {t.elapsedMs ?? 0} ms</p>) : <p>Timings appear when a response starts.</p>}</div></details></footer>
   </div></div>, document.body)}{!open&&recordURL&&<a className="sv-record-card-download" href={recordURL} download={`shahvex-${(recordedAgentName||agentName).replace(/[^a-z0-9_-]/gi,"-")}.${recordExtension}`}><FiDownload/>Download last recording</a>}</>;
 }

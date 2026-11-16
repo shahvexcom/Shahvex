@@ -9,16 +9,18 @@ import { vicidialLiveConfig } from "./vicidial-config";
 import { newTest, sessions, testConfig, type TestConfig } from "./agent-test";
 import { handleTestSession } from "./agent-test-speculative";
 import { pcAiRequest } from "./pc-ai-engine";
-import { collectVicidialResult, syncVicidialComments, transferVicidialCall, retryVicidialSyncJobs, explicitlyRequestsHuman } from "./vicidial-results";
+import { collectVicidialResult, syncVicidialComments, transferVicidialCall, retryVicidialSyncJobs, hasTransferConsent, hasRequestedHumanHandoff, prepareRequestedHumanHandoff, conversationHash, qualificationHash } from "./vicidial-results";
 import { queueAgentAllowed, reconcileVicidialQueues } from "./vicidial-queue";
 import { syncVicidialRecording } from "./vicidial-recording";
 import { reserveAgent,mediaReady,setRuntimeState,releaseConfirmedAgent } from "./agent-runtime";
 import { confirmHumanHandoff } from "./vicidial-handoff";
 import { bpoEntitlements, bpoLeadUsage } from "./bpo-entitlements";
 
-const message=z.object({action:z.enum(["connected","turn","interrupt","ended","recording","retry-sync","maintenance","hangup","recover","human-answered","customer-ended","media-ready"]),eventId:z.string().uuid(),externalCallId:z.string().regex(/^[\w-]{16,40}$/),agentUser:z.string().regex(/^[\w-]{2,20}$/).optional(),asteriskUniqueid:z.string().max(100).optional(),asteriskLinkedid:z.string().max(100).optional(),activeCallIds:z.array(z.string().uuid()).max(10000).optional(),humanUser:z.string().regex(/^[\w-]{2,20}$/).optional(),callId:z.string().uuid().optional(),text:z.string().max(4000).optional(),audio:z.string().max(2800000).optional(),opening:z.boolean().optional(),silenceStep:z.number().int().min(1).max(4).optional(),recordingUrl:z.string().url().max(2000).optional(),recordingId:z.string().max(100).optional(),aiRecordingId:z.string().uuid().optional(),recordingSize:z.number().int().min(44).max(1000000044).optional(),durationSeconds:z.number().int().min(0).max(86400).optional()}).strict();
+const message=z.object({action:z.enum(["connected","listen","turn","interrupt","ended","recording","retry-sync","maintenance","hangup","recover","human-answered","customer-ended","media-ready","resolve-prefix","call-state"]),eventId:z.string().uuid(),externalCallId:z.string().regex(/^[\w-]{16,40}$/),audioUuid:z.string().uuid().optional(),agentUser:z.string().regex(/^[\w-]{2,20}$/).optional(),asteriskUniqueid:z.string().max(100).optional(),asteriskLinkedid:z.string().max(100).optional(),activeCallIds:z.array(z.string().uuid()).max(10000).optional(),humanUser:z.string().regex(/^[\w-]{2,20}$/).optional(),callId:z.string().uuid().optional(),text:z.string().max(4000).optional(),audio:z.string().max(2800000).optional(),opening:z.boolean().optional(),silenceStep:z.number().int().min(1).max(4).optional(),recordingUrl:z.string().url().max(2000).optional(),recordingId:z.string().max(100).optional(),aiRecordingId:z.string().uuid().optional(),recordingSize:z.number().int().min(44).max(1000000044).optional(),durationSeconds:z.number().int().min(0).max(86400).optional()}).strict();
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{"cache-control":"no-store"}});
 type ConversationTurn={role:"user"|"assistant";content:string};
+// Installed VICIdial builds use either callerid or call_id for the same native call code.
+const statusHeaders=(line:string)=>line.split("|").map(field=>field.trim()==="callerid"?"call_id":field.trim());
 
 async function startVoice(callId:string,agentId:string,config:TestConfig) {
   const owner=`vici-${callId}`,voiceConfig=testConfig.parse(config);
@@ -43,6 +45,52 @@ export async function vicidialCallback(request:Request) {
   const v=parsed.data,live=vicidialLiveConfig.parse(c.live_config);
   if((!live.enabled||!c.enabled)&&v.action==='connected')return json({error:'Live calling disabled'},409);
   const key=decryptCredential(c.secret_ciphertext);
+  // Speech probes are authenticated reads: do not serialize them through the
+  // durable mutation ledger or transcript writes while the caller is speaking.
+  if(v.action==='listen'){
+    if(!v.callId)return json({error:'Call ID required'},400);
+    const call=(await pool.query('SELECT id,status,transfer_status,voice_session_id,vicidial_call_id,direct_audio_uuid FROM agent_calls WHERE id=$1 AND voip_connection_id=$2',[v.callId,c.id])).rows[0];
+    const direct=call?.direct_audio_uuid?'direct-'+String(call.direct_audio_uuid).replaceAll('-',''):'';
+    if(!call||v.externalCallId!==call.vicidial_call_id&&v.externalCallId!==direct)return json({error:'Call identity mismatch'},409);
+    if(call.status!=='ANSWERED'||['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status))return json({error:'Call is no longer handled by AI'},409);
+    if(!call.voice_session_id)return json({error:'Voice session is not ready'},409);
+    const body=Buffer.from(v.audio||'','base64'),owner=`vici-${call.id}`,init={method:'POST',signal:request.signal,headers:{'content-type':'audio/wav','x-shahvex-session':call.voice_session_id},body};
+    if(process.env.SHAHVEX_PC_AI_URL)return pcAiRequest('/tester/listen',init,owner);
+    if(!sessions.has(call.voice_session_id))return json({error:'Voice worker is unavailable'},409);
+    return handleTestSession(new Request(`${new URL(request.url).origin}/internal?action=listen&id=${call.voice_session_id}`,init),owner);
+  }
+  if(v.action==='call-state'){
+    if(!v.callId)return json({error:'Call ID required'},400);
+    const call=(await pool.query("SELECT * FROM agent_calls WHERE id=$1 AND voip_connection_id=$2 AND telephony_provider IN ('VICIDIAL','AUDIOSOCKET')",[v.callId,c.id])).rows[0];
+    if(!call)return json({error:'Call not found'},404);
+    const direct=call.direct_audio_uuid?'direct-'+String(call.direct_audio_uuid).replaceAll('-',''):'';
+    if(v.externalCallId!==call.vicidial_call_id&&v.externalCallId!==direct)return json({error:'Call identity mismatch'},409);
+    return json(await (await import('./vicidial-call-state')).observeNativeCustomer(call,c,key));
+  }
+  if(v.action==='resolve-prefix') {
+    if(!c.enabled||!live.enabled||!c.media_verified_at||!v.audioUuid)return json({error:'Direct campaign audio is not enabled'},409);
+    const line=live.directAudioLines.find(line=>line.prefix===v.audioUuid!.slice(0,4).toLowerCase());
+    if(!line||!live.remoteUsers.includes(line.remoteUser))return json({error:'Unknown audio line'},409);
+    const assigned=(await pool.query(`SELECT d.external_campaign_id FROM campaign_agent_assignments x
+      JOIN campaign_definitions d ON d.id=x.campaign_id
+      JOIN voip_agent_assignments va ON va.agent_id=x.agent_id AND va.connection_id=d.connection_id AND va.owner_id=d.owner_id AND va.campaign_id=d.external_campaign_id
+      JOIN vicidial_pool_agents q ON q.agent_id=x.agent_id AND q.remote_user=$3 AND q.ready=TRUE
+      JOIN ai_agent_runtime_states rs ON rs.agent_id=x.agent_id AND rs.state='READY' AND rs.call_id IS NULL
+      WHERE x.agent_id=$1 AND d.connection_id=$2 AND d.owner_id=$4 AND x.enabled AND d.enabled AND d.deleted_at IS NULL AND d.intake_state='RUNNING'`,[line.agentId,c.id,line.remoteUser,c.owner_id])).rows[0];
+    if(!assigned)return json({error:'The assigned audio-line agent is not ready'},409);
+    // Start the existing direct-audio route promptly; native identity is verified before transfer.
+    if(live.directAudioMode)return json({uuid:v.audioUuid,audioUuid:v.audioUuid,agentUser:line.remoteUser,externalCallId:'direct-'+v.audioUuid.replaceAll('-','')});
+    // Prefer a verified native customer call, retaining audio-only fallback for direct extension tests.
+    try {
+      const status=await vicidialRequest(c.server_url,c.username,key,{function:'agent_status',agent_user:line.remoteUser,stage:'pipe',header:'YES'});
+      const [head,row]=status.trim().split(/\r?\n/),keys=statusHeaders(head),values=row?.split('|')||[],get=(name:string)=>String(values[keys.indexOf(name)]||'').trim();
+      if(get('status')==='INCALL'&&get('campaign_id')===assigned.external_campaign_id&&/^\d+$/.test(get('lead_id'))&&/^[-\w]{16,40}$/.test(get('call_id'))&&!get('call_id').startsWith('manual-'))
+        return json({uuid:v.audioUuid,audioUuid:v.audioUuid,agentUser:line.remoteUser,externalCallId:get('call_id')});
+    } catch(error) { if(!live.directAudioMode)throw error; }
+    if(live.directAudioMode)return json({uuid:v.audioUuid,audioUuid:v.audioUuid,agentUser:line.remoteUser,externalCallId:'direct-'+v.audioUuid.replaceAll('-','')});
+    return json({error:'VICIdial has not confirmed an active call on this line'},409);
+  }
+
   if(v.action==='maintenance'){
     await pool.query('UPDATE voip_connections SET last_heartbeat_at=NOW() WHERE id=$1',[c.id]);
     if(v.activeCallIds?.length){await pool.query('UPDATE agent_calls SET last_heartbeat_at=NOW() WHERE voip_connection_id=$1 AND id=ANY($2::text[])',[c.id,v.activeCallIds]);await pool.query("UPDATE ai_agent_runtime_states r SET last_seen_at=NOW(),lease_expires_at=NOW()+INTERVAL '60 seconds' FROM agent_calls a WHERE r.call_id=a.id AND a.voip_connection_id=$2 AND r.call_id=ANY($1::text[])",[v.activeCallIds,c.id]);}
@@ -68,21 +116,63 @@ export async function vicidialCallback(request:Request) {
     return result;
   }catch(error){await pool.query("UPDATE vicidial_events SET processing_state='FAILED',lease_expires_at=NULL,last_error='Operation failed; reconciliation required' WHERE connection_id=$1 AND event_id=$2",[c.id,v.eventId]);throw error;}
   async function processEvent(){
-  let call=(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",[c.id,v.externalCallId])).rows[0];
+  const directHex=/^direct-([a-f0-9]{32})$/.exec(v.externalCallId)?.[1];
+  const directUuid=directHex?`${directHex.slice(0,8)}-${directHex.slice(8,12)}-${directHex.slice(12,16)}-${directHex.slice(16,20)}-${directHex.slice(20)}`:null;
+  if(v.externalCallId.startsWith('direct-')&&!directUuid)return json({error:'Invalid direct audio identifier'},400);
+  let call=directUuid?(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND direct_audio_uuid=$2 AND telephony_provider='AUDIOSOCKET'",[c.id,directUuid])).rows[0]:(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",[c.id,v.externalCallId])).rows[0];
+  if(v.action==='connected'&&directUuid){
+    if(call)return call.voice_session_id?json({callId:call.id,first:call.script_snapshot.first,status:call.status}):json({error:'Direct voice session unavailable; cleanup required',callId:call.id,recover:true},503);
+    const line=live.directAudioLines.find(line=>line.prefix===directUuid.slice(0,4)&&line.remoteUser===v.agentUser);
+    if(!live.directAudioMode||!c.media_verified_at||!line||v.audioUuid!==directUuid)return json({error:'Direct AudioSocket mode or line is not enabled'},409);
+    const tx=await pool.connect();let released=false;
+    try{
+      await tx.query('BEGIN');
+      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))",[`direct-audio:${c.id}:${directUuid}`]);
+      const prior=(await tx.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND direct_audio_uuid=$2",[c.id,directUuid])).rows[0];
+      if(prior){await tx.query('COMMIT');return json({callId:prior.id,first:prior.script_snapshot.first,status:prior.status});}
+      const a=(await tx.query(`SELECT a.id,a.name,a.local_voice_id,q.config,q.max_call_duration_seconds,d.id campaign_id,d.external_campaign_id,d.script,b.bpo_id
+        FROM agents a JOIN campaign_agent_assignments x ON x.agent_id=a.id AND x.enabled
+        JOIN campaign_definitions d ON d.id=x.campaign_id AND d.connection_id=$2 AND d.owner_id=$3
+        JOIN voip_agent_assignments va ON va.agent_id=a.id AND va.connection_id=d.connection_id AND va.owner_id=d.owner_id AND va.campaign_id=d.external_campaign_id
+        JOIN vicidial_pool_agents q ON q.agent_id=a.id AND q.ready AND q.remote_user=$4
+        JOIN ai_agent_runtime_states rs ON rs.agent_id=a.id AND rs.state='READY' AND rs.call_id IS NULL
+        LEFT JOIN bpo_created_agents b ON b.agent_id=a.id
+        WHERE a.id=$1 AND a.status='APPROVED' AND d.enabled AND d.deleted_at IS NULL AND d.intake_state='RUNNING' AND BTRIM(d.script)<>''
+        AND NOT EXISTS(SELECT 1 FROM agent_calls ac WHERE ac.agent_id=a.id AND ac.status IN ('INITIATED','RINGING','ANSWERED'))
+        FOR UPDATE OF a SKIP LOCKED`,[line.agentId,c.id,c.owner_id,line.remoteUser])).rows[0];
+      if(!a||!await queueAgentAllowed(a.id,tx)){await tx.query('ROLLBACK');return json({error:'Assigned direct audio agent is busy or unavailable'},409);}
+      if(a.bpo_id){await tx.query('SELECT id FROM agents WHERE id=$1 FOR UPDATE',[a.bpo_id]);const [limits,usage]=await Promise.all([bpoEntitlements(tx,a.bpo_id),bpoLeadUsage(tx,a.bpo_id)]);if(usage.calls>=limits.calls||usage.minutes>=limits.minutes||usage.recordings>=limits.recordings)throw Error('Workspace calling allowance exhausted');}
+      const config=testConfig.parse({...a.config,name:a.name,voice:a.local_voice_id,script:a.script});
+      const id=randomUUID();
+      await tx.query(`INSERT INTO agent_calls(id,agent_id,status,telephony_provider,voip_connection_id,direct_audio_uuid,direct_audio_line,campaign_definition_id,external_campaign_id,script_snapshot,conversation_state,dialing_source,max_call_duration_seconds,vicidial_sync_status)
+        VALUES($1,$2,'INITIATED','AUDIOSOCKET',$3,$4,$5,$6,$7,$8::jsonb,'LISTENING','DIRECT',$9,'NOT_APPLICABLE')`,[id,a.id,c.id,directUuid,line.prefix,a.campaign_id,a.external_campaign_id,JSON.stringify(config),a.max_call_duration_seconds||0]);
+      if(!await reserveAgent(tx,a.id,id,a.campaign_id))throw Error('Direct audio agent reservation changed');
+      await tx.query('COMMIT');tx.release();released=true;
+      try{const session=await startVoice(id,a.id,config);await pool.query('UPDATE agent_calls SET voice_session_id=$1 WHERE id=$2',[session,id]);}
+      catch{await setRuntimeState(id,'ERROR','Direct voice startup failed; audio cleanup required');return json({error:'Direct voice startup failed',callId:id,recover:true},503);}
+      return json({callId:id,first:config.first,maxCallDurationSeconds:a.max_call_duration_seconds||0});
+    }catch(error){if(!released)await tx.query('ROLLBACK');throw error;}finally{if(!released)tx.release();}
+  }
   if(v.action==='connected') {
     if(call)return call.voice_session_id?json({callId:call.id,first:call.script_snapshot.first,status:call.status}):json({callId:call.id,error:'Voice session unavailable; cleanup required',recover:true},503);
     if(!v.agentUser||!live.remoteUsers.includes(v.agentUser))return json({error:"Unknown remote agent"},409);
     // Never trust a lead ID or campaign supplied by the audio transport.
     const status=await vicidialRequest(c.server_url,c.username,key,{function:"agent_status",agent_user:v.agentUser,stage:"pipe",header:"YES"});
-    const lines=status.trim().split(/\r?\n/),headers=lines[0].split('|'),values=lines[1]?.split('|')||[],get=(name:string)=>values[headers.indexOf(name)];
+    const lines=status.trim().split(/\r?\n/),headers=statusHeaders(lines[0]),values=lines[1]?.split('|')||[],get=(name:string)=>values[headers.indexOf(name)];
     if(get('call_id')!==v.externalCallId||get('status')!=='INCALL'||!/^\d+$/.test(get('lead_id')||''))return json({error:"VICIdial has not confirmed this answered call"},409);
+    const directLine=v.audioUuid?live.directAudioLines.find(line=>line.prefix===v.audioUuid!.slice(0,4).toLowerCase()&&line.remoteUser===v.agentUser):undefined;
+    if(v.audioUuid&&!directLine)return json({error:'Unknown direct audio mapping'},409);
     const route=(await pool.query(`SELECT p.id pool_id,p.campaign_id,cd.id campaign_definition_id FROM vicidial_pools p JOIN vicidial_pool_agents q ON q.pool_id=p.id
       LEFT JOIN campaign_agent_assignments ca ON ca.agent_id=q.agent_id
       LEFT JOIN campaign_definitions cd ON cd.id=ca.campaign_id
       JOIN voip_agent_assignments v ON v.agent_id=q.agent_id AND v.connection_id=p.connection_id AND v.owner_id=p.owner_id
-      WHERE p.connection_id=$1 AND p.campaign_id=$2 AND q.remote_user=$3 AND q.ready=TRUE AND v.campaign_id=p.campaign_id AND (ca.agent_id IS NULL OR (ca.enabled=TRUE AND cd.enabled=TRUE AND cd.deleted_at IS NULL AND cd.intake_state='RUNNING' AND cd.external_campaign_id=p.campaign_id AND cd.connection_id=p.connection_id))`,[c.id,get('campaign_id'),v.agentUser])).rows[0];
+      WHERE p.connection_id=$1 AND p.campaign_id=$2 AND q.remote_user=$3 AND ($4::text IS NULL OR q.agent_id=$4) AND q.ready=TRUE AND v.campaign_id=p.campaign_id AND (ca.agent_id IS NULL OR (ca.enabled=TRUE AND cd.enabled=TRUE AND cd.deleted_at IS NULL AND cd.intake_state='RUNNING' AND cd.external_campaign_id=p.campaign_id AND cd.connection_id=p.connection_id))`,[c.id,get('campaign_id'),v.agentUser,directLine?.agentId||null])).rows[0];
     if(!route||route.campaign_id!==get('campaign_id'))return json({error:"Call is outside the assigned campaign"},409);
-    const metadata=await vicidialRequest(c.server_url,c.username,key,{function:'lead_all_info',lead_id:get('lead_id'),stage:'pipe',header:'YES'});
+    let metadata:string;
+    try{metadata=await vicidialRequest(c.server_url,c.username,key,{function:'lead_all_info',lead_id:get('lead_id'),stage:'pipe',header:'YES'});}catch{
+      const lead=await (await import('./vicidial-admin-lead')).readAdminLead(c.server_url,c.username,key,get('lead_id')||'');
+      const fields=['lead_id','phone_number','phone_code'];metadata=fields.join('|')+'\n'+fields.map(k=>lead[k]||'').join('|');
+    }
     const detailLines=metadata.trim().split(/\r?\n/),detailHeaders=detailLines[0].split('|'),detailValues=detailLines[1]?.split('|')||[];
     const detail=(name:string)=>String(detailValues[detailHeaders.indexOf(name)]||'').trim();
     if(detail('lead_id')!==get('lead_id'))return json({error:'VICIdial lead details could not be verified'},409);
@@ -103,13 +193,13 @@ export async function vicidialCallback(request:Request) {
         JOIN ai_agent_runtime_states rs ON rs.agent_id=a.id AND rs.state='READY' AND rs.call_id IS NULL
         JOIN vicidial_pools p ON p.id=q.pool_id
         JOIN voip_agent_assignments va ON va.agent_id=a.id AND va.connection_id=p.connection_id AND va.owner_id=p.owner_id AND va.campaign_id=p.campaign_id
-        WHERE q.pool_id=$1 AND NOT (q.agent_id=ANY($4::text[])) AND q.ready=TRUE AND a.status='APPROVED'
+        WHERE q.pool_id=$1 AND ($2::text IS NULL OR q.agent_id=$2) AND NOT (q.agent_id=ANY($4::text[])) AND q.ready=TRUE AND a.status='APPROVED'
         AND (rs.campaign_id IS NOT DISTINCT FROM $5::text)
         AND NOT EXISTS(SELECT 1 FROM agent_calls x WHERE x.agent_id=a.id AND x.status IN ('INITIATED','RINGING','ANSWERED'))
         AND NOT EXISTS(SELECT 1 FROM do_not_call d WHERE d.phone_number=$3)
         AND (SELECT COUNT(*) FROM agent_calls x WHERE x.agent_id=a.id AND x.created_at>=date_trunc('day',NOW()))<a.daily_call_limit
         ORDER BY rs.last_assigned_at NULLS FIRST,q.updated_at,a.id
-        FOR UPDATE OF a SKIP LOCKED LIMIT 1`,[route.pool_id,v.agentUser,number,excluded,route.campaign_definition_id||null]);
+        FOR UPDATE OF a SKIP LOCKED LIMIT 1`,[route.pool_id,directLine?.agentId||null,number,excluded,route.campaign_definition_id||null]);
         a=available.rows[0];
         if(!a){await tx.query("ROLLBACK");return json({error:"No matching available AI agent"},409);}
         // Recheck after acquiring the agent lock using a fresh DB statement.
@@ -133,6 +223,22 @@ export async function vicidialCallback(request:Request) {
   }
   if(!call||v.callId!==call.id)return json({error:"Call not found"},404);
   const owner=`vici-${call.id}`,sessionId=call.voice_session_id;
+  if(directUuid){
+    if(!call.vicidial_call_id&&(v.action==='human-answered'||v.action==='customer-ended'&&v.humanUser))return json({error:'Native handoff is unavailable for an unlinked direct audio call'},409);
+    if(v.action==='retry-sync'&&!call.vicidial_call_id){
+      try{call=await (await import('./vicidial-direct-link')).linkDirectNativeCall(call,c);}catch{return json({saved:true,syncPending:true,nativeLinkPending:true});}
+      if(!call.vicidial_call_id)return json({saved:true,nativeSync:'NOT_APPLICABLE',nativeLinkPending:true});
+    }
+    if(v.action==='hangup')return json({ended:true}); // Bridge closes the actual audio leg, then emits ended.
+    if(!call.vicidial_call_id&&['ended','recover','customer-ended'].includes(v.action)){
+      await pool.query("UPDATE agent_calls SET ai_leg_released=TRUE,customer_ended=TRUE,ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()),recording_active=FALSE,conversation_busy=FALSE,duration_seconds=COALESCE($2,duration_seconds),updated_at=NOW() WHERE id=$1",[call.id,v.durationSeconds??null]);
+      await releaseConfirmedAgent(call.id);
+      if(sessionId){try{if(process.env.SHAHVEX_PC_AI_URL)await pcAiRequest('/tester/stop',{method:'POST',headers:{'x-shahvex-session':sessionId},body:'{}'},owner);else{sessions.get(sessionId)?.abort?.abort();sessions.delete(sessionId);}}catch{/* Call ended independently of voice worker cleanup. */}}
+      return json({saved:true,nativeSync:'NOT_APPLICABLE'});
+    }
+    if(v.action==='recording'&&!v.aiRecordingId)return json({error:'Only bridge AI recordings are supported for direct calls'},409);
+  }
+
   if(v.action==='media-ready'){return await mediaReady(call.id)?json({saved:true}):json({error:'Media reservation is no longer available; reconcile the call'},409);}
   if(v.action==='human-answered'){
     if(!v.humanUser)return json({error:'Human agent user is required'},400);
@@ -146,7 +252,7 @@ export async function vicidialCallback(request:Request) {
   if(v.action==='recover'&&['INITIATED','RINGING','ANSWERED'].includes(call.status)){
     if(['SUBMITTED','UNCERTAIN'].includes(call.transfer_status))return json({saved:true,syncPending:true,awaitingHuman:true});
     const status=await vicidialRequest(c.server_url,c.username,key,{function:'agent_status',agent_user:call.vicidial_agent_user,stage:'pipe',header:'YES'});
-    const rows=status.trim().split(/\r?\n/),heads=rows[0].split('|'),values=rows[1]?.split('|')||[];
+    const rows=status.trim().split(/\r?\n/),heads=statusHeaders(rows[0]),values=rows[1]?.split('|')||[];
     if(values[heads.indexOf('call_id')]===call.vicidial_call_id&&values[heads.indexOf('status')]==='INCALL'){
       await (await import('./vicidial-controls')).vicidialCallCommand(call.id,'hangup',call.agent_id);
       return json({saved:true,syncPending:true});
@@ -158,16 +264,16 @@ export async function vicidialCallback(request:Request) {
     const response=await (await import('./vicidial-controls')).vicidialCallCommand(call.id,'hangup',call.agent_id);
     return response||json({error:'Call not found'},404);
   }
-  if(v.action==='turn'||v.action==='interrupt') {
-    if(call.status!=='ANSWERED'||['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status))return json({error:"Call is no longer handled by AI"},409);
+  if(v.action==='listen'||v.action==='turn'||v.action==='interrupt') {
+    if(call.status!=='ANSWERED'||['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status))return json({error:"Call is no longer handled by AI",handoffPending:['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status)},409);
     if(!sessionId)return json({error:"Voice session is not ready"},409);
     const body=v.audio?Buffer.from(v.audio,'base64'):Buffer.from(JSON.stringify({text:v.text||"",opening:v.opening===true,...(v.silenceStep?{silenceStep:v.silenceStep}:{})}));
-    const action=v.action==='interrupt'?'interrupt':'turn';
+    const action=v.action==='interrupt'?'interrupt':v.action==='listen'?'listen':'turn';
     const init={method:"POST",signal:request.signal,headers:{"content-type":v.audio?'audio/wav':'application/json',"x-shahvex-session":sessionId,"x-shahvex-turn":v.eventId},body};
     let response:Response;
     if(action==='turn'){
-      const lease=await pool.query("UPDATE agent_calls SET conversation_busy=TRUE,transfer_consent=FALSE,updated_at=NOW() WHERE id=$1 AND conversation_busy=FALSE RETURNING id",[call.id]);
-      if(!lease.rowCount)return json({error:"Another voice turn is still finishing"},409);
+      const lease=await pool.query("UPDATE agent_calls SET conversation_busy=TRUE,transfer_consent=FALSE,handoff_ready=FALSE,qualification='{}'::jsonb,updated_at=NOW() WHERE id=$1 AND conversation_busy=FALSE RETURNING id",[call.id]);
+      if(!lease.rowCount)return json({error:"Another voice turn is still finishing",retryable:true},409);
     }
     try {
     if(process.env.SHAHVEX_PC_AI_URL)response=await pcAiRequest(`/tester/${action}`,init,owner);
@@ -176,14 +282,25 @@ export async function vicidialCallback(request:Request) {
       response=await handleTestSession(new Request(`${new URL(request.url).origin}/internal?action=${action}&id=${sessionId}&turnId=${v.eventId}`,init),owner);
     }
     }catch(error){if(action==='turn')await pool.query("UPDATE agent_calls SET conversation_busy=FALSE WHERE id=$1",[call.id]);throw error;}
-    if(action==='interrupt'||!response.ok||!response.body){if(action==='turn')await pool.query("UPDATE agent_calls SET conversation_busy=FALSE WHERE id=$1",[call.id]);return response;}
+    if(action==='listen'||action==='interrupt'||!response.ok||!response.body){if(action==='turn')await pool.query("UPDATE agent_calls SET conversation_busy=FALSE WHERE id=$1",[call.id]);return response;}
     let pending="",answer="",user="",done=false;const decoder=new TextDecoder();
     const history:ConversationTurn[]=Array.isArray(call.conversation_history)?call.conversation_history:[];
     const consume=(line:string)=>{if(!line.trim())return;const e=JSON.parse(line);if(e.type==='user')user=e.text;if(e.type==='delta')answer+=e.text;if(e.type==='done')done=true;};
+    // Publish the current turn while audio is streaming, without releasing its lease.
+    let lastPublished=0,progressWrite:Promise<void>|undefined;
+    const publishProgress=async()=>{
+      if((!user&&!answer)||Date.now()-lastPublished<750)return;
+      lastPublished=Date.now();
+      const progress=[...history,...(user?[{role:'user',content:user}]:[]),...(answer?[{role:'assistant',content:answer}]:[])];
+      try {await pool.query("UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN 'COMPLETED' ELSE $3 END,updated_at=NOW() WHERE id=$4 AND conversation_busy=TRUE",[JSON.stringify(progress),progress.map(t=>`${t.role==='user'?'CLIENT':'AGENT'}: ${t.content}`).join('\n'),answer?'SPEAKING':'THINKING',call.id]);}
+      catch {/* Monitoring must not interrupt customer audio; final persistence retries. */}
+    };
     const stream=new ReadableStream({async start(controller){try{
-      for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){pending+=decoder.decode(chunk,{stream:true});let at;while((at=pending.indexOf('\n'))>=0){consume(pending.slice(0,at));pending=pending.slice(at+1);}controller.enqueue(chunk);}
+      for await(const chunk of response.body as unknown as AsyncIterable<Uint8Array>){pending+=decoder.decode(chunk,{stream:true});let at;while((at=pending.indexOf('\n'))>=0){consume(pending.slice(0,at));pending=pending.slice(at+1);}controller.enqueue(chunk);
+        if(!progressWrite&&Date.now()-lastPublished>=750)progressWrite=publishProgress().finally(()=>{progressWrite=undefined;});}
       pending+=decoder.decode();if(pending.trim())consume(pending);
     }catch{ /* Disconnects preserve only the received transcript; no restart. */ }finally{
+      await progressWrite;
       if(user)history.push({role:'user',content:user});if(answer)history.push({role:'assistant',content:answer});
       await pool.query("UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_busy=FALSE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN 'COMPLETED' ELSE $3 END,updated_at=NOW() WHERE id=$4",[JSON.stringify(history),history.map(t=>`${t.role==='user'?'CLIENT':'AGENT'}: ${t.content}`).join('\n'),done?'LISTENING':'INTERRUPTED',call.id]);
       await pool.query("UPDATE vicidial_events SET processing_state='COMPLETED',processed_at=NOW(),lease_expires_at=NULL,last_error=$1 WHERE connection_id=$2 AND event_id=$3",[done?'':'Turn interrupted; do not replay spoken audio',c.id,v.eventId]);
@@ -207,9 +324,9 @@ export async function vicidialCallback(request:Request) {
   if(v.action==='ended'||v.action==='recover'||v.action==='customer-ended') {
     if(v.action==='ended'||v.action==='recover')await pool.query('UPDATE agent_calls SET ai_leg_released=TRUE,ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()) WHERE id=$1',[call.id]);
     if(v.action==='customer-ended')await pool.query('UPDATE agent_calls SET customer_ended=TRUE WHERE id=$1',[call.id]);
-    if((v.action==='ended'||v.action==='recover')&&!['SUBMITTED','UNCERTAIN','ANSWERED'].includes(call.transfer_status)){
+    if((v.action==='ended'||v.action==='recover')&&!call.customer_ended&&!['SUBMITTED','UNCERTAIN','ANSWERED'].includes(call.transfer_status)){
       const native=await vicidialRequest(c.server_url,c.username,key,{function:'agent_status',agent_user:call.vicidial_agent_user,stage:'pipe',header:'YES'});
-      const rows=native.trim().split(/\r?\n/),heads=rows[0].split('|'),values=rows[1]?.split('|')||[];
+      const rows=native.trim().split(/\r?\n/),heads=statusHeaders(rows[0]),values=rows[1]?.split('|')||[];
       const ended=/ERROR: agent_status AGENT NOT (?:LOGGED IN|FOUND)/.test(native)||(heads.includes('call_id')&&values[heads.indexOf('call_id')]!==call.vicidial_call_id);
       if(ended)await pool.query('UPDATE agent_calls SET customer_ended=TRUE WHERE id=$1',[call.id]);
       else {cleanupPending=true;await setRuntimeState(call.id,'ERROR','AI media ended; native customer state must be reconciled');}
@@ -223,15 +340,38 @@ export async function vicidialCallback(request:Request) {
     try {
       call=(await pool.query("SELECT * FROM agent_calls WHERE id=$1",[call.id])).rows[0];
       if(call.conversation_busy)return json({saved:true,syncPending:true});
-      const result=await collectVicidialResult(call.id,call.conversation_history||[],JSON.stringify({script:call.script_snapshot.script,goal:call.script_snapshot.goal,task:call.script_snapshot.task,instructions:call.script_snapshot.instructions}));
-      await syncVicidialComments(call.id);
+      if(v.action==='retry-sync'&&['COMPLETED','FAILED'].includes(call.status)){
+        if(!['SYNCED','NOT_APPLICABLE'].includes(call.vicidial_sync_status))await syncVicidialComments(call.id);
+        return json({saved:true});
+      }
+      if(v.action==='retry-sync'&&call.status==='ANSWERED'&&!hasTransferConsent(call.conversation_history||[]))return json({saved:true,verificationPending:true,transferConsent:false});
+      const history=call.conversation_history||[],audit=call.qualification;
+      const currentAudit=Boolean(audit?.historyHash&&audit?.scriptHash)&&audit.historyHash===conversationHash(history)&&audit.scriptHash===qualificationHash(call.script_snapshot);
+      const requested=hasRequestedHumanHandoff(history);
+      const result=requested&&call.status==='ANSWERED'?await prepareRequestedHumanHandoff(call.id,history,call.script_snapshot,audit):currentAudit?{consent:call.transfer_consent,handoffReady:call.handoff_ready}:await collectVicidialResult(call.id,history,JSON.stringify(call.script_snapshot));
+      // Requested human access must not wait for slow lead synchronization. The
+      // durable sync job and saved partial answers remain independent of handoff.
+      let syncPending=true;
+      const sync=syncVicidialComments(call.id).then(()=>{syncPending=false;}).catch(()=>{syncPending=true;});
+      if(!requested) {await sync;if(syncPending)throw Error('Lead synchronization pending');}
+      if(requested&&v.action==='retry-sync'&&call.status==='ANSWERED'){
+        let submitted=false,transferReason='';
+        try{await transferVicidialCall(call.id);submitted=true;}catch(error){transferReason=error instanceof Error?error.message:'Transfer preparation failed';}
+        // Sync continues with durable retries; its network latency must not delay
+        // transfer acknowledgment or AI detach when native submission succeeds.
+        const status=(await pool.query('SELECT transfer_status FROM agent_calls WHERE id=$1',[call.id])).rows[0]?.transfer_status;
+        return json({saved:true,syncPending,...(submitted||status==='SUBMITTED'||status==='ANSWERED'?{transferSubmitted:true}:status==='UNCERTAIN'?{transferUncertain:true}:{transferPending:true,transferReason,syncPending:true})});
+      }
+      await sync;
+      if(syncPending)return json({saved:true,syncPending:true});
       if((call.status!=='ANSWERED'||v.action==='ended')&&!await syncVicidialRecording(call.id))return json({saved:true,syncPending:true});
-      if(v.action==='retry-sync'&&result.consent&&(result.handoffReady||explicitlyRequestsHuman(call.conversation_history||[]))&&call.status==='ANSWERED'){
+      if(v.action==='retry-sync'&&result.consent&&result.handoffReady&&call.status==='ANSWERED'){
         try {await transferVicidialCall(call.id);return json({saved:true,transferSubmitted:true});}
-        catch {
+        catch(error) {
+          const transferReason=error instanceof Error?error.message:'Transfer preparation failed';
           const status=(await pool.query("SELECT transfer_status FROM agent_calls WHERE id=$1",[call.id])).rows[0]?.transfer_status;
           if(status==='UNCERTAIN'||status==='SUBMITTED')return json({saved:true,transferUncertain:status==='UNCERTAIN'});
-          return json({saved:true,syncPending:true,transferPending:true});
+          return json({saved:true,syncPending:true,transferPending:true,transferReason});
         }
       }
     }

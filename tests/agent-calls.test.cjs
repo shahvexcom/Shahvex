@@ -64,7 +64,7 @@ function harness({ approved = true, provider = 'success', limit = 25, suppressed
     if (provider === 'rejected') return Response.json({}, { status: 422 });
     return Response.json({ data: { call_control_id: 'provider-id', call_session_id: 'session-id' } });
   };
-  const service = load('lib/call-start.ts', { '@/lib/database': { db: async () => pool }, '@/lib/bpo-entitlements': { bpoEntitlements: async () => ({ calls: 1, minutes: 1 }), bpoLeadUsage: async () => ({ calls: 0, minutes: 0 }) }, '@/app/api/admin/credentials/route': { decryptCredential: () => 'test-key' } }, fetchMock);
+  const service = load('lib/call-start.ts', { '@/lib/database': { db: async () => pool }, '@/lib/bpo-entitlements': { bpoEntitlements: async () => ({ calls: 1, minutes: 1 }), bpoLeadUsage: async () => ({ calls: 0, minutes: 0 }) }, '@/lib/credential-crypto': { decryptCredential: () => 'test-key' } }, fetchMock);
   return { ...service, dials: () => dials, active: () => active, released: () => released };
 }
 
@@ -87,15 +87,15 @@ test('unapproved, daily-limited and suppressed leads cannot dial', async () => {
   }
 });
 
-test('an enabled controller schedule blocks calls outside its Pakistan-time window', async () => {
+test('a saved controller schedule no longer blocks a manually started call', async () => {
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Karachi', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
   const currentHour = Number(parts.find(part => part.type === 'hour').value);
   const blockedHour = (currentHour + 2) % 24;
   const endHour = (blockedHour + 1) % 24;
   const schedule = { is_enabled: true, start_time: `${String(blockedHour).padStart(2, '0')}:00:00`, end_time: `${String(endHour).padStart(2, '0')}:00:00` };
   const h = harness({ schedule });
-  await assert.rejects(h.startAgentCall('agent-a'), /Calling is scheduled/);
-  assert.equal(h.dials(), 0);
+  await h.startAgentCall('agent-a');
+  assert.equal(h.dials(), 1);
 });
 
 test('uncertain provider response retains the active reservation and blocks retry', async () => {
@@ -136,7 +136,7 @@ test('other agents cannot read details, change notes or issue commands', async (
     assert.equal(args.at(-1), 'owner');
     return { rows: [], rowCount: 0 };
   } };
-  const dependencies = { '@/lib/database': { db: async () => pool }, '@/lib/bpo-entitlements': { bpoEntitlements: async () => ({ recordings: 1 }), bpoLeadUsage: async () => ({ recordings: 0 }) }, '@/lib/call-start': {}, '@/app/api/admin/credentials/route': {} };
+  const dependencies = { '@/lib/database': { db: async () => pool }, '@/lib/bpo-entitlements': { bpoEntitlements: async () => ({ recordings: 1 }), bpoLeadUsage: async () => ({ recordings: 0 }) }, '@/lib/call-start': {}, '@/lib/credential-crypto': {} };
   const service = load('lib/agent-call-detail.ts', dependencies, () => { throw new Error('No provider requests allowed'); });
   assert.equal((await service.agentCallDetail(id, 'owner')).status, 404);
   assert.equal((await service.agentCallCommand({ id, action: 'hangup' }, 'owner')).status, 404);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { bpoEntitlements, bpoLeadUsage } from "@/lib/bpo-entitlements";
 import { db } from "@/lib/database";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 function value(row: string[], headers: string[], names: string[]) { const index = headers.findIndex(header => names.some(name => header.toLowerCase().replace(/[^a-z]/g, "").includes(name))); return index >= 0 ? String(row[index] ?? "").trim() : ""; }
 function e164(number: string) {
@@ -91,12 +91,6 @@ export async function startAgentCall(agentId: string, options: BpoCallOptions = 
       const [limits, usage] = await Promise.all([bpoEntitlements(client, options.bpoId), bpoLeadUsage(client, options.bpoId)]);
       if (!limits.calls || usage.calls >= limits.calls) throw new CallStartError("Your purchased call allowance has been reached. Buy more calls from Plans.", 409);
       if (!limits.minutes || usage.minutes >= limits.minutes) throw new CallStartError("Your purchased minute allowance has been reached. Buy more minutes from Plans.", 409);
-    } else {
-      const schedule = await client.query("SELECT is_enabled,start_time::text start_time,end_time::text end_time FROM agent_call_schedules WHERE agent_id=$1", [agentId]);
-      const assigned = schedule.rows[0];
-      if (assigned?.is_enabled && !insideSchedule(assigned.start_time, assigned.end_time)) {
-        throw new CallStartError(`Calling is scheduled from ${String(assigned.start_time).slice(0, 5)} to ${String(assigned.end_time).slice(0, 5)} Pakistan time.`, 403);
-      }
     }
     const active = await client.query("SELECT id FROM agent_calls WHERE agent_id=$1 AND status IN ('INITIATED','RINGING','ANSWERED') LIMIT 1", [agentId]);
     if (active.rowCount) throw new CallStartError("This agent already has a live or starting call. End it before starting another.");
@@ -104,7 +98,7 @@ export async function startAgentCall(agentId: string, options: BpoCallOptions = 
       FROM agents a JOIN LATERAL (SELECT lead_headers,lead_rows,script_text FROM script_assignments WHERE agent_id=a.id ORDER BY created_at DESC LIMIT 1) s ON TRUE
       JOIN agent_credentials ac ON ac.agent_id=a.id AND ac.provider='TELNYX' JOIN ai_credentials c ON c.id=ac.credential_id
       JOIN agent_credentials gac ON gac.agent_id=a.id AND gac.provider='GROQ' JOIN ai_credentials g ON g.id=gac.credential_id
-      WHERE a.id=$1 AND a.role='AGENT' AND a.status='APPROVED'`, [agentId]);
+      WHERE a.id=$1 AND a.role='AGENT' AND a.deleted_at IS NULL AND a.status='APPROVED'`, [agentId]);
     const agent = found.rows[0];
     if (!agent || !String(agent.script_text || "").trim()) throw new CallStartError("Approval, AI credentials, lead sheet and script are required.", 400);
     const today = await client.query("SELECT COUNT(*)::int total FROM agent_calls WHERE agent_id=$1 AND created_at >= date_trunc('day',NOW())", [agentId]);

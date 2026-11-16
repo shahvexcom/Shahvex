@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { bpoEntitlements, bpoLeadUsage } from "@/lib/bpo-entitlements";
 import { db } from "@/lib/database";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 import { syncLiveAssistantTranscript } from "@/lib/call-start";
 
 export async function agentCallDetail(id: string, agentId: string) {

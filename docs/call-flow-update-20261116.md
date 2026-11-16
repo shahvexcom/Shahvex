@@ -1,0 +1,11 @@
+# Script-driven outbound conversation — 16 November 2026
+
+The flexible opening uses the active script's name and company and asks one wellbeing question. The next response answers the customer's words, explains the actual calling purpose in one or two short sentences (three maximum), and asks permission for a brief call. Screening starts only after permission. Simple scripted purpose statements use the immediate speech path; complex purposes, questions, objections, and emotional replies use the grounded model. Mandatory and exact script openings remain model-handled.
+
+Mid-call presence checks retain the unheard turn. After confirming audibility, the worker repeats that turn rather than consuming a qualification step. Completed lead answers remain binding. General knowledge and general health education are supported with appropriate uncertainty and without diagnosis or prescribing; ordinary answers no longer share a blanket three-sentence synthesis limit. Harmless humor and mild flirting may receive a warm, playful response without invented personal history. Explicit sexual harassment and clear stop requests retain existing handling.
+
+A first soft time objection receives one respectful script-specific invitation without invented durations or lead requirements. A repeated time objection ends persuasion and permits a callback offer or polite close.
+
+Existing native handoff remains authoritative: an explicit human request skips unfinished screening, preserves partial fields, and does not wait for lead-comment synchronization. Identity and destination checks remain. The bridge drains the acknowledgment before the native command and detaches only the AI media leg on submission. Actual human-answer confirmation remains separate. Customer waiting audio/ringback is provided by the VICIdial human in-group's existing music-on-hold/ringback configuration; this source change does not provision or verify that remote configuration.
+
+Validation: 77 tests passed across conversation flow, route integration, prompt progress, contextual replies, synthesis, requested handoff, policy, and bridge lifecycle. TypeScript check passed. Bridge lifecycle tests required loopback networking outside the restricted sandbox. No external customer was dialed, no native ringing was heard, and no production service was restarted by this update.

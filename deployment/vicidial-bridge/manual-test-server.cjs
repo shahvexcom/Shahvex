@@ -17,10 +17,11 @@ function testerTransport(config,fetchImpl=fetch){
   };
 }
 
-function manualCallbacks({agent,request,callLimitSeconds=120}){
+function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
   if(!agent||typeof agent.name!=='string'||!agent.name.trim()||typeof agent.voice!=='string'||!agent.voice||typeof agent.script!=='string'||!agent.script.trim()||agent.script.length>16000||!['ai','customer'].includes(agent.first))throw Error('Configure the manual test name, approved voice, script and first speaker');
   if(!Number.isInteger(callLimitSeconds)||callLimitSeconds<10||callLimitSeconds>300)throw Error('Manual call duration must be 10-300 seconds');
-  const calls=new Map();let starting=false;
+  if(!Number.isInteger(maxCalls)||maxCalls<1||maxCalls>300)throw Error("Configure 1-300 manual concurrent calls");
+  const calls=new Map(),recent=[];let starting=0;
   const stop=async c=>{if(!c?.sessionId)return;try{const r=await request('stop',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}'},c.owner);await r.body?.cancel();}catch{/* Shared tester leases also expire abandoned diagnostic sessions. */}};
   async function dispatch(_url,init){
     const v=JSON.parse(Buffer.from(init.body).toString());
@@ -28,40 +29,60 @@ function manualCallbacks({agent,request,callLimitSeconds=120}){
     if(v.action==='connected'){
       if(v.agentUser!=='manual-test'||!/^manual-[a-f0-9]{32}$/.test(v.externalCallId))return json({error:'Manual namespace required'},409);
       const prior=[...calls.values()].find(c=>c.externalCallId===v.externalCallId);if(prior)return json({callId:prior.id,first:agent.first,maxCallDurationSeconds:callLimitSeconds,testOnly:true});
-      if(starting||calls.size)return json({error:'Only one manual test call is allowed'},429);
-      starting=true;const id=crypto.randomUUID(),owner=`manual-audio-${id}`;
+      if(starting+calls.size>=maxCalls)return json({error:maxCalls===1?'Only one manual test call is allowed':'Local call capacity reached'},429);
+      starting++;const id=crypto.randomUUID(),owner=`manual-audio-${id}`;
       try{
         const config={name:agent.name,voice:agent.voice,first:agent.first,style:agent.style||'Professional',script:agent.script,goal:'',task:'',instructions:'',knowledge:''};
         const response=await request('start',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({agentId:'manual-audio-test',config,deriveFromScript:true})},owner);
         if(!response.ok){await response.body?.cancel();return json({error:'Shared tester could not start; verify voice, script, access credentials and capacity'},503);}
         const body=await response.json();if(typeof body.id!=='string'||!/^[\w-]{1,80}$/.test(body.id))return json({error:'Invalid tester session response'},503);
         if(body.derivedFromScript!==true){await stop({sessionId:body.id,owner});return json({error:'Update/restart the shared tester service to support manual script setup'},503);}
-        const c={id,owner,sessionId:body.id,externalCallId:v.externalCallId,expires:Date.now()+callLimitSeconds*1000};calls.set(id,c);
+        const c={id,owner,sessionId:body.id,externalCallId:v.externalCallId,agent_name:agent.name,status:'ANSWERED',conversation_state:'LISTENING',conversation_history:[],expires:Date.now()+callLimitSeconds*1000};calls.set(id,c);
         if(init.signal?.aborted){calls.delete(id);await stop(c);return json({error:'Manual call disconnected during startup'},409);}
         return json({callId:id,first:agent.first,maxCallDurationSeconds:callLimitSeconds,testOnly:true});
-      }finally{starting=false;}
+      }finally{starting--;}
     }
     const c=calls.get(v.callId);
     if(!c)return v.action==='ended'?json({saved:true,testOnly:true}):json({error:'Manual session not found'},404);
     if(c.externalCallId!==v.externalCallId)return json({error:'Manual session mismatch'},409);
     if(v.action==='media-ready')return json({saved:true,testOnly:true});
-    if(v.action==='ended'||v.action==='hangup'){calls.delete(c.id);await stop(c);return json({ended:true,testOnly:true});}
+    if(v.action==='ended'||v.action==='hangup'){c.status='COMPLETED';c.conversation_state='COMPLETED';recent.unshift(c);recent.splice(20);calls.delete(c.id);await stop(c);return json({ended:true,testOnly:true});}
     if(v.action==='interrupt')return request('interrupt',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}',signal:init.signal},c.owner);
     if(v.action==='turn'){
       if(Date.now()>c.expires)return new Response('{"type":"end_call"}\n',{headers:{'content-type':'application/x-ndjson'}});
       const body=v.audio?Buffer.from(v.audio,'base64'):JSON.stringify({text:v.text||'',opening:v.opening===true,...(v.silenceStep?{silenceStep:v.silenceStep}:{})});
-      return request('turn',{method:'POST',headers:{'content-type':v.audio?'audio/wav':'application/json','x-shahvex-session':c.sessionId,'x-shahvex-turn':v.eventId},body,signal:init.signal},c.owner);
+      const response=await request('turn',{method:'POST',headers:{'content-type':v.audio?'audio/wav':'application/json','x-shahvex-session':c.sessionId,'x-shahvex-turn':v.eventId},body,signal:init.signal},c.owner);
+      if(!response.ok||!response.body)return response;
+      c.conversation_state='THINKING';
+      let pending='',answer;const decoder=new TextDecoder();
+      const consume=line=>{if(!line.trim())return;const e=JSON.parse(line);
+        if(e.type==='user'&&typeof e.text==='string')c.conversation_history.push({role:'user',content:e.text});
+        if(e.type==='delta'&&typeof e.text==='string'){if(!answer){answer={role:'assistant',content:''};c.conversation_history.push(answer);}answer.content+=e.text;c.conversation_state='SPEAKING';}
+      };
+      const stream=new ReadableStream({async start(controller){try{
+        for await(const chunk of response.body){pending+=decoder.decode(chunk,{stream:true});let at;while((at=pending.indexOf('\n'))>=0){consume(pending.slice(0,at));pending=pending.slice(at+1);}controller.enqueue(chunk);}
+        pending+=decoder.decode();if(pending.trim())consume(pending);
+      }catch(error){controller.error(error);return;}finally{if(c.status==='ANSWERED')c.conversation_state='LISTENING';}controller.close();}});
+      return new Response(stream,{headers:{'content-type':'application/x-ndjson'}});
     }
     return json({error:'Lead updates and transfers are disabled in manual tests'},409);
   }
-  return {dispatch,async close(){const active=[...calls.values()];calls.clear();await Promise.allSettled(active.map(stop));}};
+  return {dispatch,setCapacity(value){if(!Number.isInteger(value)||value<1||value>300||calls.size+starting>value)throw Error('Invalid capacity for current calls');maxCalls=value;},monitor(value){
+    if(value){
+      const a=value.agent;
+      if(!a||typeof a.name!=='string'||!a.name.trim()||a.name.length>80||typeof a.voice!=='string'||!/^[\w-]{1,80}$/.test(a.voice)||typeof a.script!=='string'||a.script.trim().length<10||a.script.length>16000||!['ai','customer'].includes(a.first))throw Error('Enter a name, voice, script and first speaker');
+      if(calls.size||starting)throw Error('Finish the current local call before changing its settings');
+      Object.assign(agent,{name:a.name.trim(),voice:a.voice,script:a.script,first:a.first});
+    }
+    return {testOnly:true,calls:[...calls.values(),...recent].map(c=>({id:c.id,agent_name:c.agent_name,status:c.status,conversation_state:c.conversation_state,conversation_history:c.conversation_history})),agent:{name:agent.name,voice:agent.voice,first:agent.first}};
+  },async close(){const active=[...calls.values()];calls.clear();await Promise.allSettled(active.map(stop));}};
 }
 
 function createManualBridge(config,{request,fetchImpl=fetch,logger=console.error}={}){
   if(config.enabled!==true||typeof config.secret!=='string'||config.secret.length<32)throw Error('Enable the isolated manual configuration and set its separate shared secret');
   const connectionId=crypto.randomUUID(),callbacks=manualCallbacks({agent:config.agent,request:request||testerTransport(config.tester,fetchImpl),callLimitSeconds:config.callLimitSeconds||120});
   const spoolDir=path.join(config.stateDirectory||'/var/lib/shahvex-vicidial','manual-test');
-  const bridge=createBridge({siteUrl:'https://manual-test.invalid/',connectionId,secret:config.secret,spoolDir,fetchImpl:callbacks.dispatch,logger,maxCalls:1,testOnly:true,allowUnregisteredManualAudio:config.allowUnregisteredAudio===true});
+  const bridge=createBridge({siteUrl:'https://manual-test.invalid/',connectionId,secret:config.secret,spoolDir,fetchImpl:callbacks.dispatch,logger,maxCalls:1,testOnly:true,allowUnregisteredManualAudio:config.allowUnregisteredAudio===true,localMonitor:callbacks.monitor});
   let windowTimer;
   return {bridge,async listen(){
     const controlPort=config.controlPort??8792,audioPort=config.audioPort??9020;

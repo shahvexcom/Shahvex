@@ -9,10 +9,11 @@ export class BrowserSpeechCapture {
   private talking = false;
   private lastSpeechAtMs = 0;
   private draftSent = false;
+  private bargeProbes = 0;
   private reference: number[] = [];
   private referenceAt = 0;
   get isSpeaking() { return this.talking; }
-  reset() { this.frames = []; this.pre = []; this.voiced = 0; this.quiet = 0; this.talking = false; this.lastSpeechAtMs = 0; this.draftSent = false; }
+  reset() { this.frames = []; this.pre = []; this.voiced = 0; this.quiet = 0; this.talking = false; this.lastSpeechAtMs = 0; this.draftSent = false; this.bargeProbes=0; }
   playback(samples: Float32Array) { this.reference.push(...samples); if (this.reference.length > 12000) this.reference.splice(0, this.reference.length - 12000); this.referenceAt = performance.now(); }
   private echo(frame: Int16Array) {
     if (performance.now() - this.referenceAt > 450 || this.reference.length < frame.length) return false;
@@ -42,20 +43,23 @@ export class BrowserSpeechCapture {
     if (!this.talking && speech && this.voiced >= (speakerActive ? 10 : 5)) { this.talking = true; this.frames = [...this.pre]; started = true; }
     if (!this.talking && !speech) this.voiced = 0;
     if (this.talking) this.frames.push(echo ? new Int16Array(frame.length) : frame);
-    this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 12) this.pre.shift();
+    this.pre.push(echo ? new Int16Array(frame.length) : frame); if (this.pre.length > 30) this.pre.shift();
+    let probe: {blob:Blob} | undefined;
+    // Classify early speech while retaining the complete final recording.
+    if(speakerActive&&this.talking&&speech&&this.bargeProbes<2&&this.voiced>=[16,32][this.bargeProbes]){this.bargeProbes++;probe={blob:speechWav(this.frames)};}
     let recording: { blob: Blob; durationMs: number; voicedMs: number; id: string; speechEndedAtMs: number } | undefined;
     let draft: { blob: Blob; id: string; speechEndedAtMs: number } | undefined;
-    // Speculative processing only. Keep recording through the 300 ms
+    // Speculative processing only. Keep recording through the 700 ms
     // finalization guard; a draft must never be played or committed on its own.
     if (this.speculative && this.talking && this.quiet >= 5 && this.voiced >= 10 && !this.draftSent) {
       draft = { blob: speechWav(this.frames), id: crypto.randomUUID(), speechEndedAtMs: this.lastSpeechAtMs };
       this.draftSent = true;
     }
-    // 300 ms of trailing silence; retain the existing speech/echo safeguards.
-    if (this.talking && (this.quiet >= 15 || this.frames.length >= 1000)) {
+    // 700 ms of trailing silence; retain the existing speech/echo safeguards.
+    if (this.talking && (this.quiet >= 35 || this.frames.length >= 1000)) {
       if (this.voiced >= 10) recording = { blob: speechWav(this.frames), durationMs: this.frames.length * 20, voicedMs: this.voiced * 20, id: crypto.randomUUID(), speechEndedAtMs: this.lastSpeechAtMs };
       this.reset();
     }
-    return { started, recording, draft, draftInvalidated, rms, echo };
+    return { started, recording, draft, probe, draftInvalidated, rms, echo };
   }
 }

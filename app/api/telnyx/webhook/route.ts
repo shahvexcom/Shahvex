@@ -1,6 +1,6 @@
 import { createPublicKey, randomUUID, verify } from "node:crypto";
 import { db } from "@/lib/database";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 export const runtime = "nodejs";
 

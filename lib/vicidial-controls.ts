@@ -9,12 +9,19 @@ import { syncVicidialComments, transferVicidialCall } from "./vicidial-results";
 export async function vicidialCallCommand(id:string,action:string,agentId?:string,controllerOnly=false) {
   const pool=await db();
   const a=(await pool.query(`SELECT a.*,c.live_config,c.server_url,c.username,c.secret_ciphertext,c.bridge_secret_ciphertext FROM agent_calls a JOIN voip_connections c ON c.id=a.voip_connection_id
-    WHERE a.id=$1 AND a.telephony_provider='VICIDIAL' AND ($2::text IS NULL OR a.agent_id=$2) AND (NOT $3::boolean OR NOT EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.agent_id))`,[id,agentId||null,controllerOnly])).rows[0];
+    WHERE a.id=$1 AND a.telephony_provider IN ('VICIDIAL','AUDIOSOCKET') AND ($2::text IS NULL OR a.agent_id=$2) AND (NOT $3::boolean OR NOT EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.agent_id))`,[id,agentId||null,controllerOnly])).rows[0];
   if(!a)return null;
   try {
+    if(a.telephony_provider==='AUDIOSOCKET'&&!a.vicidial_call_id&&['sync-comments','transfer','record-start','record-stop'].includes(action))throw Error('This direct audio call is not linked to a native VICIdial call; native sync and transfer are unavailable');
     if(action==='sync-comments'){await syncVicidialComments(id);return Response.json({message:"VICIdial comments synchronized."});}
     if(action==='transfer'){await syncVicidialComments(id);await transferVicidialCall(id);return Response.json({message:"Human transfer submitted; waiting for dialer confirmation."});}
     if(!['ANSWERED','RINGING','INITIATED'].includes(a.status))throw Error("This call has ended");
+    if(action==='hangup'&&a.telephony_provider==='AUDIOSOCKET'){
+      const live=vicidialLiveConfig.parse(a.live_config);
+      const result=await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),'/command',{callId:id,action:'close-audio'});
+      if(result.accepted!==true)throw Error('Audio bridge did not confirm call closure');
+      return Response.json({message:'Closing direct audio call.'});
+    }
     if(action==='hangup') {
       requireVicidialSuccess(await vicidialRequest(a.server_url,a.username,decryptCredential(a.secret_ciphertext),{function:'ra_call_control',agent_user:a.vicidial_agent_user,value:a.vicidial_call_id,stage:'HANGUP'},true),'ra_call_control');
       await pool.query("UPDATE agent_calls SET ending_requested=TRUE,conversation_state='ENDING',updated_at=NOW() WHERE id=$1",[id]);

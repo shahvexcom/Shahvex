@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const fs=require('node:fs');const ts=require('typescript');const http=require('node:http');
-function load(file,deps={}){const m={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;new Function('require','module','exports',code)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./vicidial-config'?load('lib/vicidial-config.ts'):n==='./vicidial-bridge'?load('lib/vicidial-bridge.ts',{'server-only':{},'./vicidial':vici}):require(n),m,m.exports);return m.exports;}
+function load(file,deps={}){const m={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText;new Function('require','module','exports',code)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./vicidial-config'?load('lib/vicidial-config.ts'):n==='./vicidial-bridge'?load('lib/vicidial-bridge.ts',{'server-only':{},'./vicidial':vici}):n==='./request-origin'?load('lib/request-origin.ts'):require(n),m,m.exports);return m.exports;}
 const vici=load('lib/vicidial.ts',{'server-only':{}});
 test('VICIdial destination validation and credential-aware verification reject false positives',()=>{
   assert.throws(()=>vici.vicidialURL('https://user:secret@dialer.example.com'));
@@ -53,4 +53,16 @@ test('connection creation needs no agents and delete/disable stay owner scoped w
   assert.equal((await c.postVoip(request({action:'delete',id:'saved-connection'}),'admin')).status,200);
   const archived=writes.find(w=>w.sql.startsWith('UPDATE voip_connections SET enabled=FALSE')&&w.p[2]===true);assert.ok(archived);assert.equal(archived.p[1],'owner');assert.ok(!writes.some(w=>/DELETE FROM (?:agent_calls|voip_connections)/.test(w.sql)));
  }finally{if(previous===undefined)delete process.env.CREDENTIAL_ENCRYPTION_KEY;else process.env.CREDENTIAL_ENCRYPTION_KEY=previous;}
+});
+
+test('VoIP counts and routes exclude deleted agents while keeping reserved routes visible',async()=>{
+ const queries=[];const pool={query:async sql=>{queries.push(sql);if(sql.startsWith('SELECT id,admin_role'))return{rows:[{admin_role:'SUPER_ADMIN'}]};return{rows:[]};}};
+ const c=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'fixture'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',readSession:async()=>({role:'ADMIN',agentId:'owner'})},'./database':{db:async()=>pool},'./credential-crypto':{},'./vicidial':vici});
+ assert.equal((await c.getVoip(new Request('http://localhost/api/admin/voip'),'admin')).status,200);assert.match(queries.find(s=>s.includes('FROM voip_agent_assignments')),/a.deleted_at IS NULL/);assert.match(queries.find(s=>s.startsWith('SELECT a.id,a.name')),/a.deleted_at IS NULL/);assert.match(c.controllerAgentSQL,/a.deleted_at IS NULL/);
+});
+
+test('Test connection accepts actual browser Host when the internal Next URL uses 0.0.0.0',async()=>{
+ let tests=0;const pool={query:async sql=>({rows:sql.startsWith('SELECT id,admin_role')?[{admin_role:'SUPER_ADMIN'}]:(sql.includes('FROM voip_connections')&&sql.startsWith('SELECT'))?[{id:'connection',enabled:true,server_url:'https://dialer.example.com',username:'api',secret_ciphertext:'encrypted'}]:[]})};
+ const c=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'fixture'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',readSession:async()=>({role:'ADMIN',agentId:'owner'})},'./database':{db:async()=>pool},'./credential-crypto':{decryptCredential:()=> 'secret'},'./vicidial':{...vici,testVicidial:async()=>{tests++;return{status:'CONNECTED',message:'API verified'};},readVicidialVersion:async()=>({})}});
+ const r=await c.postVoip(new Request('http://0.0.0.0:3000/api/admin/voip',{method:'POST',headers:{host:'localhost:3000',origin:'http://localhost:3000','content-type':'application/json'},body:JSON.stringify({action:'test',id:'connection'})}),'admin');assert.notEqual(r.status,403);assert.equal(tests,1);
 });

@@ -16,6 +16,10 @@ ALTER TABLE campaign_definitions ADD COLUMN IF NOT EXISTS script_extraction_hash
 CREATE TABLE IF NOT EXISTS campaign_agent_assignments(
  agent_id TEXT PRIMARY KEY REFERENCES agents(id),campaign_id TEXT NOT NULL,owner_id TEXT NOT NULL REFERENCES agents(id),enabled BOOLEAN NOT NULL DEFAULT TRUE,
  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),FOREIGN KEY(campaign_id,owner_id) REFERENCES campaign_definitions(id,owner_id));
+CREATE TABLE IF NOT EXISTS agent_campaign_preferences(
+ agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+ owner_id TEXT NOT NULL REFERENCES agents(id),category_id TEXT REFERENCES campaign_categories(id) ON DELETE SET NULL,
+ external_campaign_id VARCHAR(80) NOT NULL DEFAULT '',updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '',ADD COLUMN IF NOT EXISTS conversation_config JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE voip_connections ADD COLUMN IF NOT EXISTS api_version TEXT NOT NULL DEFAULT '',ADD COLUMN IF NOT EXISTS asterisk_version TEXT NOT NULL DEFAULT '',
  ADD COLUMN IF NOT EXISTS last_sync_at TIMESTAMPTZ,ADD COLUMN IF NOT EXISTS last_sync_error TEXT NOT NULL DEFAULT '',

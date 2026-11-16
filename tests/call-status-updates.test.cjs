@@ -1,0 +1,6 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),ts=require('typescript');
+test('live status updates use one read-only lightweight query and do not load the full roster/history',async()=>{
+ let queries=0;const deps={'next/headers':{cookies:async()=>({get:()=>({value:'fixture'})})},'@/lib/session':{readSession:async()=>({role:'ADMIN'})},'@/lib/database':{db:async()=>({query:async sql=>{queries++;assert.match(sql,/RIGHT\(c.transcript,1500\)/);assert.doesNotMatch(sql,/conversation_history|UPDATE|DELETE/);return {rows:[{id:'call',status:'COMPLETED',calls_today:1,completed:1}]}}})},'@/lib/call-start':{},'@/lib/credential-crypto':{}};
+ const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync('app/api/admin/calls/route.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:require(n),m,m.exports);
+ const response=await m.exports.GET(new Request('http://localhost/api/admin/calls?updates=1'));const data=await response.json();assert.equal(queries,1);assert.equal(data.calls[0].status,'COMPLETED');assert.equal(data.updatesOnly,true);assert.equal(response.headers.get('cache-control'),'no-store');
+});

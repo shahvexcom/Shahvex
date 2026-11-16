@@ -1,0 +1,9 @@
+# Early semantic barge-in
+
+The earlier implementation waited for utterance finalization (700 ms trailing quiet) before requesting speech classification. This made callers repeat interruptions. Native and browser capture now emit early probes at 320 and 640 ms of voiced speech while continuing to record the utterance. Meaningful transcript text clears queued playback and cancels the current generation; filler and acknowledgment transcripts preserve playback. Full final recognition still drives the next response, so a partial transcript does not start an early or duplicate answer.
+
+Native final processing waits for any outstanding early cancellation so the full customer turn is not dropped by the changed generation. Early probes retain existing noise/echo gating and do not create customer history or infer consent. The no-response and handoff behaviors are retained.
+
+Verification: local AudioSocket test feeds customer speech without trailing silence; a filler leaves audio playing, then a meaningful wait request stops audio before the utterance ends. No new response begins until finalization, then the complete wait transcript is processed exactly once. Browser capture test verifies early probes retain the full recording. The first 320 ms of voiced synthetic telephone-bandwidth wait audio recognized as “Wait a second.” in 86 ms local recognition time. This is a synthetic smoke check, not a universal end-to-end latency guarantee. Report: restore/reports/early-speech-recognition-20261114.json.
+
+Focused interruption/capture/lifecycle run: 24 tests passed and TypeScript passed. Separate silence/handoff/emotion regression retained exact no-response timings. Activation checks require zero active/starting calls, audio connections and adapter sessions; current capacity and voice settings are preserved.

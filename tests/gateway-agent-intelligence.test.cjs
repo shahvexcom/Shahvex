@@ -32,7 +32,7 @@ test('OFF and unknown policy bindings preserve original messages/options and sin
     let calls=0;const g=make(f,{intelligence,llm:async m=>{calls++;seen.push(m);return 'An ordinary baseline response.';}}),id=g.create(f.owner,f.config);
     await g.turn(f.owner,id,pcm());assert.equal(calls,1);assert.ok(!g.owned(f.owner,id).intelligenceSnapshot);g.close(f.owner,id);
   }
-  assert.deepEqual(seen[0],seen[1]);assert.ok(seen[0][0].content.endsWith(f.config.script));
+  assert.deepEqual(seen[0],seen[1]);assert.ok(seen[0][0].content.includes(f.config.script));
 });
 test('dynamic agents isolate scripts, identity, trusted facts, history, state and ownership',async()=>{
   const a=fixture(),b=fixture('owner-b','Theo','product-b'),policies=[a.policy,b.policy],messages=[],voices=[];
@@ -118,9 +118,9 @@ test('explicit stop/withdrawal uses approved literal only and prevents continued
     await assert.rejects(g.turn(f.owner,id,pcm()),/stopped/);assert.equal(calls,0);
   }finally{g.close(f.owner,id);}
 });
-test('withdrawal without an approved response never starts synthesis or model inference',async()=>{
+test('explicit opt-out uses the runtime closing without model inference',async()=>{
   const f=fixture();let calls=0;const g=make(f,{stt:async()=> 'Stop calling me.',llm:async()=>{calls++;},tts:async()=>{calls++;return pcm();}}),id=g.create(f.owner,f.config);
-  try{await assert.rejects(g.turn(f.owner,id,pcm()),/stopped/);assert.equal(calls,0);}finally{g.close(f.owner,id);}
+  try{const events=[];const result=await g.turn(f.owner,id,pcm(),16000,undefined,event=>events.push(event));assert.match(result.reply,/end the call/);assert.ok(events.some(e=>e.type==='end_call'&&e.reason==='customer_request'));assert.equal(calls,2);await assert.rejects(g.turn(f.owner,id,pcm()),/ended/);}finally{g.close(f.owner,id);}
 });
 test('incremental parser validates bounds, escaping and final/delta equality without forwarding raw model markup',()=>{
   const values=[],signal=new AbortController().signal,p=new IntelligenceStream(v=>values.push(v),signal);

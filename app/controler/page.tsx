@@ -23,7 +23,7 @@ export default async function ControlerPage() {
     (SELECT COUNT(*)::int FROM agent_calls c WHERE c.agent_id = a.id AND c.call_type = 'LEAD') dialed_calls,
     (SELECT COUNT(*)::int FROM leads l WHERE l.agent_id = a.id) total_leads
     FROM agents a
-    WHERE a.role = 'AGENT'
+    WHERE a.role = 'AGENT' AND a.deleted_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id)
     ORDER BY a.created_at DESC`);
   return (

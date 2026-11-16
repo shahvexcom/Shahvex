@@ -2,7 +2,7 @@ import { cookies } from "next/headers";
 import { z } from "zod";
 import { readSession, SESSION_COOKIE } from "@/lib/session";
 import { db } from "@/lib/database";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 const requestSchema = z.object({
   text: z.string().trim().min(1, "Write some text to preview.").max(200, "Groq voice previews support up to 200 characters."),

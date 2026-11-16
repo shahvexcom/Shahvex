@@ -1,3 +1,5 @@
+import { isSameRequestOrigin } from "./request-origin";
+import { saveAgentCampaign } from "./agent-campaign-assignment";
 import { missingVicidialSetup } from "./vicidial-config";
 import { extractCampaignScript } from "./campaign-script-extraction";
 import { randomUUID,createHash } from "node:crypto";
@@ -12,7 +14,7 @@ type Portal='admin'|'bpo';
 const reply=(v:unknown,status=200)=>Response.json(v,{status,headers:{'cache-control':'no-store'}});
 const uuid=z.string().uuid();
 const category=z.object({action:z.literal('save-category'),id:uuid.optional(),name:z.string().trim().min(1).max(80),description:z.string().max(3000).default('')});
-const definition=z.object({action:z.literal('save-campaign'),id:uuid.optional(),name:z.string().trim().min(1).max(100),categoryId:uuid.nullable().default(null),connectionId:uuid,externalId:z.string().regex(/^[\w-]{2,80}$/),enabled:z.boolean(),script:z.string().trim().min(1).max(16000),transferInGroup:z.string().regex(/^[\w-]{0,80}$/).default(''),settings:campaignSettings.optional()});
+const definition=z.object({action:z.literal('save-campaign'),id:uuid.optional(),name:z.string().trim().min(1).max(100),categoryId:uuid.nullable().default(null),connectionId:uuid,externalId:z.string().regex(/^[\w-]{2,80}$/),enabled:z.boolean(),script:z.string().trim().min(1).max(16000),transferInGroup:z.string().regex(/^[\w-]{0,80}$/).default(''),settings:campaignSettings.optional(),agentIds:z.array(z.string().min(1).max(100)).max(1000).optional()});
 const assignments=z.object({action:z.enum(['assign','unassign']),campaignId:uuid,agentIds:z.array(z.string().min(1).max(100)).min(1).max(1000)});
 const control=z.object({action:z.enum(['validate','start','pause','stop']),campaignId:uuid});
 const sync=z.object({action:z.enum(['sync-campaigns','disconnect']),connectionId:uuid});
@@ -23,15 +25,24 @@ export async function getCampaigns(_request:Request,portal:Portal){
  const [categories,campaigns,agents,connections]=await Promise.all([
   pool.query('SELECT id,name,description FROM campaign_categories WHERE owner_id=$1 ORDER BY name',[owner]),
   pool.query(`SELECT d.*,CASE WHEN c.deleted_at IS NULL THEN c.name ELSE c.name||' (deleted)' END connection_name,k.name category_name,
-   (SELECT COUNT(*)::int FROM campaign_agent_assignments x WHERE x.campaign_id=d.id AND x.enabled) total_agents,
-   (SELECT COUNT(*)::int FROM ai_agent_runtime_states r WHERE r.campaign_id=d.id AND r.state='READY') ready_agents,
+   (SELECT COUNT(*)::int FROM campaign_agent_assignments x JOIN agents member ON member.id=x.agent_id AND member.deleted_at IS NULL WHERE x.campaign_id=d.id) total_agents,
+   (SELECT COUNT(*)::int FROM campaign_agent_assignments x JOIN agents member ON member.id=x.agent_id AND member.deleted_at IS NULL
+    JOIN voip_agent_assignments va ON va.agent_id=member.id AND va.connection_id=d.connection_id AND va.campaign_id=d.external_campaign_id
+    WHERE x.campaign_id=d.id AND member.status='APPROVED' AND COALESCE(member.local_voice_id,'')<>'' AND c.enabled AND c.status='CONNECTED' AND c.media_verified_at IS NOT NULL
+    AND BTRIM(d.script)<>'' AND (SELECT COUNT(*) FROM agent_calls ac WHERE ac.agent_id=member.id AND ac.created_at>=date_trunc('day',NOW()))<member.daily_call_limit
+    AND NOT EXISTS(SELECT 1 FROM agent_calls ac WHERE ac.agent_id=member.id AND ac.status IN ('INITIATED','RINGING','ANSWERED'))
+    AND NOT EXISTS(SELECT 1 FROM ai_agent_runtime_states rs WHERE rs.agent_id=member.id AND rs.call_id IS NOT NULL)
+    AND (COALESCE(c.live_config->>'directAudioMode','false')<>'true' OR EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE(c.live_config->'directAudioLines','[]'::jsonb)) line WHERE line->>'agentId'=member.id))) ready_agents,
+   (SELECT COUNT(*)::int FROM ai_agent_runtime_states r JOIN campaign_agent_assignments x ON x.agent_id=r.agent_id AND x.campaign_id=d.id AND x.enabled
+    JOIN agents member ON member.id=r.agent_id AND member.deleted_at IS NULL AND member.status='APPROVED'
+    JOIN vicidial_pool_agents q ON q.agent_id=r.agent_id AND q.ready WHERE r.campaign_id=d.id AND r.state='READY' AND r.call_id IS NULL) intake_agents,
    (SELECT COUNT(*)::int FROM ai_agent_runtime_states r WHERE r.campaign_id=d.id AND r.state IN ('BUSY','RESERVED','TRANSFERRING')) busy_agents
    FROM campaign_definitions d JOIN voip_connections c ON c.id=d.connection_id LEFT JOIN campaign_categories k ON k.id=d.category_id WHERE d.owner_id=$1 AND d.deleted_at IS NULL ORDER BY d.name`,[owner]),
-  pool.query(`SELECT a.id,a.name,a.local_voice_id,a.language,x.campaign_id,x.enabled,r.state runtime_state,r.last_seen_at,r.last_error,
+  pool.query(`SELECT a.id,a.name,a.local_voice_id,a.language,p.category_id preferred_category_id,p.external_campaign_id preferred_campaign_id,x.campaign_id,x.enabled,r.state runtime_state,r.last_seen_at,r.last_error,
    r.call_id,coalesce((SELECT COUNT(*) FROM agent_calls ac WHERE ac.agent_id=a.id AND ac.status='COMPLETED'),0)::int completed_calls,
    coalesce((SELECT COUNT(*) FROM agent_calls ac WHERE ac.agent_id=a.id AND ac.transfer_status='ANSWERED'),0)::int completed_transfers
-   FROM agents a LEFT JOIN campaign_agent_assignments x ON x.agent_id=a.id LEFT JOIN ai_agent_runtime_states r ON r.agent_id=a.id
-   WHERE a.role='AGENT' AND ${portal==='admin'?controllerAgentSQL:'EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id AND b.bpo_id=$1)'} ORDER BY a.name`,portal==='admin'?[]:[owner]),
+   FROM agents a LEFT JOIN agent_campaign_preferences p ON p.agent_id=a.id AND p.owner_id=$1 LEFT JOIN campaign_agent_assignments x ON x.agent_id=a.id LEFT JOIN ai_agent_runtime_states r ON r.agent_id=a.id
+   WHERE a.role='AGENT' AND a.deleted_at IS NULL AND ${portal==='admin'?controllerAgentSQL:'EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id AND b.bpo_id=$1)'} ORDER BY a.name`,[owner]),
   pool.query('SELECT id,name,enabled,status,api_version,asterisk_version,media_verified_at,last_sync_at,last_sync_error,last_heartbeat_at,last_human_event_at FROM voip_connections WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY name',[owner]),
  ]);
  return reply({categories:categories.rows,campaigns:campaigns.rows,agents:agents.rows,connections:connections.rows});
@@ -39,7 +50,7 @@ export async function getCampaigns(_request:Request,portal:Portal){
 
 export async function postCampaigns(request:Request,portal:Portal){
  const owner=await principal(portal);if(!owner)return reply({error:'Campaign management is not authorized'},403);
- if(request.headers.get('origin')!==new URL(request.url).origin)return reply({error:'Same-origin request required'},403);
+ if(!isSameRequestOrigin(request))return reply({error:'Same-origin request required'},403);
  const raw=await request.text();if(raw.length>200000)return reply({error:'Request too large'},413);
  const value=JSON.parse(raw),pool=await db();
  if(value.action==='delete-category'&&uuid.safeParse(value.id).success){
@@ -84,11 +95,17 @@ export async function postCampaigns(request:Request,portal:Portal){
   if(v.id){const existing=(await pool.query('SELECT * FROM campaign_definitions WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL',[v.id,owner])).rows[0];if(!existing)return reply({error:'Campaign not found'},404);
    // Disable only remote intake; active calls retain their immutable snapshots.
    const members=await pool.query('SELECT agent_id FROM campaign_agent_assignments WHERE campaign_id=$1',[v.id]);for(const a of members.rows)await (await import('./vicidial-live')).stopVicidialAgent(a.agent_id);
-   await pool.query(`UPDATE campaign_definitions SET name=$1,category_id=$2,connection_id=$3,external_campaign_id=$4,enabled=$5,script=$6,settings=$7::jsonb,transfer_in_group=$8,script_extraction_hash=$11,validated_at=CASE WHEN connection_id=$3 AND external_campaign_id=$4 THEN validated_at ELSE NULL END,updated_at=NOW() WHERE id=$9 AND owner_id=$10`,[v.name,v.categoryId,v.connectionId,v.externalId,v.enabled,v.script,JSON.stringify(settings),v.transferInGroup,v.id,owner,extractionHash]);
+   await pool.query(`UPDATE campaign_definitions SET name=$1,category_id=$2,connection_id=$3,external_campaign_id=$4::varchar(80),enabled=$5,script=$6,settings=$7::jsonb,transfer_in_group=$8,script_extraction_hash=$11,validated_at=CASE WHEN connection_id=$3 AND external_campaign_id=$4::varchar(80) THEN validated_at ELSE NULL END,updated_at=NOW() WHERE id=$9 AND owner_id=$10`,[v.name,v.categoryId,v.connectionId,v.externalId,v.enabled,v.script,JSON.stringify(settings),v.transferInGroup,v.id,owner,extractionHash]);
    await pool.query("UPDATE voip_agent_assignments SET connection_id=$1,campaign_id=$2,updated_at=NOW() WHERE agent_id IN (SELECT agent_id FROM campaign_agent_assignments WHERE campaign_id=$3) AND owner_id=$4",[v.connectionId,v.externalId,v.id,owner]);
    return reply({saved:true,id:v.id,message:'Campaign saved. Active conversations keep their existing script; intake resumes through reconciliation.'});
   }
-  const id=randomUUID();const created=await pool.query('INSERT INTO campaign_definitions(id,owner_id,category_id,name,connection_id,external_campaign_id,enabled,script,settings,transfer_in_group,script_extraction_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11) ON CONFLICT(connection_id,external_campaign_id) DO UPDATE SET name=EXCLUDED.name,category_id=EXCLUDED.category_id,enabled=EXCLUDED.enabled,script=EXCLUDED.script,settings=EXCLUDED.settings,transfer_in_group=EXCLUDED.transfer_in_group,script_extraction_hash=EXCLUDED.script_extraction_hash,deleted_at=NULL,intake_state=\'STOPPED\',validated_at=NULL,updated_at=NOW() WHERE campaign_definitions.deleted_at IS NOT NULL AND campaign_definitions.last_error=\'\' AND campaign_definitions.owner_id=EXCLUDED.owner_id RETURNING id',[id,owner,v.categoryId,v.name,v.connectionId,v.externalId,v.enabled,v.script,JSON.stringify(settings),v.transferInGroup,extractionHash]);if(created.rowCount===0)return reply({error:'This campaign mapping already exists. Use Edit campaign.'},409);return reply({saved:true,id:created.rows[0]?.id||id},201);
+  const ids=[...new Set(v.agentIds||[])];
+  if(ids.length){const allowed=await pool.query(`SELECT a.id FROM agents a WHERE a.id=ANY($1::text[]) AND a.role='AGENT' AND ${portal==='admin'?controllerAgentSQL:'EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id AND b.bpo_id=$2)'}`,portal==='admin'?[ids]:[ids,owner]);if(allowed.rows.length!==ids.length)return reply({error:'Only accessible agents may be assigned'},403);}
+  if(ids.length&&(await pool.query('SELECT agent_id FROM campaign_agent_assignments WHERE agent_id=ANY($1::text[])',[ids])).rows.length)return reply({error:'An agent can belong to only one campaign. Remove its current assignment first.'},409);
+  for(const agentId of ids)await (await import('./vicidial-live')).stopVicidialAgent(agentId);
+  const tx=await pool.connect();try{await tx.query('BEGIN');
+  const id=randomUUID();const created=await tx.query('INSERT INTO campaign_definitions(id,owner_id,category_id,name,connection_id,external_campaign_id,enabled,script,settings,transfer_in_group,script_extraction_hash) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11) ON CONFLICT(connection_id,external_campaign_id) DO UPDATE SET name=EXCLUDED.name,category_id=EXCLUDED.category_id,enabled=EXCLUDED.enabled,script=EXCLUDED.script,settings=EXCLUDED.settings,transfer_in_group=EXCLUDED.transfer_in_group,script_extraction_hash=EXCLUDED.script_extraction_hash,deleted_at=NULL,intake_state=\'STOPPED\',validated_at=NULL,updated_at=NOW() WHERE campaign_definitions.deleted_at IS NOT NULL AND campaign_definitions.last_error=\'\' AND campaign_definitions.owner_id=EXCLUDED.owner_id RETURNING id',[id,owner,v.categoryId,v.name,v.connectionId,v.externalId,v.enabled,v.script,JSON.stringify(settings),v.transferInGroup,extractionHash]);if(created.rowCount===0){await tx.query('ROLLBACK');return reply({error:'This campaign mapping already exists. Use Edit campaign.'},409);}const savedId=created.rows[0].id;for(const agentId of ids)await saveAgentCampaign(tx,agentId,owner,savedId);await tx.query('COMMIT');return reply({saved:true,id:savedId},201);
+  }catch(e){await tx.query('ROLLBACK');if(e instanceof Error&&e.message.startsWith('An agent can belong to only one campaign.'))return reply({error:e.message},409);throw e;}finally{tx.release();}
  }
  const assign=assignments.safeParse(value);
  if(assign.success){const v=assign.data,d=(await pool.query('SELECT * FROM campaign_definitions WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL',[v.campaignId,owner])).rows[0];if(!d)return reply({error:'Campaign not found'},404);
@@ -96,9 +113,8 @@ export async function postCampaigns(request:Request,portal:Portal){
   if(v.action==='assign'){const conflicts=await pool.query('SELECT agent_id FROM campaign_agent_assignments WHERE agent_id=ANY($1::text[]) AND campaign_id<>$2',[ids,d.id]);if(conflicts.rows.length)return reply({error:'An agent can belong to only one campaign. Remove its current assignment first.'},409);}
   for(const id of ids)await (await import('./vicidial-live')).stopVicidialAgent(id);
   const tx=await pool.connect();try{await tx.query('BEGIN');const current=await tx.query('SELECT id FROM campaign_definitions WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL FOR SHARE',[d.id,owner]);if(!current.rows.length){await tx.query('ROLLBACK');return reply({error:'Campaign was deleted'},409);}await tx.query('SELECT id FROM agents WHERE id=ANY($1::text[]) ORDER BY id FOR UPDATE',[ids]);for(const id of ids){if(v.action==='unassign'){await tx.query('DELETE FROM campaign_agent_assignments WHERE agent_id=$1 AND campaign_id=$2 AND owner_id=$3',[id,d.id,owner]);await tx.query('DELETE FROM voip_agent_assignments WHERE agent_id=$1 AND connection_id=$2 AND campaign_id=$3 AND owner_id=$4',[id,d.connection_id,d.external_campaign_id,owner]);await tx.query("UPDATE ai_agent_runtime_states SET state='OFFLINE',updated_at=NOW() WHERE agent_id=$1 AND call_id IS NULL",[id]);}
-   else{const occupied=await tx.query('SELECT agent_id FROM campaign_agent_assignments WHERE agent_id=$1 AND campaign_id<>$2 UNION ALL SELECT agent_id FROM ai_agent_runtime_states WHERE agent_id=$1 AND call_id IS NOT NULL',[id,d.id]);if(occupied.rows.length){await tx.query('ROLLBACK');return reply({error:'Agent is busy or already belongs to another campaign. Remove its assignment and finish its active call first.'},409);}
-    const inserted=await tx.query('INSERT INTO campaign_agent_assignments(agent_id,campaign_id,owner_id) VALUES($1,$2,$3) ON CONFLICT(agent_id) DO UPDATE SET enabled=TRUE,updated_at=NOW() WHERE campaign_agent_assignments.campaign_id=EXCLUDED.campaign_id AND campaign_agent_assignments.owner_id=EXCLUDED.owner_id RETURNING agent_id',[id,d.id,owner]);if(inserted.rowCount===0){await tx.query('ROLLBACK');return reply({error:'Agent already belongs to another campaign. Remove its current assignment first.'},409);}await tx.query("INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id) VALUES($1,$2,$3,$4,'OUTBOUND',$5) ON CONFLICT(owner_id,agent_id) DO UPDATE SET connection_id=EXCLUDED.connection_id,campaign_id=EXCLUDED.campaign_id,direction='OUTBOUND',updated_at=NOW()",[randomUUID(),owner,id,d.connection_id,d.external_campaign_id]);}}
-   await tx.query('COMMIT');}catch(e){await tx.query('ROLLBACK');throw e;}finally{tx.release();}return reply({saved:true,message:'Assignment saved; active call snapshots are preserved.'});
+   else{await saveAgentCampaign(tx,id,owner,d.id);}}
+   await tx.query('COMMIT');}catch(e){await tx.query('ROLLBACK');if(e instanceof Error&&e.message.startsWith('An agent can belong to only one campaign.'))return reply({error:e.message},409);throw e;}finally{tx.release();}return reply({saved:true,message:'Assignment saved; active call snapshots are preserved.'});
  }
  const connectionAction=sync.safeParse(value);
  if(connectionAction.success){const v=connectionAction.data,c=(await pool.query('SELECT * FROM voip_connections WHERE id=$1 AND owner_id=$2',[v.connectionId,owner])).rows[0];if(!c)return reply({error:'Connection not found'},404);
@@ -121,7 +137,7 @@ export async function postCampaigns(request:Request,portal:Portal){
   await pool.query('UPDATE campaign_definitions SET validated_at=NOW(),native_active=$1,last_sync_at=NOW(),last_error=\'\' WHERE id=$2',[native.active==='Y',d.id]);
   if(v.action==='validate')return reply({saved:true,message:`Exact external campaign verified (${native.active==='Y'?'active':'inactive'}).`});
   if(v.action==='start'&&(!d.enabled||native.active!=='Y'))return reply({error:'Enable this mapped campaign and activate it on VICIdial before starting AI intake'},409);
-  const members=await pool.query(`SELECT x.agent_id,r.state runtime_state,r.call_id,q.ready FROM campaign_agent_assignments x LEFT JOIN ai_agent_runtime_states r ON r.agent_id=x.agent_id LEFT JOIN vicidial_pool_agents q ON q.agent_id=x.agent_id WHERE x.campaign_id=$1 AND x.enabled=TRUE`,[d.id]);
+  const members=await pool.query(`SELECT x.agent_id,r.state runtime_state,r.call_id,q.ready FROM campaign_agent_assignments x JOIN agents member ON member.id=x.agent_id AND member.deleted_at IS NULL LEFT JOIN ai_agent_runtime_states r ON r.agent_id=x.agent_id LEFT JOIN vicidial_pool_agents q ON q.agent_id=x.agent_id WHERE x.campaign_id=$1 AND x.enabled=TRUE`,[d.id]);
   if(v.action==='start'&&!members.rows.length)return reply({error:'Assign at least one AI agent to this campaign before starting calls.'},409);
   const desired=v.action==='start'?'RUNNING':v.action==='pause'?'PAUSED':'STOPPED';await pool.query('UPDATE campaign_definitions SET intake_state=$1 WHERE id=$2 AND deleted_at IS NULL',[desired,d.id]);
   let confirmed=0,busyAgents=0;const failures:string[]=[];

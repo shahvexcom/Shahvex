@@ -29,10 +29,16 @@ test('interruption discards late inference output', async () => {
   await started; g.interrupt('a', id); release('late');
   await assert.rejects(turn, /Cancelled/); assert.equal(g.sessions.get(id).history.length, 0);
 });
-test('transfers enforce configured destinations', async () => {
+test('transfers enforce destinations and require trusted completed qualification', async () => {
   const calls = []; const g = gateway({ telephony: { transfer: async (...args) => calls.push(args) } });
   const id = g.create('a', config);
   await assert.rejects(g.transfer('a', id, 'premium'), /forbidden/);
+  await assert.rejects(g.transfer('a', id, 'support'), /qualification/);assert.deepEqual(calls, []);
+  const session=g.sessions.get(id);
+  session.intelligenceSnapshot={policy:{questions:{age:'What is your age?',state:'Which state?'}}};
+  session.intelligenceState={answers:{age:'65'}};
+  await assert.rejects(g.transfer('a', id, 'support'), /qualification/);
+  session.intelligenceState.answers.state='Kentucky';
   await g.transfer('a', id, 'support'); assert.deepEqual(calls, [[id, 'support']]);
 });
 test('queue bounds pending work and removes cancelled jobs', async () => {

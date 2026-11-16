@@ -6,7 +6,7 @@ import { bpoUsagePricing } from "@/lib/bpo-entitlements";
 import { db } from "@/lib/database";
 import { requireApprovedBpo } from "@/lib/bpo-session";
 import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 export const runtime = "nodejs";
 

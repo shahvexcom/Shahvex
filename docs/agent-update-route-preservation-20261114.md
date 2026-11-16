@@ -1,0 +1,9 @@
+# Agent updates preserve dedicated routes
+
+Root cause: admin agent reads filtered campaign membership by x.enabled. A paused assignment appeared as empty; the edit form echoed the empty campaign into PATCH, which removed campaign_agent_assignments and voip_agent_assignments. The dedicated 78601/3531 entry remained in live_config, but the missing VoIP link hid it on cards.
+
+Agent reads now retain paused campaign membership. The editor omits unchanged campaign values and marks deliberate changes. PATCH ignores legacy blank campaign values unless explicitly marked; unchanged campaign and calling settings do not stop queues or rewrite assignments. The shared assignment helper treats existing same-owner/same-campaign membership as a no-op, preserving paused intake. Explicit removal from the profile form clears the campaign ID on the VoIP row while retaining its connection and dedicated mapping.
+
+Zulekha's original route ownership was confirmed and her missing campaign/VoIP links restored with intake disabled. No native remotes or live_config owners were changed. An actual authenticated API GET/PATCH using her unchanged settings verified 78601, 3531, DIALER, campaign membership, VoIP row ID and intake state survived the save. Audit files are restore/reports/zulekha-route-restoration-20261114.json and restore/reports/zulekha-profile-update-verification-20261114.json.
+
+Validation: 19 focused tests passed, TypeScript passed. Coverage includes ordinary edits, paused membership, stale blank values, reserved agents, voice changes, explicit removal preserving connection, owner checks and no implicit re-enable. Chromium checked the actual edit component with mocked APIs and verified the remote and extension remained visible after save. No actual agents were deleted by browser fixtures and no customer calls were started.

@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { db } from "@/lib/database";
 import { BPO_SESSION_COOKIE, readSession } from "@/lib/session";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 export const runtime = "nodejs";
 
@@ -20,7 +20,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const call = result.rows[0];
   if (!call) return Response.json({ message: "Call not found." }, { status: 404 });
 
-  if(call.telephony_provider==='VICIDIAL')return (await import("@/lib/vicidial-recording")).vicidialRecordingResponse(id,request);
+  if(['VICIDIAL','AUDIOSOCKET'].includes(call.telephony_provider))return (await import("@/lib/vicidial-recording")).vicidialRecordingResponse(id,request);
   let audioUrl = String(call.recording_url || "");
   if (call.recording_id && call.secret_ciphertext) {
     const metadata = await fetch(`https://api.telnyx.com/v2/recordings/${encodeURIComponent(call.recording_id)}`, {

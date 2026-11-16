@@ -27,7 +27,7 @@ export async function syncVicidialRecording(callId:string) {
 
 /** Caller must enforce portal ownership before invoking this private proxy. */
 export async function vicidialRecordingResponse(callId:string,request:Request) {
-  const a=(await (await db()).query(`SELECT a.ai_recording_id,c.live_config,c.bridge_secret_ciphertext FROM agent_calls a JOIN voip_connections c ON c.id=a.voip_connection_id WHERE a.id=$1 AND a.telephony_provider='VICIDIAL'`,[callId])).rows[0];
+  const a=(await (await db()).query(`SELECT a.ai_recording_id,c.live_config,c.bridge_secret_ciphertext FROM agent_calls a JOIN voip_connections c ON c.id=a.voip_connection_id WHERE a.id=$1 AND a.telephony_provider IN ('VICIDIAL','AUDIOSOCKET')`,[callId])).rows[0];
   if(!a?.ai_recording_id)return Response.json({message:"AI-only recording is not ready yet."},{status:404});
   try {
     const live=vicidialLiveConfig.parse(a.live_config);

@@ -6,15 +6,20 @@ test('script extraction derives goal, questions, lead fields and FAQs without in
  const extract=load('lib/campaign-script-extraction.ts',{'./campaign-config':config,'./agent-script-extraction':{extractAgentScript:async()=>({goals:['Collect name.'],tasks:[],instructions:[],restrictions:[],conversationFlow:[],knowledge:[],faqs:['Answer billing FAQs.']})},'./agent-test':{engine:async()=>Response.json({message:{content:JSON.stringify({questions:['What is your name?','What is your bank account?'],leadFields:['name','bank account']})}})}});
  const result=await extract.extractCampaignScript('owner',script);assert.equal(result.goal,'Collect name.');assert.deepEqual(result.qualificationQuestions,['What is your name?']);assert.deepEqual(result.requiredLeadFields,['name']);assert.match(result.knowledge,/billing FAQs/);
 });
-function controller(query,extra={}){return load('lib/campaign-controller.ts',{'./vicidial-config':load('lib/vicidial-config.ts'),'./database':{db:async()=>({query,connect:async()=>({query,release(){}})})},'./voip-controller':{principal:async()=> 'owner',controllerAgentSQL:'TRUE'},'./campaign-config':config,'./campaign-script-extraction':{extractCampaignScript:async()=>config.campaignSettings.parse({goal:'Extracted goal',requiredLeadFields:['name']})},'./credential-crypto':{},'./vicidial':{},...extra});}
+function controller(query,extra={}){return load('lib/campaign-controller.ts',{'./agent-campaign-assignment':load('lib/agent-campaign-assignment.ts'),'./vicidial-config':load('lib/vicidial-config.ts'),'./database':{db:async()=>({query,connect:async()=>({query,release(){}})})},'./voip-controller':{principal:async()=> 'owner',controllerAgentSQL:'TRUE'},'./campaign-config':config,'./campaign-script-extraction':{extractCampaignScript:async()=>config.campaignSettings.parse({goal:'Extracted goal',requiredLeadFields:['name']})},'./credential-crypto':{},'./vicidial':{},...extra});}
 const request=value=>new Request('https://site.example.test/api/admin/campaigns',{method:'POST',headers:{origin:'https://site.example.test'},body:JSON.stringify(value)});
 test('campaign save accepts script alone and persists derived settings rather than manual goal overrides',async()=>{
  let saved;const connection=crypto.randomUUID();
- const api=controller(async(sql,p=[])=>{if(sql.startsWith('SELECT id FROM voip_connections'))return {rows:[{id:connection}]};if(sql.startsWith('INSERT INTO campaign_definitions')){saved=JSON.parse(p[8]);return {rows:[]};}throw Error(sql);});
+ const api=controller(async(sql,p=[])=>{if(sql.startsWith('SELECT id FROM voip_connections'))return {rows:[{id:connection}]};if(sql.startsWith('INSERT INTO campaign_definitions')){saved=JSON.parse(p[8]);return {rows:[{id:p[0]}],rowCount:1};}if(['BEGIN','COMMIT','ROLLBACK'].includes(sql))return {rows:[]};throw Error(sql);});
  const response=await api.postCampaigns(request({action:'save-campaign',name:'Campaign',connectionId:connection,externalId:'CAMP01',enabled:true,script:'Collect name.',settings:{goal:'Manual invented goal'}}),'admin');
  assert.equal(response.status,201);assert.equal(saved.goal,'Extracted goal');assert.deepEqual(saved.requiredLeadFields,['name']);
 });
-test('an agent assigned to another campaign is rejected before any native or assignment mutation',async()=>{
+test('a BPO agent assigned to another campaign is rejected before any native or assignment mutation',async()=>{
+ let writes=0;const campaign=crypto.randomUUID();
+ const api=controller(async(sql)=>{if(sql.startsWith('SELECT * FROM campaign_definitions'))return {rows:[{id:campaign}]};if(sql.startsWith('SELECT a.id'))return {rows:[{id:'agent'}]};if(sql.startsWith('SELECT agent_id FROM campaign_agent_assignments'))return {rows:[{agent_id:'agent'}]};writes++;throw Error(sql);});
+ const response=await api.postCampaigns(request({action:'assign',campaignId:campaign,agentIds:['agent']}),'bpo');assert.equal(response.status,409);assert.match((await response.json()).error,/only one campaign/);assert.equal(writes,0);
+});
+test('an admin agent assigned to another campaign is rejected before any native or assignment mutation',async()=>{
  let writes=0;const campaign=crypto.randomUUID();
  const api=controller(async(sql)=>{if(sql.startsWith('SELECT * FROM campaign_definitions'))return {rows:[{id:campaign}]};if(sql.startsWith('SELECT a.id'))return {rows:[{id:'agent'}]};if(sql.startsWith('SELECT agent_id FROM campaign_agent_assignments'))return {rows:[{agent_id:'agent'}]};writes++;throw Error(sql);});
  const response=await api.postCampaigns(request({action:'assign',campaignId:campaign,agentIds:['agent']}),'admin');assert.equal(response.status,409);assert.match((await response.json()).error,/only one campaign/);assert.equal(writes,0);

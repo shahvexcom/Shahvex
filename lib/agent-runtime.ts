@@ -26,9 +26,9 @@ export async function setRuntimeState(callId:string,state:'ERROR'|'TRANSFERRING'
 export async function releaseConfirmedAgent(callId:string){
  const pool=await db(),tx=await pool.connect();try{await tx.query('BEGIN');
  const call=(await tx.query('SELECT * FROM agent_calls WHERE id=$1 FOR UPDATE',[callId])).rows[0];
- if(!call||!call.ai_leg_released||(!call.customer_ended&&call.transfer_status!=='ANSWERED')){await tx.query('COMMIT');return false;}
+ if(!call||!call.ai_leg_released||(!call.customer_ended&&!['SUBMITTED','ANSWERED'].includes(call.transfer_status))){await tx.query('COMMIT');return false;}
  await tx.query(`UPDATE agent_calls SET status=CASE WHEN status='FAILED' THEN status ELSE 'COMPLETED' END,
- conversation_state=CASE WHEN transfer_status='ANSWERED' THEN 'HANDED_OFF' ELSE 'COMPLETED' END,
+ conversation_state=CASE WHEN transfer_status IN ('SUBMITTED','ANSWERED') THEN 'HANDED_OFF' ELSE 'COMPLETED' END,
  ended_at=COALESCE(ended_at,ai_media_ended_at,NOW()),recording_active=FALSE,conversation_busy=FALSE,updated_at=NOW() WHERE id=$1`,[callId]);
  await tx.query(`UPDATE ai_agent_runtime_states r SET call_id=NULL,state=CASE WHEN EXISTS(SELECT 1 FROM vicidial_pool_agents q WHERE q.agent_id=r.agent_id AND q.ready=TRUE) THEN 'READY' ELSE 'OFFLINE' END,
  campaign_id=COALESCE((SELECT x.campaign_id FROM campaign_agent_assignments x WHERE x.agent_id=r.agent_id),campaign_id),lease_expires_at=NULL,last_seen_at=NOW(),last_error='',updated_at=NOW() WHERE call_id=$1`,[callId]);

@@ -1,5 +1,12 @@
 import { ensureCampaignSchema } from "./campaign-schema";
 export async function ensureVoipSchema(client: { query: (sql: string) => Promise<unknown> }) {
+  await client.query(`CREATE TABLE IF NOT EXISTS live_monitor_settings (
+    owner_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE,
+    initial_script TEXT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+  await client.query(`ALTER TABLE live_monitor_settings ADD COLUMN IF NOT EXISTS local_url TEXT,
+    ADD COLUMN IF NOT EXISTS local_secret_ciphertext TEXT`);
   await client.query(`ALTER TABLE agents ADD COLUMN IF NOT EXISTS local_voice_id TEXT,
     ADD COLUMN IF NOT EXISTS agent_script TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS conversation_style TEXT NOT NULL DEFAULT 'Professional',
@@ -41,6 +48,8 @@ export async function ensureVoipSchema(client: { query: (sql: string) => Promise
     ADD COLUMN IF NOT EXISTS bridge_secret_ciphertext TEXT,
     ADD COLUMN IF NOT EXISTS recording_secret_ciphertext TEXT,
     ADD COLUMN IF NOT EXISTS media_verified_at TIMESTAMPTZ`);
+  await client.query(`ALTER TABLE voip_connections ADD COLUMN IF NOT EXISTS manage_remote_agents BOOLEAN NOT NULL DEFAULT TRUE`);
+  await client.query(`ALTER TABLE agent_calls ADD COLUMN IF NOT EXISTS direct_audio_uuid TEXT, ADD COLUMN IF NOT EXISTS direct_audio_line TEXT`);
   await client.query(`ALTER TABLE agent_calls ADD COLUMN IF NOT EXISTS telephony_provider TEXT NOT NULL DEFAULT 'TELNYX',
     ADD COLUMN IF NOT EXISTS voip_connection_id TEXT REFERENCES voip_connections(id),
     ADD COLUMN IF NOT EXISTS vicidial_call_id TEXT, ADD COLUMN IF NOT EXISTS vicidial_lead_id TEXT,
@@ -56,6 +65,7 @@ export async function ensureVoipSchema(client: { query: (sql: string) => Promise
     ADD COLUMN IF NOT EXISTS vicidial_recording_url TEXT NOT NULL DEFAULT ''`);
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_calls_vicidial_id_idx
     ON agent_calls(voip_connection_id,vicidial_call_id) WHERE vicidial_call_id IS NOT NULL`);
+  await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_calls_direct_audio_uuid ON agent_calls(voip_connection_id,direct_audio_uuid) WHERE direct_audio_uuid IS NOT NULL`);
   await client.query(`CREATE TABLE IF NOT EXISTS vicidial_pools (
     id TEXT PRIMARY KEY, connection_id TEXT NOT NULL REFERENCES voip_connections(id),
     owner_id TEXT NOT NULL REFERENCES agents(id), campaign_id TEXT NOT NULL, list_id TEXT NOT NULL,

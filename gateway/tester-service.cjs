@@ -8,7 +8,7 @@ const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const ts = require('typescript');
 const root = path.resolve(__dirname, '..');
-const allowed = new Set(['agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio', 'agent-test-speculative', 'agent-script-extraction', 'agent-script-details']);
+const allowed = new Set(['agent-context-answer', 'agent-test', 'agent-test-session', 'agent-test-stream', 'agent-test-audio', 'agent-test-speculative', 'agent-script-extraction', 'agent-script-details']);
 function loader() {
   const cache = new Map();
   function load(name) {
@@ -24,19 +24,34 @@ function loader() {
   }
   return load;
 }
-function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = Date.now, load = loader(), testHooks = false } = {}) {
+function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = Date.now, load = loader(), testHooks = false, capacityControl } = {}) {
   if (typeof secret !== 'string' || secret.length < 32) throw Error('PC AI secret of at least 32 characters required');
-  maxSessions = Math.max(1, Math.min(10, Number(maxSessions) || 1));
+  maxSessions = Math.max(1, Math.min(300, Number(maxSessions) || 1));
   const ai = load('agent-test');
   const { handleTestSession } = load('agent-test-speculative');
   const json = (status, body) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
+  let capacityChanging=false;
   async function dispatch(request) {
     const got = Buffer.from(request.headers.get('x-shahvex-ai-key') || '');
     const expected = Buffer.from(secret);
     if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
     const url = new URL(request.url);
     if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions});
-    const match = /^\/tester\/(start|extract|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
+    if(url.pathname==='/internal/capacity'&&!url.search){
+      if(!capacityControl)return json(503,{error:'Capacity management is not configured'});
+      if(request.method==='GET'){try{return json(200,await capacityControl.read(maxSessions));}catch{return json(503,{error:'Cannot read live call capacity; check the audio bridges'});}}
+      if(request.method!=='POST')return json(405,{error:'Method not allowed'});
+      const text=await request.text();if(text.length>100)return json(413,{error:'Too large'});
+      let value;try{value=JSON.parse(text).limit;}catch{return json(400,{error:'Invalid capacity'});}
+      if(!Number.isInteger(value)||value<1||value>300)return json(400,{error:'Choose a whole number from 1 to 300'});
+      if(capacityChanging)return json(409,{error:'Another capacity update is in progress'});
+      if(ai.sessions.size>value)return json(409,{error:'Finish active sessions before lowering the limit below current usage'});
+      capacityChanging=true;
+      try{const state=await capacityControl.set(value,maxSessions);maxSessions=value;return json(200,{...state,limit:value});}
+      catch(error){return json(error.status===409?409:503,{error:error.publicMessage||'Capacity update was not confirmed; check the audio bridges'});}
+      finally{capacityChanging=false;}
+    }
+    const match = /^\/tester\/(start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
@@ -78,6 +93,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       catch { return json(503, { error: 'Script extraction unavailable' }); }
     }
     if (match[1] === 'start') {
+      if(capacityChanging)return json(409,{error:'Call capacity is updating; retry shortly'});
       if (body.length > 70000) return json(413, { error: 'Configuration too large' });
       let input; try { input = JSON.parse(body.toString()); } catch { return json(400, { error: 'Invalid JSON' }); }
       const parsed = ai.testConfig.safeParse(input.config);
@@ -120,7 +136,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
 if (require.main === module) {
   // A transport flag on this process would recursively send inference upstream.
   if (process.env.SHAHVEX_PC_AI_URL) throw Error('Unset SHAHVEX_PC_AI_URL on the PC tester service');
-  const { server } = createTesterService({ secret: process.env.SHAHVEX_PC_AI_SECRET, maxSessions: process.env.SHAHVEX_PC_AI_MAX_SESSIONS });
+  const { server } = createTesterService({ secret: process.env.SHAHVEX_PC_AI_SECRET, maxSessions: process.env.SHAHVEX_PC_AI_MAX_SESSIONS, capacityControl: require('./call-capacity.cjs').createCapacityControl({root}) });
   server.listen(Number(process.env.SHAHVEX_PC_TESTER_PORT || 8774), '127.0.0.1', () => process.stdout.write('PC AI adapter listening on loopback\n'));
 }
 module.exports = { createTesterService };

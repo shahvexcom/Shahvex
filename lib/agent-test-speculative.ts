@@ -17,6 +17,10 @@ function release(id: string, d: Draft) {
     d.parent.recordingHashes = d.shadow.recordingHashes;
     d.parent.turns = d.shadow.turns;
     d.parent.timeOfferMade = d.shadow.timeOfferMade;
+    d.parent.voiceEmotionState = d.shadow.voiceEmotionState;
+    d.parent.conductWarned = d.shadow.conductWarned;
+    d.parent.unclearSpeechCount = d.shadow.unclearSpeechCount;
+    d.parent.endedReason = d.shadow.endedReason;
   }
   d.parent.busy = false; d.parent.activeTurnId = undefined;
   drafts.delete(id);
@@ -71,6 +75,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
   if (++rate.count > 60) return json(429, "Too many speech drafts. Pause and try again.");
   rates.set(owner, rate);
   const shadow: Session = { ...parent, busy: false, abort: undefined, finished: undefined,
+    voiceEmotionState: parent.voiceEmotionState ? { ...parent.voiceEmotionState } : undefined,
     messages: parent.messages.map(m => ({ ...m })), turns: new Set(parent.turns), recordingHashes: new Set(parent.recordingHashes) };
   d = { token, parent, shadow, committed: false, cancelled: false, finished: false, timer: setTimeout(() => {}, 0) };
   clearTimeout(d.timer);

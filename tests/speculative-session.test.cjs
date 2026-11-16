@@ -65,3 +65,18 @@ test('a late cancelled upload cannot acquire a session or cancel a newer draft',
   await current.text();assert.equal((await call('commit','new')).status,200);assert.equal(sessionStore.get(id).busy,false);assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').length,1);
  }finally{if(id)await call('stop','new');global.fetch=original;}
 });
+
+test('cancelled Lissa drafts cannot consume live emotion cooldown, committed drafts do',async(t)=>{
+ const original=global.fetch,old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';
+ const spoken=[];global.fetch=async(url,init)=>String(url).includes('8766')?Response.json({text:'Hahaha that was funny.'}):String(url).includes('11434')?new Response(JSON.stringify({message:{content:'That really made me smile.'},done:true})+'\n'):(spoken.push(JSON.parse(init.body)),new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}}));
+ const key='emotion-drafts-'.repeat(4),{dispatch,sessionStore}=createTesterService({secret:key,testHooks:true});let id;
+ const call=(action,token,body='{}',audio=false)=>dispatch(new Request('http://localhost/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':key,'x-shahvex-owner':'emotion-owner','x-shahvex-session':id||'none','x-shahvex-turn':token,'content-type':audio?'audio/wav':'application/json'},body}));
+ try{
+  id=(await(await call('start','start',JSON.stringify({agentId:'emotion',config:{name:'Test',voice:'lissa',first:'customer',goal:'',task:'',instructions:'',script:'',knowledge:'',style:'Professional'}}))).json()).id;
+  sessionStore.get(id).voiceEmotionState={turn:0,total:0};
+  const wav=Buffer.from(await speechWav(Array.from({length:20},()=>Int16Array.from({length:320},(_,i)=>Math.round(Math.sin(i/5)*4000)))).arrayBuffer());
+  const first=await call('draft','discard',wav,true);await first.text();assert.equal(spoken.at(-1).emotion,'laugh');assert.deepEqual(sessionStore.get(id).voiceEmotionState,{turn:0,total:0});
+  await call('cancel','discard');assert.deepEqual(sessionStore.get(id).voiceEmotionState,{turn:0,total:0});
+  const second=await call('draft','keep',wav,true);await second.text();assert.equal(spoken.at(-1).emotion,'laugh');await call('commit','keep');assert.equal(sessionStore.get(id).voiceEmotionState.total,1);
+ }finally{if(id)await call('stop','cleanup');global.fetch=original;if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;}
+});

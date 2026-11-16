@@ -50,7 +50,15 @@ export async function requestBridge(base: string, secret: string, path: "/health
     const req = transport.request(url, { method, agent: false, lookup: (_host, options, cb) => {
       if (typeof options === "object" && options.all) (cb as unknown as (e: null, a: typeof addresses) => void)(null, [selected]); else cb(null, selected.address, selected.family);
     }, headers: { "content-type": "application/json", "content-length": body.length, "x-shahvex-timestamp": timestamp, "x-shahvex-signature": bridgeSignature(secret, timestamp, method, path, body) } }, response => {
-      if (response.statusCode !== 200) { response.resume(); reject(Error("Audio bridge did not confirm the request")); return; }
+      if (response.statusCode !== 200) {
+        response.resume();
+        const reason = response.statusCode === 401 ? "Audio bridge rejected authentication; verify the matching shared secret"
+          : response.statusCode === 400 ? "Audio bridge rejected the connection ID or remote user; verify the production bridge configuration"
+          : response.statusCode === 409 ? "Audio bridge rejected the call mode or unprepared line; verify production campaign routing"
+          : response.statusCode === 429 ? "Audio bridge has reached its configured capacity"
+          : "Audio bridge did not confirm the request";
+        reject(Error(reason)); return;
+      }
       const chunks: Buffer[] = []; let length = 0;
       response.on("data", chunk => { length += chunk.length; if (length > 64000) req.destroy(Error("Invalid bridge response")); else chunks.push(chunk); });
       response.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { reject(Error("Invalid bridge response")); } });

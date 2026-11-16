@@ -1,0 +1,17 @@
+{
+  "status": "approved",
+  "voiceId": "lissa",
+  "approved": [
+    "laugh",
+    "sad",
+    "surprise",
+    "reassure"
+  ],
+  "approvalAt": "2026-11-13T14:19:15.711850+05:00",
+  "resultsSha256": "0908b0e7ee7f5ba714067442d980a6f8618e9daec03caa6d7c23b38dea63e500",
+  "neutralDefault": true,
+  "extraLlmRequests": 0,
+  "reassuranceApprovalAt": "2026-11-13T14:53:58.106053+05:00",
+  "reassuranceRevisionSha256": "3fbe8b51a5109bbb7b087ae5326006c50f53ef9a2d590fe50792417b79648b43",
+  "reassuranceCandidate": "calm"
+}

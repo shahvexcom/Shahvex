@@ -21,16 +21,17 @@ test('definitions and identity questions stay short, truthful and do not repeat 
     const reply=directConversationReply(history,question).text;
     assert.match(reply,/AI assistant/);assert.doesNotMatch(reply,/Max|Shahvex/);
   }
-  for(const question of ['By the way, are you a live person?','Virtual calling assistant is a type of AI, right?','Are you human?'])assert.equal(directConversationReply(history,question).text,"I'm an AI calling assistant.");
+  for(const question of ['By the way, are you a live person?','Virtual calling assistant is a type of AI, right?','Are you human?'])assert.equal(directConversationReply(history,question).text,"I'm an AI assistant.");
   assert.equal(directConversationReply(history,'What is Shahvex?').text,"That's the company I'm calling on behalf of.");
   assert.equal(directConversationReply(history,'What is another company?'),undefined);
   assert.match(directConversationReply(history,'How much time is this going to take?').text,/can't confirm/);
 });
 
-test('one short time request is allowed, but explicit refusals and offered time are not treated as soft objections',()=>{
+test('time objections have bounded varied attempts while explicit refusals and offered time are respected',()=>{
   assert.deepEqual(directConversationReply([],"I don't have time."),{text:briefTimeOffer,timeOffer:true});
-  assert.equal(directConversationReply([assistant(briefTimeOffer)],'No.',true).text,"Understood. I'll let you go. Thank you.");
-  assert.equal(directConversationReply([],"I'm busy",true).timeOffer,undefined);
+  const second=directConversationReply([assistant(briefTimeOffer)],'No.',true);
+  assert.equal(second.timeOffer,true);assert.notEqual(second.text,briefTimeOffer);
+  assert.equal(directConversationReply([assistant(briefTimeOffer),assistant(second.text)],'No.',true),undefined);
   for(const text of ["I'm busy, don't call me again.","No thanks, I'm busy.","I only have five minutes.","I don't have any time right now. I only have around five minutes."]){assert.equal(directConversationReply([],text),undefined);}
 });
 
@@ -65,7 +66,7 @@ test('repeat-last-question handling excludes identity requests, normal answers a
   assert.equal(questionToRepeat([assistant('Do you have time? [interrupted]')],'Say that again?'),'');
 });
 
-test('real tester sends progress in the first system message and uses only the last question for a brief repeat',async()=>{
+test('real tester retains script restrictions and progress when repeating a question',async()=>{
   const original=global.fetch,prompts=[];
   global.fetch=async(url,init)=>{
     if(String(url).includes('11434')){
@@ -89,9 +90,10 @@ test('real tester sends progress in the first system message and uses only the l
     assert.match(prompts[0][0].content,/Current conversation progress/);
     assert.match(prompts[0][0].content,/latest reply is YES/);
     assert.equal(prompts[0].at(-1).content,'Yes, I have.');
-    assert.equal(prompts[1].length,2);
-    assert.deepEqual(JSON.parse(prompts[1][1].content),{lastQuestion:'Do you receive a benefit?'});
-    assert.match(prompts[1][0].content,/fewer words and different wording/);
+    assert.ok(prompts[1].length>2);
+    assert.match(prompts[1][0].content,/After permission ask about the existing benefit/);
+    assert.match(prompts[1][0].content,/customer asks to hear the last point again/);
+    assert.equal(prompts[1].at(-1).content,'What did you say?');
     assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').length,3);
   }finally{if(id)await call('stop',{});global.fetch=original;}
 });
@@ -104,4 +106,25 @@ test('comprehension checks use the previous customer words instead of looping on
     assert.doesNotMatch(reply, /didn't catch|Could you say it again|\[interrupted\]/);
   }
   assert.equal(directConversationReply(history, 'What time is my appointment?'), undefined);
+});
+
+test('completed yes and no answers survive detours, while unanswered questions remain pending',()=>{
+ const q1='Do you have Medicare Part A and Part B?',q2='Do you also have Medicaid?';
+ const history=[assistant(q1),user('Yes.'),assistant(q2),user('Where are you based?'),assistant('We are based in Phoenix, Arizona, United States of America.'),user('Medicaid.')];
+ assert.deepEqual(mod.exports.questionMemory(history).completed,[{question:q1,response:'Yes.'},{question:q2,response:'Medicaid.'}]);
+ assert.equal(mod.exports.questionMemory(history).pendingQuestion,null);
+ const no=[assistant(q1),user('No.'),assistant(q2),user('How are you?'),assistant("I'm doing well, thank you."),user("I'm fine.")];
+ assert.deepEqual(mod.exports.questionMemory(no).completed,[{question:q1,response:'No.'}]);
+ assert.equal(mod.exports.questionMemory(no).pendingQuestion,q2);
+ assert.equal(mod.exports.questionMemory([assistant(q2),user("I'm not sure.")]).completed.length,0);
+});
+
+test('first reply requires short purpose then permission, and busy persuasion stops after a repeat objection',()=>{
+ const intro=[assistant('Hello, this is Sofia from Shahvex. How are you today?')];
+ const first=conversationProgress(intro,'I am good, how are you?',true);
+ assert.match(first,/three maximum/);assert.match(first,/Do not ask lead questions until permission is granted/);
+ const busy=conversationProgress(intro,"I'm busy.",true);assert.match(busy,/SOFT TIME OBJECTION/);assert.match(busy,/actual script task or pending detail/);
+ const again=conversationProgress([...intro,user("I'm busy."),assistant('May I cover the appointment details briefly?')],"I don't have time.",true);
+ assert.match(again,/REPEATED TIME OBJECTION/);assert.match(again,/do not keep persuading/);
+ assert.match(mod.exports.situationalConversationRules,/general health education/);assert.match(mod.exports.situationalConversationRules,/without diagnosing/);
 });

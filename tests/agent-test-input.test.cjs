@@ -36,6 +36,7 @@ test('strict extraction filters unsupported facts and rejects malformed structur
   assert.throws(()=>details.groundedDetails(script,{goals:'not an array'}));
 });
 function route(engine, extra={}) { return load('app/api/admin/agent-test/route.ts', {
+  '@/lib/clone-voice-preview':{cloneVoicePreview:async()=>null}, '@/lib/request-origin':load('lib/request-origin.ts'), '@/lib/agent-context-answer':load('lib/agent-context-answer.ts'),
   '@/lib/agent-test-stream':load('lib/agent-test-stream.ts'), '@/lib/agent-script-extraction':{extractAgentScript:async()=>details.emptyScriptDetails()}, '@/lib/agent-script-details':details, '@/lib/agent-test-audio':audio,
   'next/headers':{cookies:async()=>({get:()=>({value:'test'})})}, '@/lib/session':{readSession:async()=>({role:'ADMIN',agentId:'admin'})}, '@/lib/database':{}, '@/lib/agent-test':{...service,engine}, ...extra,
 }); }
@@ -67,4 +68,11 @@ test('session start derives business fields exclusively from the freshly extract
   });
   const r=await api.POST(new Request('http://localhost:3000/api/admin/agent-test?action=start',{method:'POST',headers:{origin:'http://localhost:3000','Content-Type':'application/json'},body:JSON.stringify({agentId:'agent',config:{...cfg,script:'Book a visit.',goal:'Forged goal',knowledge:'Invented price'}})}));
   const s=service.sessions.get((await r.json()).id);assert.equal(extractedScript,'Book a visit.');assert.equal(s.config.goal,'Book a visit.');assert.equal(s.config.knowledge,'');assert.equal(s.config.name,'Saved Name');
+});
+
+test('unresolved short speech retry preserves the waveform with quiet margins',async()=>{
+ const original=new Uint8Array(await audio.speechWav(Array.from({length:12},speech)).arrayBuffer());
+ const padded=new Uint8Array(await audio.speechRetryWav(original).arrayBuffer());
+ assert.equal(audio.inspectSpeechWav(padded).durationMs,audio.inspectSpeechWav(original).durationMs+500);
+ assert.deepEqual(padded.subarray(44+8000,padded.length-8000),original.subarray(44));
 });

@@ -1,24 +1,53 @@
-.agent-script-group{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 20px;background:#faf1e6;border-block:1px solid #eadac6;color:#79543a}
-.agent-script-group strong{font-size:12px;font-weight:700}
-.agent-script-group small{font-size:11px;color:#97785e}
-.agents-table .lead-person b .agent-script-category{display:block;width:fit-content;max-width:100%;margin-top:6px;padding:3px 7px;border:1px solid #ead8c1;border-radius:6px;background:#fcf3e8;color:#9a5a2a;font-size:10px;line-height:1.4;white-space:normal;overflow-wrap:anywhere}
-.agent-tools{flex-wrap:wrap}
-@media(max-width:600px){.agent-script-group{padding:12px 16px}.agent-tools>.custom-dropdown{flex:1 1 145px;min-width:0}}
-
-/* Agent campaign groups */
-.agents-table .agent-campaign-group{margin:14px 0;border:1px solid #eadfd1;border-radius:16px;background:#fffdf9;box-shadow:0 3px 12px #603d1c05;overflow:hidden;transition:border-color .18s,box-shadow .18s}
-.agents-table .agent-campaign-group:hover{border-color:#dfbf9c;box-shadow:0 5px 18px #603d1c09}
-.agents-table .agent-campaign-group>summary{display:flex;align-items:center;gap:14px;padding:18px 20px;background:linear-gradient(110deg,#fffdf9,#fff6ea);cursor:pointer;list-style:none}
+.agent-script-group{display:flex;justify-content:space-between;gap:12px;padding:14px 20px;background:#fff8f2;border-block:1px solid #eee3d9;color:#79543a}.agent-script-group strong{font-size:12px}.agent-script-group small{font-size:11px;color:#97785e}
+.agent-tools{display:grid!important;grid-template-columns:minmax(200px,1fr) minmax(140px,175px) minmax(155px,190px) auto;gap:12px!important;padding:20px!important;border-bottom:1px solid #ece6df;align-items:center}
+.agent-tools>label:first-child{margin:0;width:auto;min-width:0;background:#fff!important;border:1px solid #e5ddd5!important;box-shadow:none!important;border-radius:11px!important;min-height:43px}
+.agent-tools>label:first-child input{font-size:13px!important;min-width:0}
+.agent-tools>.custom-dropdown{min-width:0;width:auto!important}
+.agent-tools>label:has(input[type=checkbox]){grid-column:1/3;display:flex;align-items:center;gap:9px;justify-self:start;width:auto;min-height:20px;padding:0!important;margin:3px 0 0;border:0!important;box-shadow:none!important;background:transparent!important;font-size:12px;color:#786a5c}
+.agent-tools>.danger-button{grid-column:3/-1;justify-self:end;min-height:34px;font-size:12px;box-shadow:none!important;background:#fff3f1!important;border:1px solid #efceca!important;color:#ac413d!important;padding:7px 12px!important}
+.agent-tools .custom-select,.agent-tools button{box-shadow:none!important}
+.agents-table{container-type:inline-size;padding:0 20px 22px}
+.agents-table .agent-campaign-group{margin:20px 0 0;background:#fff;border:1px solid #e8e0d7;border-radius:16px;box-shadow:0 3px 16px #46312004;overflow:hidden}
+.agents-table .agent-campaign-group>summary{display:flex;align-items:center;gap:13px;padding:19px 20px;background:#fcfaf7;list-style:none;cursor:pointer;border-bottom:1px solid transparent}
 .agents-table .agent-campaign-group>summary::-webkit-details-marker{display:none}
-.agents-table .agent-campaign-group>summary:focus-visible{outline:2px solid #e97832;outline-offset:-3px;border-radius:14px}
-.agents-table .agent-campaign-group>summary>.agent-group-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;margin:0;border:1px solid #f4d5b7;border-radius:12px;background:#ffedda;color:#cc641f;font-size:19px}
-.agents-table .agent-campaign-group>summary>.agent-group-copy{display:grid;flex:1;min-width:0;gap:4px;margin:0}
-.agents-table .agent-campaign-group>summary>.agent-group-copy small{color:#a48a71;font-size:10px;font-weight:650;letter-spacing:1px;text-transform:uppercase}
-.agents-table .agent-campaign-group>summary>.agent-group-copy strong{color:#624932;font-size:14px;font-weight:650;line-height:1.5;overflow-wrap:anywhere}
-.agents-table .agent-campaign-group>summary>.agent-group-count{display:flex;align-items:center;gap:6px;flex-shrink:0;margin:0;padding:7px 11px;border:1px solid #ebdbc8;border-radius:20px;background:#fffdf9;color:#8b5f36;font-size:13px;font-weight:700}
-.agents-table .agent-campaign-group>summary>.agent-group-count small{color:#a1876e;font-size:11px;font-weight:450}
-.agents-table .agent-campaign-group>summary>.agent-group-chevron{flex-shrink:0;width:27px;height:27px;padding:5px;border-radius:50%;background:#f8ecdf;color:#a47d55;transition:transform .18s}
-.agents-table .agent-campaign-group[open]>summary{border-bottom:1px solid #eee0d0}
-.agents-table .agent-campaign-group[open]>summary>.agent-group-chevron{transform:rotate(180deg)}
-@media(max-width:600px){.agents-table .agent-campaign-group>summary{padding:14px 12px;gap:10px}.agents-table .agent-campaign-group>summary>.agent-group-icon{flex-basis:36px;width:36px;height:36px;border-radius:10px;font-size:17px}.agents-table .agent-campaign-group>summary>.agent-group-copy strong{font-size:12px}.agents-table .agent-campaign-group>summary>.agent-group-count{padding:5px 8px}.agents-table .agent-campaign-group>summary>.agent-group-count small{font-size:10px}}
-@media(prefers-reduced-motion:reduce){.agents-table .agent-campaign-group,.agents-table .agent-campaign-group>summary>.agent-group-chevron{transition:none}}
+.agents-table .agent-campaign-group[open]>summary{border-bottom-color:#ece5dd}
+.agent-group-icon{display:grid!important;place-items:center;flex:none!important;width:40px!important;height:40px!important;border:1px solid #f1d9c3;border-radius:11px;background:#fff0e3;color:#d26928;font-size:18px}
+.agent-group-copy{display:grid!important;gap:4px;flex:1;min-width:0}.agent-group-copy small{font-size:9px;letter-spacing:1.1px;text-transform:uppercase;color:#9a806b;font-weight:650}.agent-group-copy strong{font-size:15px;color:#44392f;line-height:1.4}
+.agent-group-count{display:flex;align-items:center;gap:5px;padding:6px 10px;border:1px solid #e8ddd1;border-radius:20px;background:white;font-size:12px;color:#715743;white-space:nowrap}.agent-group-count small{font-size:11px;font-weight:400}
+.agent-group-chevron{width:24px;height:24px;padding:5px;border-radius:50%;color:#937254;background:#f4ede5;transition:transform .18s}.agent-campaign-group[open] .agent-group-chevron{transform:rotate(180deg)}
+.agents-table .agent-campaign-group>.agent-wide{display:grid;grid-template-columns:minmax(190px,1.7fr) minmax(58px,.55fr) minmax(58px,.55fr) minmax(95px,.9fr) minmax(80px,.8fr) 92px 142px;align-items:center;gap:12px;min-width:0;padding:18px 20px}
+.agents-table .agent-campaign-group>.agent-head{background:#fff;color:#9c8c7e;font-size:9px;font-weight:650;letter-spacing:.6px;padding-top:13px;padding-bottom:13px;border-bottom:1px solid #eee8e1}
+.agents-table .agent-campaign-group>.agent-row{min-height:90px;border-bottom:1px solid #f0eae3;font-size:13px;color:#65584a;background:#fff;transition:background .15s}
+.agents-table .agent-campaign-group>.agent-row:last-child{border-bottom:0}.agents-table .agent-campaign-group>.agent-row:hover,.agents-table .agent-row:focus-within{background:#fffcf8}
+.agents-table .agent-row>span{min-width:0;overflow-wrap:anywhere}.agents-table .agent-row>span small{display:block;margin-top:4px;font-size:11px;line-height:1.45;color:#9a8877}
+.agents-table .agent-row>.lead-person{display:flex!important;align-items:center;gap:10px}.agents-table .lead-person b{font-size:14px;line-height:1.4;color:#493c31;min-width:0}.agents-table .lead-person>i,.agents-table .agent-avatar{flex:none;width:40px!important;height:40px!important;object-fit:cover;border-radius:12px!important;background:#f4eee7;color:#a67752;box-shadow:none!important}
+.agents-table input[type=checkbox],.agent-tools input[type=checkbox]{appearance:auto!important;-webkit-appearance:checkbox!important;width:16px!important;height:16px!important;min-width:16px!important;flex:none;margin:0;border-radius:4px!important;box-shadow:none!important;accent-color:#e56722;cursor:pointer}
+.agents-table .lead-person .agent-script-category{font-size:9px!important;display:block;width:fit-content;max-width:100%;color:#a87443;line-height:1.4;margin-top:4px;padding:2px 6px;background:#fff7ec;border:1px solid #f2e1cc;border-radius:5px}
+.agents-table .agent-row>.badge{justify-self:start;font-size:9px;letter-spacing:.5px;font-weight:650;border-radius:5px;padding:5px 7px;box-shadow:none!important}
+.agent-manage-actions{display:flex!important;align-items:center;justify-content:flex-end;gap:5px!important;flex-direction:row!important}.agent-manage-actions>.admin-outline{display:flex;align-items:center;gap:5px;justify-content:center;padding:7px 8px!important;font-size:11px!important;min-height:31px;border:1px solid #e7dfd5!important;background:#fff!important;color:#80644c;box-shadow:none!important;border-radius:7px!important}.agent-manage-actions>.admin-outline>span{font-size:11px!important;display:inline!important}.agent-manage-actions>.danger-button{border-color:#eed7d2!important;background:#fff8f6!important;color:#b45046!important}.agent-manage-actions>.admin-outline:hover{background:#fff2e5!important;border-color:#e8c6a3!important}.agent-manage-actions>.danger-button:hover{background:#ffede8!important}
+@container(max-width:900px){
+ .agents-table .agent-campaign-group[open]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));background:#faf8f5;gap:0}
+ .agents-table .agent-campaign-group>summary{grid-column:1/-1}
+ .agents-table .agent-campaign-group>.agent-head{display:none}
+ .agents-table .agent-campaign-group>.agent-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:12px 8px;padding:17px;background:white;border:1px solid #ebe4dc;border-radius:12px}
+ .agents-table .agent-row>.lead-person{grid-column:1/-1}.agents-table .agent-row>span:nth-child(n+2):not(.agent-manage-actions){font-size:13px;display:flex;flex-direction:column;gap:4px}
+ .agents-table .agent-row>span:nth-child(n+2):not(.agent-manage-actions)::before{font-size:9px;color:#ab9783;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+ .agents-table .agent-row>span:nth-child(2)::before{content:'Dialed calls'}.agents-table .agent-row>span:nth-child(3)::before{content:'Total leads'}.agents-table .agent-row>span:nth-child(4)::before{content:'Call access'}.agents-table .agent-row>span:nth-child(5)::before{content:'Voice'}
+ .agents-table .agent-row>.badge{grid-column:1;align-self:center}.agent-manage-actions{grid-column:1/-1;justify-content:flex-end;border-top:1px solid #f1eae3;padding-top:12px}
+}
+@container(max-width:530px){.agents-table .agent-campaign-group[open]{grid-template-columns:1fr}.agents-table .agent-campaign-group>.agent-row{margin:9px 10px}}
+@media(max-width:700px){.agent-tools{grid-template-columns:1fr 1fr;padding:14px!important}.agent-tools>label:first-child{grid-column:1/-1}.agent-tools>label:has(input[type=checkbox]){grid-column:1}.agent-tools>.danger-button{grid-column:2}.agents-table{padding:0 10px 14px}.agent-group-copy strong{font-size:13px}}
+/* Consistent agent cards at every desktop and mobile width. */
+.agents-table .agent-campaign-group[open]{display:block;background:#fff;border-color:#e9e2da;box-shadow:none}
+.agents-table .agent-campaign-group>summary{padding:20px 22px;background:#fff;border-bottom:1px solid #eee8e1}
+.managed-agent-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;padding:22px;background:#fbfaf8}
+.managed-agent-card{min-width:0;display:flex;flex-direction:column;gap:0;border:1px solid #e8e2da;border-radius:18px;background:#fff;padding:20px;box-shadow:0 4px 12px #32271c03;transition:border-color .15s,box-shadow .15s}
+.managed-agent-card:hover{border-color:#dfc4ad;box-shadow:0 6px 20px #55391a08}.managed-agent-card.is-selected{border-color:#ed843f;box-shadow:0 0 0 2px #fff0e5}
+.managed-agent-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.managed-agent-top .badge{font-size:10px;letter-spacing:.3px;padding:5px 9px;border-radius:6px;box-shadow:none!important;text-transform:capitalize}
+.managed-agent-person{display:flex;align-items:center;gap:13px;min-width:0}.managed-agent-person>img,.managed-agent-person>span{width:56px;height:56px;object-fit:cover;border-radius:16px;flex:none;background:#f5ede5}.managed-agent-person>span{display:grid;place-items:center;color:#a5663c}.managed-agent-person>div{min-width:0}.managed-agent-person h3{font-size:17px!important;line-height:1.3;font-weight:650;color:#382e26;margin:0!important;overflow-wrap:anywhere}.managed-agent-person p{font-size:11px!important;color:#9d8d7e!important;margin:5px 0 0!important;overflow-wrap:anywhere}
+.managed-agent-assignment{display:flex;align-items:center;gap:6px;font-size:11px;color:#897766;margin:16px 0}.managed-agent-assignment i{width:5px;height:5px;background:#d8b18d;border-radius:50%;flex:none}
+.managed-agent-route{display:grid;grid-template-columns:1fr 1fr;background:#faf7f3;border:1px solid #eee6db;border-radius:11px;padding:13px 14px;gap:14px}.managed-agent-route>div+div{border-left:1px solid #e9dfd3;padding-left:14px}.managed-agent-route span{display:block;font-size:9px;letter-spacing:.6px;text-transform:uppercase;color:#a38d77;margin-bottom:5px}.managed-agent-route strong{font-size:18px;line-height:1.4;color:#71523a;font-weight:650;font-variant-numeric:tabular-nums}
+.managed-agent-stats{display:grid;grid-template-columns:1fr 1fr 1.2fr;padding:20px 0;gap:8px}.managed-agent-stats>div{display:flex;flex-direction:column;gap:5px}.managed-agent-stats strong{font-size:14px;color:#554737;font-weight:600;overflow-wrap:anywhere}.managed-agent-stats span{font-size:10px;color:#a18e7b}
+.managed-agent-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #f0eae3;padding-top:15px;margin-top:auto}.managed-agent-footer>span{font-size:10px;color:#86715b;line-height:1.5}.managed-agent-footer small{display:block;color:#b09e8e;font-size:9px}.managed-agent-footer .agent-manage-actions{padding:0;border:0;gap:6px!important}.managed-agent-footer .admin-outline{padding:7px!important;min-height:30px!important}.managed-agent-footer .admin-outline svg{width:12px;height:12px}
+@container(max-width:1100px){.managed-agent-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container(max-width:620px){.managed-agent-grid{grid-template-columns:1fr;padding:14px;gap:14px}.managed-agent-card{padding:18px}.agents-table .agent-campaign-group>summary{padding:16px}}

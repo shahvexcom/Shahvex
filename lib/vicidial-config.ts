@@ -5,6 +5,8 @@ export const vicidialLiveConfig = z.object({
   listId: z.string().regex(/^\d{2,14}$/).or(z.literal("")).default(""),
   phoneCode: z.string().regex(/^[1-9]\d{0,3}$/).default("1"),
   remoteUsers: z.array(z.string().regex(/^[\w-]{2,20}$/)).max(1000).default([]),
+  directAudioMode: z.boolean().default(false),
+  directAudioLines: z.array(z.object({ prefix: z.string().regex(/^[0-9a-f]{4}$/), remoteUser: z.string().regex(/^[\w-]{2,20}$/), agentId: z.string().min(1).max(100) }).strict()).max(1000).default([]),
   transferInGroup: z.string().regex(/^[\w-]{2,20}$/).or(z.literal("")).default(""),
   bridgeUrl: z.string().url().or(z.literal("")).default(""),
   recordingBaseUrl: z.string().url().or(z.literal("")).default(""),

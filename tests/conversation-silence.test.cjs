@@ -4,40 +4,16 @@ const fs=require('node:fs');
 const ts=require('typescript');
 const {createTesterService}=require('../gateway/tester-service.cjs');
 const mod={exports:{}};
-new Function('exports','module',ts.transpileModule(fs.readFileSync('lib/conversation-silence.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(mod.exports,mod);
+new Function('exports','module','require',ts.transpileModule(fs.readFileSync('lib/conversation-silence.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(mod.exports,mod,require);
 const {ConversationSilence}=mod.exports;
 
-test('three checks each allow ten seconds, then another ten seconds before goodbye',()=>{
-  const timer=new ConversationSilence();
-  for(let step=1;step<=4;step++){
-    const start=(step-1)*15000;
-    assert.equal(timer.tick(start,false),undefined);
-    assert.equal(timer.tick(start+9999,false),undefined);
-    assert.equal(timer.tick(start+10000,false),step);
-    assert.equal(timer.tick(start+10001,true),undefined); // synthesis/playback
-  }
-  assert.equal(timer.tick(100000,false),undefined);
-  assert.equal(timer.tick(200000,false),undefined);
+test('listening windows are 5s, 4s, 3s goodbye, then 5s before hangup',()=>{
+ const timer=new ConversationSilence();let start=0;
+ for(const [i,delay]of [5000,4000,3000,5000].entries()){assert.equal(timer.tick(start,false),undefined);assert.equal(timer.tick(start+delay-1,false),undefined);assert.equal(timer.tick(start+delay,false),i+1);timer.tick(start+delay+1,true);start+=delay+1000;}
+ assert.equal(timer.tick(100000,false),undefined);
 });
-
-test('playback, processing, mute and suspension pause the listening window',()=>{
-  const timer=new ConversationSilence();
-  timer.tick(0,false);timer.tick(9000,true);
-  assert.equal(timer.tick(40000,true),undefined);
-  assert.equal(timer.tick(50000,false),undefined);
-  assert.equal(timer.tick(59999,false),undefined);
-  assert.equal(timer.tick(60000,false),1);
-});
-
-test('customer speech and a new session reset all previous attempts',()=>{
-  const timer=new ConversationSilence();
-  timer.tick(0,false);assert.equal(timer.tick(10000,false),1);
-  timer.tick(11000,false);assert.equal(timer.tick(21000,false),2);
-  timer.speech();timer.tick(22000,false);
-  assert.equal(timer.tick(32000,false),1);
-  timer.reset();timer.tick(33000,false);
-  assert.equal(timer.tick(43000,false),1);
-});
+test('playback does not consume the next listening window',()=>{const timer=new ConversationSilence();timer.tick(0,false);timer.tick(4000,true);assert.equal(timer.tick(40000,true),undefined);assert.equal(timer.tick(50000,false),undefined);assert.equal(timer.tick(54999,false),undefined);assert.equal(timer.tick(55000,false),1);});
+test('speech resets reminders and cancels the final hangup countdown',()=>{const timer=new ConversationSilence();let start=0;for(const delay of [5000,4000,3000]){timer.tick(start,false);timer.tick(start+delay,false);start+=delay+100;}timer.tick(start,false);timer.speech();assert.equal(timer.tick(start+4500,false),undefined);assert.equal(timer.tick(start+9500,false),1);});
 
 const secret='silence-test-secret-'.repeat(3);
 const config={name:'Jenifer',voice:'voice',first:'ai',goal:'Review options',task:'Ask about coverage',instructions:'',script:'Jenifer from Shahvex',knowledge:'',style:'Natural'};
@@ -54,22 +30,22 @@ test('presence checks use the selected voice without model inference or fake cus
   const {dispatch,sessionStore}=createTesterService({secret,testHooks:true});let id;
   try{
     id=(await(await dispatch(req('start',null,{agentId:'a',config}))).json()).id;
-    for(let step=1;step<=4;step++){
+    for(let step=1;step<=3;step++){
       const result=await events(await dispatch(req('turn',id,{silenceStep:step})));
       assert.ok(!result.some(e=>e.type==='user'||e.type==='error'));
       assert.ok(result.some(e=>e.type==='pcm'));
-      assert.equal(result.filter(e=>e.type==='end_call').length,step===4?1:0);
+      assert.equal(result.filter(e=>e.type==='end_call').length,step===3?1:0);
       assert.equal(result.at(-1).type,'done');
     }
-    assert.equal(new Set(spoken).size,4);
-    assert.deepEqual(spoken.slice(0,3),['Are you still there?','Can you hear me?','Are you available to continue?']);
+    assert.equal(new Set(spoken).size,3);
+    assert.deepEqual(spoken.slice(0,2),['Are you still there?','Can you hear me?']);assert.match(spoken[2],/Goodbye/);
     assert.ok(!sessionStore.get(id).messages.some(m=>m.role==='user'));
-    for(const body of [{silenceStep:5},{silenceStep:1,text:'yes'},{silenceStep:1,opening:true}]){
+    for(const body of [{silenceStep:4},{silenceStep:1,text:'yes'},{silenceStep:1,opening:true}]){
       const result=await events(await dispatch(req('turn',id,body)));
       assert.ok(result.some(e=>e.type==='error'));
       assert.ok(!result.some(e=>e.type==='pcm'||e.type==='end_call'));
     }
-    assert.equal(spoken.length,4);
+    assert.equal(spoken.length,3);
     await dispatch(req('stop',id,{}));assert.equal(sessionStore.has(id),false);
   }finally{if(id)await dispatch(req('stop',id,{}));global.fetch=original;}
 });
@@ -81,7 +57,7 @@ test('customer interruption cancels a pending silence goodbye without emitting a
   const {dispatch}=createTesterService({secret});let id;
   try{
     id=(await(await dispatch(req('start',null,{agentId:'a',config}))).json()).id;
-    const response=await dispatch(req('turn',id,{silenceStep:4}));
+    const response=await dispatch(req('turn',id,{silenceStep:3}));
     await started;
     await dispatch(req('interrupt',id,{}));
     const result=await events(response);

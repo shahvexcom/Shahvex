@@ -9,7 +9,7 @@ import "./bpo-agent-form-polish.css";
 import "./bpo-agent-activity.css";
 import "./bpo-agent-progress.css";
 
-type Voice = { selectable?:boolean; id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
+type Voice = { is_local?:boolean;selectable?:boolean; id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
 type Script = { id: string; script_file_name: string; lead_file_name: string; created_at: string };
 type CallingAgent = {conversation_style?:string;speaks_first?:string;campaign_name?:string;category_name?:string;campaign_definition_id?:string; connection_id?:string;campaign_id?:string;
   id: string;
@@ -46,6 +46,7 @@ export default function BpoAgentsWorkspace() {
   const previewVoice=async()=>{stopPreview();setPreviewing(true);const abort=new AbortController();previewAbort.current=abort;try{const r=await fetch('/api/bpo/voice-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice:form.voiceId}),signal:abort.signal});if(!r.ok)throw Error((await r.json()).error);const blob=await r.blob();if(abort.signal.aborted)return;previewURL.current=URL.createObjectURL(blob);const audio=new Audio(previewURL.current);previewAudio.current=audio;audio.onended=stopPreview;audio.onerror=stopPreview;await audio.play();}catch(e){if(!abort.signal.aborted){stopPreview();setError(e instanceof Error?e.message:'Preview unavailable');}}};
   const [connections,setConnections]=useState<{id:string;name:string;enabled:boolean;status:string;live_config?:{enabled?:boolean}}[]>([]);
   const [voices, setVoices] = useState<Voice[]>([]);
+  const [voiceServiceReady,setVoiceServiceReady]=useState(true);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [agentLimit, setAgentLimit] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -68,7 +69,7 @@ export default function BpoAgentsWorkspace() {
       if (!response.ok) throw new Error(data.message || "Unable to load calling agents.");
       setAgents(Array.isArray(data.agents) ? data.agents : []);
       setConnections(Array.isArray(data.connections)?data.connections:[]);
-      setVoices(Array.isArray(data.voices) ? data.voices : []);
+      setVoices(Array.isArray(data.voices) ? data.voices : []);setVoiceServiceReady(data.voiceServiceReady!==false);
       setScripts(Array.isArray(data.scripts) ? data.scripts : []);
       setAgentLimit(Number(data.agentLimit || 0));
     } catch (cause) {
@@ -223,8 +224,8 @@ export default function BpoAgentsWorkspace() {
           <label>Agent name<input required minLength={2} maxLength={80} value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="e.g. Sarah Collections" /></label>
           <label>Gender<CustomDropdown value={form.gender} onChange={value => setForm(current => ({ ...current, gender: value as Form["gender"] }))} ariaLabel="Agent gender" options={[{ value: "FEMALE", label: "Female" }, { value: "MALE", label: "Male" }, { value: "OTHER", label: "Other" }]} /></label>
         </div>
-        <label>Agent voice<CustomDropdown value={form.voiceId} onChange={value => {stopPreview();setForm(current => ({ ...current, voiceId: value }));}} ariaLabel="Agent voice" options={voices.map(voice => ({ value: voice.id, label: `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
-        <button type="button" className="bpo-agent-preview" disabled={previewing||!voices.find(v=>v.id===form.voiceId)?.selectable} onClick={()=>void previewVoice()}><FiVolume2/>{previewing?'Playing preview...':'Preview voice'}</button>
+        <label>Agent voice<CustomDropdown value={form.voiceId} onChange={value => {stopPreview();setForm(current => ({ ...current, voiceId: value }));}} ariaLabel="Agent voice" options={voices.map(voice => ({ value: voice.id, label: voice.is_local ? `${voice.name} · ${voice.gender} · ${voice.accent || "English"}` : `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
+        <button type="button" className="bpo-agent-preview" disabled={(!voiceServiceReady&&!["emma","olivia"].includes(form.voiceId))||previewing||!voices.find(v=>v.id===form.voiceId)?.selectable} onClick={()=>void previewVoice()}><FiVolume2/>{previewing?'Playing preview...':'Preview voice'}</button>{!voiceServiceReady&&<p role="status">You can save your voice and preview Emma or Olivia. Live calls require the voice service.</p>}
         <label>Conversation style<CustomDropdown value={form.conversationStyle||'Professional'} ariaLabel="Conversation style" onChange={value=>setForm(current=>({...current,conversationStyle:value}))} options={conversationStyles.map(value=>({value,label:value}))}/></label>
         <label>Who speaks first<CustomDropdown value={form.speaksFirst||'customer'} ariaLabel="Who speaks first" onChange={value=>setForm(current=>({...current,speaksFirst:value}))} options={[{value:'customer',label:'Customer speaks first'},{value:'ai',label:'AI speaks first'}]}/></label>
         <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading || !form.voiceId}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>

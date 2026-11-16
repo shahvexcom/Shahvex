@@ -5,7 +5,7 @@ import { db } from "@/lib/database";
 import { requireApprovedBpo } from "@/lib/bpo-session";
 import { CallStartError, startAgentCall } from "@/lib/call-start";
 import { agentCallCommand, agentCallDetail, saveAgentCallNotes } from "@/lib/agent-call-detail";
-import { decryptCredential } from "@/app/api/admin/credentials/route";
+import { decryptCredential } from "@/lib/credential-crypto";
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a valid 24-hour time.");
 const startSchema = z.object({ action: z.literal("start-agent"), agentId: z.string().uuid() });
@@ -106,7 +106,7 @@ async function dialingAgents(bpoId: string, mode: Mode, usage: Awaited<ReturnTyp
       : row.voice_status !== "ACTIVE" || !row.voice_workspace_active ? "The assigned voice is inactive."
       : row.is_queued ? "Waiting for a VICIdial answered call."
       : row.uses_vicidial && !row.vicidial_ready ? "Complete VICIdial API and audio bridge verification in VoIP."
-      : ((!row.uses_vicidial && (!row.has_telnyx || !row.has_knowledge)) || !String(row.script_text || "").trim()) ? "AI credentials and an agent script are required."
+      : (!row.uses_vicidial && (!row.has_telnyx || !row.has_knowledge || !String(row.script_text || "").trim())) ? "AI credentials and an agent script are required."
       : !row.uses_vicidial && !e164(row.outbound_number) ? "A valid VoIP outbound number is required."
       : !row.uses_vicidial && !nextCustomer ? "No eligible customer remains in this customer sheet."
       : "";

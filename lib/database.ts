@@ -1,7 +1,7 @@
 import { Pool } from "pg";
 import { ensureVoipSchema } from "./voip-schema";
 
-const SCHEMA_VERSION = 32;
+const SCHEMA_VERSION = 36;
 const globalForDb = globalThis as unknown as { pool?: Pool; schemaReady?: Promise<void>; schemaVersion?: number };
 // pg v8 warns for `sslmode=require`; `verify-full` preserves its current
 // behaviour and is the explicit mode required by the upcoming pg release.
@@ -44,6 +44,7 @@ async function ensureSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query("ALTER TABLE agents ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   await pool.query("ALTER TABLE agents ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE agents ADD COLUMN IF NOT EXISTS call_limit_minutes INTEGER");
   await pool.query("ALTER TABLE agents ADD COLUMN IF NOT EXISTS daily_call_limit INTEGER NOT NULL DEFAULT 25");

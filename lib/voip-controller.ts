@@ -1,3 +1,4 @@
+import { isSameRequestOrigin } from "./request-origin";
 import "server-only";
 import { cookies } from "next/headers";
 import { randomUUID } from "node:crypto";
@@ -13,7 +14,7 @@ const connection = z.object({ action: z.literal("save"), id: z.string().max(100)
 const routing = z.object({ action: z.literal("assign"), agentId: z.string().max(100), connectionId: z.string().max(100), direction: z.enum(["INBOUND","OUTBOUND"]), campaignId: z.string().trim().max(80), inboundDid: z.string().trim().max(80), inGroup: z.string().trim().max(80), routingDestination: z.string().trim().max(160) }).refine(v => v.direction === "OUTBOUND" ? Boolean(v.campaignId) : Boolean(v.inboundDid || v.inGroup || v.routingDestination), { message: "Specify an outbound campaign or an inbound routing destination" });
 const publicColumns = `id,name,server_url,username,method,enabled,status,last_tested_at,status_message,revision,updated_at,live_config,media_verified_at,(bridge_secret_ciphertext IS NOT NULL) AS "hasBridgeSecret"`;
 const reply = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
-export const controllerAgentSQL = `(NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id) AND NOT EXISTS (SELECT 1 FROM admin_agent_owners o JOIN agents tenant ON tenant.id=o.owner_id WHERE o.agent_id=a.id AND tenant.role='BPO'))`;
+export const controllerAgentSQL = `(a.deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id) AND NOT EXISTS (SELECT 1 FROM admin_agent_owners o JOIN agents tenant ON tenant.id=o.owner_id WHERE o.agent_id=a.id AND tenant.role='BPO'))`;
 export const ownedAgentSQL = `(EXISTS (SELECT 1 FROM admin_agent_owners o WHERE o.agent_id=a.id AND o.owner_id=$1 AND o.verified=TRUE) OR EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.id AND b.bpo_id=$1))`;
 async function saveLiveSettings(client: { query: (sql: string, args: unknown[]) => Promise<unknown> }, id: string, owner: string, v: z.infer<typeof connection>) {
   if (v.liveConfig === undefined && v.bridgeSecret === undefined && v.recordingSecret === undefined) return;
@@ -32,8 +33,8 @@ export async function getVoip(_request: Request, portal: Portal) {
     const owner = await principal(portal); if (!owner) return reply({ error: "VoIP access is not authorized" }, 403);
     const client = await db(); const [connections, assignments, agents] = await Promise.all([
       client.query(`SELECT ${publicColumns} FROM voip_connections WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC`, [owner]),
-      client.query("SELECT id,agent_id,connection_id,direction,campaign_id,inbound_did,in_group,routing_destination,updated_at FROM voip_agent_assignments WHERE owner_id=$1", [owner]),
-      portal === "admin" ? client.query(`SELECT a.id,a.name,a.status FROM agents a WHERE a.role='AGENT' AND ${controllerAgentSQL} ORDER BY a.name`) : client.query("SELECT a.id,a.name,a.status FROM agents a JOIN bpo_created_agents b ON b.agent_id=a.id WHERE b.bpo_id=$1 ORDER BY a.name",[owner]),
+      client.query("SELECT id,agent_id,connection_id,direction,campaign_id,inbound_did,in_group,routing_destination,updated_at FROM voip_agent_assignments WHERE owner_id=$1 AND EXISTS(SELECT 1 FROM agents a WHERE a.id=agent_id AND a.deleted_at IS NULL)", [owner]),
+      portal === "admin" ? client.query(`SELECT a.id,a.name,a.status FROM agents a WHERE a.role='AGENT' AND ${controllerAgentSQL} ORDER BY a.name`) : client.query("SELECT a.id,a.name,a.status FROM agents a JOIN bpo_created_agents b ON b.agent_id=a.id WHERE b.bpo_id=$1 AND a.deleted_at IS NULL ORDER BY a.name",[owner]),
     ]);
     return reply({ connections: connections.rows.map(c => ({ ...c, hasSecret: true })), assignments: assignments.rows, agents: agents.rows });
   } catch { return reply({ error: "Unable to load VoIP configuration" }, 503); }
@@ -41,7 +42,7 @@ export async function getVoip(_request: Request, portal: Portal) {
 export async function postVoip(request: Request, portal: Portal) {
   try {
     const owner = await principal(portal); if (!owner) return reply({ error: "VoIP access is not authorized" }, 403);
-    if (request.headers.get("origin") !== new URL(request.url).origin) return reply({ error: "Same-origin request required" }, 403);
+    if (!isSameRequestOrigin(request)) return reply({ error: "Same-origin request required" }, 403);
     const raw = await request.text(); if (raw.length > 12000) return reply({ error: "Request too large" }, 413);
     const body = JSON.parse(raw), client = await db();
     if(['disable','enable','delete'].includes(body.action)){
@@ -76,7 +77,7 @@ export async function postVoip(request: Request, portal: Portal) {
         const saved=v.id?await tx.query(`UPDATE voip_connections SET name=$1,server_url=$2,username=$3,secret_ciphertext=COALESCE($4,secret_ciphertext),method=$5,enabled=$6,status='NOT_TESTED',status_message='',last_tested_at=NULL,revision=revision+1,updated_at=NOW() WHERE id=$7 AND owner_id=$8 AND deleted_at IS NULL RETURNING ${publicColumns}`,[v.name,url,v.username,v.secret?encryptCredential(v.secret):null,v.method,v.enabled,id,owner]):await tx.query(`INSERT INTO voip_connections(id,owner_id,name,server_url,username,secret_ciphertext,method,enabled) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${publicColumns}`,[id,owner,v.name,url,v.username,encryptCredential(v.secret!),v.method,v.enabled]);
         if(!saved.rows[0]){await tx.query("ROLLBACK");return reply({error:"Connection not found"},404);}
         await saveLiveSettings(tx,id,owner,v);
-        await tx.query("DELETE FROM voip_agent_assignments WHERE owner_id=$1 AND connection_id=$2 AND NOT(agent_id=ANY($3::text[]))",[owner,id,agentIds]);
+        await tx.query("DELETE FROM voip_agent_assignments WHERE owner_id=$1 AND EXISTS(SELECT 1 FROM agents a WHERE a.id=agent_id AND a.deleted_at IS NULL) AND connection_id=$2 AND NOT(agent_id=ANY($3::text[]))",[owner,id,agentIds]);
         for(const agentId of agentIds) await tx.query(`INSERT INTO voip_agent_assignments(id,owner_id,agent_id,connection_id,direction,campaign_id,inbound_did,in_group,routing_destination) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(owner_id,agent_id) DO UPDATE SET connection_id=EXCLUDED.connection_id,direction=EXCLUDED.direction,campaign_id=EXCLUDED.campaign_id,inbound_did=EXCLUDED.inbound_did,in_group=EXCLUDED.in_group,routing_destination=EXCLUDED.routing_destination,updated_at=NOW()`,[randomUUID(),owner,agentId,id,r.direction,r.campaignId,r.inboundDid,r.inGroup,r.routingDestination]);
         await tx.query("COMMIT");return reply({connection:saved.rows[0],saved:true},v.id?200:201);
       } catch(error) {await tx.query("ROLLBACK");throw error;} finally {tx.release();}
@@ -110,6 +111,7 @@ export async function postVoip(request: Request, portal: Portal) {
       if (!c.enabled || c.status !== "CONNECTED" || missing.length) return reply({error:missing.length ? missing.join(", ") : "Verify the enabled dialer API first"},409);
       const config = vicidialLiveConfig.parse(c.live_config);
       const health = await requestBridge(config.bridgeUrl,decryptCredential(c.bridge_secret_ciphertext),"/health");
+      if (health.testOnly === true) return reply({error:"This is a local-test bridge. Select the production campaign bridge before enabling VICIdial intake."},409);
       if (health.protocol !== "shahvex-vicidial-v1" || health.audioSocket !== true || health.sharedTester !== true || health.aiOnlyRecording !== true || health.humanAnswerEvents !== true) return reply({error:"Update the audio bridge: shared testing, AI-only recordings and human-answer events are required"},409);
       await client.query("UPDATE voip_connections SET media_verified_at=NOW() WHERE id=$1 AND owner_id=$2",[c.id,owner]);
       return reply({saved:true,message:"Audio bridge reachable. A supervised answered call is still required to verify the Asterisk route, recordings and transfer."});

@@ -43,8 +43,8 @@ test('expired lease alone never releases customer media and invalid Native state
 test('campaign assignment checks owner and writes exact Native campaign without touching number lists',async()=>{
  const writes=[];const save=load('lib/agent-campaign-assignment.ts').saveAgentCampaign;
  const tx={query:async(sql,p)=>{writes.push({sql,p});if(sql.startsWith('SELECT'))return {rows:p[1]==='owner'?[{id:'definition',connection_id:'connection',external_campaign_id:'EXACT01'}]:[]};return {rows:[]};}};
- await assert.rejects(save(tx,'agent','foreign','definition'),/owned campaign/);assert.equal(writes.length,1);writes.length=0;
- await save(tx,'agent','owner','definition');assert.equal(writes.length,3);assert.ok(writes[2].p.includes('EXACT01'));assert.ok(!writes.some(w=>/lead_rows|add_lead|originate/.test(w.sql)));
+ await assert.rejects(save(tx,'agent','foreign','definition'),/owned campaign/);assert.equal(writes.length,3);writes.length=0;
+ await save(tx,'agent','owner','definition');assert.equal(writes.length,5);assert.ok(writes[4].p.includes('EXACT01'));assert.ok(!writes.some(w=>/lead_rows|add_lead|originate/.test(w.sql)));
 });
 test('durable lead sync merges Native operator notes, verifies readback and bounds retries',async()=>{
  let job,fail=false,writes=0;const a={id:'call',voip_connection_id:'connection',vicidial_lead_id:'42',collected_fields:{Name:{value:'Ada'}},outcome:'GOAL_ACHIEVED',script_snapshot:{campaignSettings:{}},vicidial_sync_status:'PENDING'};

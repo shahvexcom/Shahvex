@@ -64,3 +64,40 @@ test('manual sessions reject transfers and require the shared script-derivation 
  assert.equal((await dispatch({...connect,externalCallId:'manual-'+crypto.randomUUID().replaceAll('-','')})).status,429);
  await callbacks.close();assert.ok(operations.every(action=>['start','stop'].includes(action)));
 });
+
+test('local monitor updates the initial script and shows streamed customer/agent text',async()=>{
+ const {manualCallbacks}=require('../deployment/vicidial-bridge/manual-test-server.cjs');
+ const original={...agent},starts=[];
+ const callbacks=manualCallbacks({agent:original,request:async(action,init)=>{
+  if(action==='start'){starts.push(JSON.parse(init.body));return Response.json({id:'monitor-session',derivedFromScript:true});}
+  if(action==='turn')return new Response('{"type":"user","text":"Can you hear me?"}\n{"type":"delta","text":"Yes, clearly."}\n{"type":"done"}\n');
+  return Response.json({stopped:true});
+ }});
+ const externalCallId='manual-'+crypto.randomUUID().replaceAll('-','');
+ const send=value=>callbacks.dispatch('',{body:Buffer.from(JSON.stringify({...value,externalCallId}))});
+ try{
+  callbacks.monitor({agent:{name:'Local Agent',voice:agent.voice,first:'ai',script:'This is the custom localhost initial script.'}});
+  const connected=await (await send({action:'connected',agentUser:'manual-test'})).json();
+  assert.equal(starts[0].config.script,'This is the custom localhost initial script.');
+  assert.throws(()=>callbacks.monitor({agent:original}),/Finish the current local call/);
+  const response=await send({action:'turn',callId:connected.callId,eventId:crypto.randomUUID(),text:'Can you hear me?'});
+  await response.text();
+  const snapshot=callbacks.monitor();
+  assert.equal(snapshot.testOnly,true);assert.equal(snapshot.calls[0].agent_name,'Local Agent');
+  assert.deepEqual(snapshot.calls[0].conversation_history,[{role:'user',content:'Can you hear me?'},{role:'assistant',content:'Yes, clearly.'}]);
+  assert.equal('sessionId' in snapshot.calls[0],false);
+  await send({action:'ended',callId:connected.callId});
+  assert.equal(callbacks.monitor().calls[0].status,'COMPLETED');
+ }finally{await callbacks.close();}
+});
+
+test('local monitor control requires the bridge secret and refuses production bridges',async()=>{
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-monitor-'));
+ const manual=createManualBridge({enabled:true,secret,agent:{...agent},controlPort:0,audioPort:0,stateDirectory:folder},{logger:()=>{},request:async()=>Response.json({stopped:true})});
+ try{
+  await manual.listen();const port=manual.bridge.control.address().port;
+  assert.equal((await fetch(`http://127.0.0.1:${port}/local-monitor`)).status,401);
+  const read=await signedRequest(port,'/local-monitor',null,secret,'GET');assert.equal(read.status,200);assert.equal((await read.json()).testOnly,true);
+  const update=await signedRequest(port,'/local-monitor',{agent:{...agent,script:'Saved initial script for the next customer.'}});assert.equal(update.status,200);
+ }finally{await manual.close();fs.rmSync(folder,{recursive:true,force:true});}
+});

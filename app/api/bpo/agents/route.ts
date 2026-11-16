@@ -110,13 +110,14 @@ export async function GET() {
 
     const local=await localVoices(session.agentId);
     const [connections,voipAssignments]=await Promise.all([client.query("SELECT id,name,enabled,status,live_config FROM voip_connections WHERE owner_id=$1 AND deleted_at IS NULL ORDER BY name",[session.agentId]),client.query("SELECT va.agent_id,va.connection_id,va.campaign_id FROM voip_agent_assignments va JOIN bpo_created_agents b ON b.agent_id=va.agent_id AND b.bpo_id=va.owner_id WHERE va.owner_id=$1",[session.agentId])]);
-    voices.rows.push(...local.voices.map(v=>({...v,telnyx_label:null,groq_label:null})));
+    voices.rows.push(...local.voices.map(v=>({...v,is_local:true,telnyx_label:null,groq_label:null})));
     return Response.json({
       agents: agents.rows.map(row => {
         const { script_text, task_evidence, customer_transcripts, ...agent } = row;
         const voip=voipAssignments.rows.find(v=>v.agent_id===row.id); return { ...agent,connection_id:voip?.connection_id||"",campaign_id:voip?.campaign_id||"", progress: progressFrom(row) };
       }),
       voices: voices.rows,
+      voiceServiceReady:local.serviceReady,
       connections:connections.rows,
       scripts: scripts.rows,
       agentLimit: plan.agents,
