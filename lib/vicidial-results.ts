@@ -1,4 +1,4 @@
-import { customerRequestsHuman, withdrawsHumanRequest, waitingAcknowledgment } from "../gateway/handoff-intent.cjs";
+import { customerRequestsHuman, withdrawsHumanRequest, waitingAcknowledgment, transferConsent } from "../gateway/handoff-intent.cjs";
 import { createHash, randomUUID } from "node:crypto";
 import { mergeCallComments } from "./vicidial-comment-merge";
 import { campaignSettings,parseVicidialTable } from "./campaign-config";
@@ -158,33 +158,18 @@ export function verifiedQuestionFields(steps:HandoffStep[],checks:z.infer<typeof
  return fields;
 }
 export function explicitlyRequestsHuman(history: Turn[]) {
-  return customerRequestsHuman(history.findLast(t=>t.role==='user')?.content||'');
+  return customerRequestsHuman(history.findLast(t=>t.role==='user')?.content||'',history);
 }
 export function hasTransferConsent(history: Turn[]) {
-  let consent=false,pending=false;
-  for(const turn of history){
-    if(turn.role==='assistant'){
-      const questions=turn.content.match(/[^.!?\n]+\?/g)||[];
-      const offer=questions.length===1?questions[0]:questions.length===0?turn.content:'';
-      pending=!turn.content.includes('[interrupted]')&&/\b(?:transfer|connect)\s+(?:you|your call)\b|\b(?:speak|talk) (?:to|with) (?:a |an |the )?(?:human|person|agent|representative|specialist|team)\b/i.test(offer);
-      continue;
-    }
-    if(turn.role!=='user')continue;
-    if(withdrawsHumanRequest(turn.content)){consent=false;pending=false;continue;}
-    if(explicitlyRequestsHuman([turn])){consent=true;pending=false;continue;}
-    if(pending){
-      if(waitingAcknowledgment(turn.content)||/^(?:absolutely|certainly|of course)[.! ]*$/i.test(turn.content.trim())){consent=true;pending=false;}
-      else if(/^(?:no|nope|not now|no thanks)[.! ]*$/i.test(turn.content.trim())){consent=false;pending=false;}
-    }
-  }
-  return consent;
+  return transferConsent(history);
 }
+
 /** An explicit human request is a separate handoff path, never proof of qualification. */
 export function hasRequestedHumanHandoff(history:Turn[]){
- let requested=false;
- for(const turn of history){if(turn.role!=='user')continue;
+ let requested=false;const prefix:Turn[]=[];
+ for(const turn of history){prefix.push(turn);if(turn.role!=='user')continue;
   if(withdrawsHumanRequest(turn.content)){requested=false;continue;}
-  if(explicitlyRequestsHuman([turn]))requested=true;
+  if(explicitlyRequestsHuman(prefix))requested=true;
  }
  return requested&&hasTransferConsent(history);
 }
@@ -346,7 +331,7 @@ export async function transferVicidialCall(callId:string) {
   try {
     await tx.query("BEGIN");
     call=(await tx.query(`SELECT a.*,c.live_config,c.bridge_secret_ciphertext,c.server_url,c.username,c.secret_ciphertext FROM agent_calls a JOIN voip_connections c ON c.id=a.voip_connection_id WHERE a.id=$1 AND (a.telephony_provider='VICIDIAL' OR (a.telephony_provider='AUDIOSOCKET' AND a.vicidial_call_id IS NOT NULL AND a.vicidial_lead_id IS NOT NULL)) FOR UPDATE OF a`,[callId])).rows[0];
-    if(!call||call.status!=='ANSWERED'||call.conversation_busy||!call.handoff_ready||!hasCurrentQualification(call)||!call.transfer_consent||(call.vicidial_sync_status!=='SYNCED'&&!hasRequestedHumanHandoff(call.conversation_history||[]))||['PREPARING','SUBMITTED','UNCERTAIN','ANSWERED'].includes(call.transfer_status))throw Error("Transfer is not eligible or was already submitted");
+    if(!call||call.status!=='ANSWERED'||call.conversation_busy||!call.handoff_ready||!hasCurrentQualification(call)||!call.transfer_consent||!hasTransferConsent(call.conversation_history||[])||(call.vicidial_sync_status!=='SYNCED'&&!hasRequestedHumanHandoff(call.conversation_history||[]))||['PREPARING','SUBMITTED','UNCERTAIN','ANSWERED'].includes(call.transfer_status))throw Error("Transfer is not eligible or was already submitted");
     await tx.query("UPDATE agent_calls SET transfer_status='PREPARING',conversation_state='PREPARING_HANDOFF',updated_at=NOW() WHERE id=$1",[callId]);
     await tx.query("COMMIT");committed=true;
   } catch(error){if(!committed)await tx.query("ROLLBACK");throw error;}finally{tx.release();}

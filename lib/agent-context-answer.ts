@@ -1,4 +1,5 @@
-import { customerRequestsHuman, withdrawsHumanRequest, waitingAcknowledgment } from "../gateway/handoff-intent.cjs";
+import { asksCallingPurpose, scriptPurpose } from "../gateway/conversation-flow.cjs";
+import { reaffirmsHumanRequest, customerRequestsHuman, withdrawsHumanRequest, waitingAcknowledgment, affirmativeTransferConsent, transferConsent, isTransferOffer } from "../gateway/handoff-intent.cjs";
 import type {TestConfig} from './agent-test';
 type Turn={role:string;content:string};
 const cities=[
@@ -16,14 +17,22 @@ const weatherCache=new Map<string,{until:number;text:string}>();
 export async function contextualQuestionReply(config:Pick<TestConfig,'script'|'instructions'|'knowledge'>&{name?:string},text:string,history:Turn[],options:{now?:number;fetchImpl?:typeof fetch;signal?:AbortSignal}={}){
  const now=options.now??Date.now(),fetchImpl=options.fetchImpl??fetch;
  const last=history.findLast(t=>t.role==='assistant')?.content||'';
+ const rebateDefinition=/^(?:please\s+)?(?:what(?:'s| is| does)|explain|tell me (?:about|what))\b[^?]{0,60}\brebate card\b[^?]{0,40}[?.! ]*$/i.test(text.trim());
+ const sourceDetails=[config.script,config.knowledge].join('\n');
+ const eligibilityQuestion=/\b(?:am I|do I|did I|have I)\b[^.!?]{0,45}\b(?:qualif(?:y|ied)|eligible|entitled|approved)\b|\bdoes\b[^.!?]{0,90}\bmean\b[^.!?]{0,45}\b(?:qualif(?:y|ied)|eligible|refund)\b/i.test(text);
+ if(eligibilityQuestion&&/medicare|medicaid|rebate|refund/i.test(sourceDetails))return "I can't confirm eligibility or a refund from those answers alone. A licensed specialist would need to review your plan and verify what applies.";
+
+ if(rebateDefinition&&/medicare|rebate card/i.test(sourceDetails)&&!/(?:rebate card (?:is|means|provides|works)|card benefits?:)/i.test(sourceDetails))return "A rebate card generally holds money or credit from a rebate. I don't have verified details of a specific card or an amount for your plan, so a licensed specialist would need to confirm what applies.";
+
  const cityReply=last==='Which city would you like the weather for?'&&/^[a-z][a-z .,'-]{1,65}$/i.test(text.trim())&&!/\b(?:please|what|where|how|can|could|would|you|time|laugh|cry|sound|use|hello|hi|yes|no|okay|ok|transfer|connect)\b/i.test(text);
  const weather=/\b(?:weather|temperature|raining|sunny|forecast)\b/i.test(text)||cityReply;
  const time=/\b(?:what(?:'s| is)?(?: the)? time|what time|current time|time (?:right )?now)\b/i.test(text);
  const location=/\bwhere (?:are you|do you live|you live|are you live)\b|\bwhere\b.{0,55}\b(?:calling|speaking|located|based|sitting|from)\b|\b(?:your|company|office) (?:location|address)\b/i.test(text);
  const identity=(/\b(?:who (?:are you|you are|is this)|who am I (?:talking|speaking) (?:to|with)|your name|what company|which company)\b/i.test(text))||(/\bwhat about you\b/i.test(text)&&location);
  const wellbeing=/\b(?:how are you|how do you do|how(?:'s| is| was) your day|how are you (?:feeling|doing)|what about you|how about you)\b/i.test(text);
+ const purposeQuestion=asksCallingPurpose(text);
  const politics=/\b(?:elections?|politic(?:s|al)?|democrats?|republicans?|who (?:will|should) win|presidential race|president|senate|congress|government|voting|candidate)\b/i.test(text);
- if(!weather&&!time&&!location&&!identity&&!wellbeing&&!politics){
+ if(!weather&&!time&&!location&&!identity&&!wellbeing&&!politics&&!purposeQuestion){
   if(/\b(?:are you married|will you marry me|I want to marry you)\b/i.test(text))return "Wedding planning is a little outside my job description! Let's get back to helping you.";
   if(/\b(?:are you (?:a )?smoker|do you smoke|you smoking)\b/i.test(text))return "I don't smoke; I'm an AI assistant. Smoking can harm the lungs and heart, and quitting is good for your health.";
   return;
@@ -35,9 +44,13 @@ export async function contextualQuestionReply(config:Pick<TestConfig,'script'|'i
  if(identity){
   const nameOnly=/\byour name\b/i.test(text)&&! /\b(?:company|who|where)\b/i.test(text);
   replies.push(nameOnly?`I'm ${profile.name}.`:`I'm ${profile.name}${profile.company?` from ${profile.company}`:''}.`);
-  if(!nameOnly&&!wellbeing&&!location&&!time&&!weather)replies.push('How are you today?');
+
  }
- if(wellbeing)replies.push("I'm doing well, thank you for asking. How is your day going?");
+ if(purposeQuestion){
+  const purpose=scriptPurpose(config);
+  replies.push(purpose||"I don't have a confirmed calling purpose to explain, and I don't want to invent one.");
+ }
+ if(wellbeing)replies.push("I'm doing well, thank you for asking.");
  if(politics)replies.push("I keep politics out of this call, but I hope the outcome serves people's needs fairly. I don't have verified election updates to share.");
 
  if(weather){
@@ -82,8 +95,8 @@ export function initialScriptQuestion(script:string,text:string,history:{role:st
 
 /** Only wording for an acknowledgment after a spoken transfer offer; no call control. */
 export function transferAcknowledgment(text:string,history:{role:string;content:string}[],script=''){
- const recipient=script.match(/\b(?:licensed|verified|human|live) (?:(?:insurance|sales|support) )?(?:agent|specialist|representative|member|advisor|person)\b/i)?.[0]?.toLowerCase() || 'licensed specialist';
- const requested=customerRequestsHuman(text);
+
+ const requested=customerRequestsHuman(text,history);
  const statusQuestion=/\b(?:how (?:much )?long|why.*waiting|are you (?:still )?(?:transferring|connecting)|have you (?:transferred|connected)|did you (?:transfer|connect))\b/i.test(text);
  if(!requested&&!statusQuestion&&!waitingAcknowledgment(text))return undefined;
  let offered=false,updates=0,requestedPreviously=false;
@@ -92,18 +105,17 @@ export function transferAcknowledgment(text:string,history:{role:string;content:
   if(turn.role==='user'&&customerRequestsHuman(turn.content))requestedPreviously=true;
   if(turn.role!=='assistant')continue;
   if(/\b(?:cannot|can't|unable to|cancel(?:led|ed)?)\s+(?:connect|transfer)|\btransfer (?:failed|cancelled|canceled)\b/i.test(turn.content)){offered=false;updates=0;requestedPreviously=false;continue;}
-  const qs=turn.content.match(/[^.!?\n]+\?/g)||[];
-  const offer=qs.length===1?qs[0]:qs.length===0?turn.content:'';
-  offered=!turn.content.includes('[interrupted]')&&!/\b(?:if|after|once|when)\b/i.test(offer)&&/\b(?:connect|transfer) (?:you|your call)\b/i.test(offer);
-  if(/^(?:Please wait while I connect you to the [a-z ]+\.|Your connection request is in progress\.|Okay, I am going to connect you\. Just hold for me\.)$/i.test(turn.content.trim()))updates++;
+  offered=isTransferOffer(turn);
+  if(/^(?:Please wait while I connect you to the [a-z ]+\.|Your connection request is in progress\.|Alright, please wait\.|Okay, I am going to connect you\. Just hold for me\.)$/i.test(turn.content.trim()))updates++;
  }
  if(!requested&&!requestedPreviously&&!offered&&!updates)return undefined;
- if(statusQuestion){
+ if(!requested&&!statusQuestion&&!affirmativeTransferConsent(text)&&!transferConsent(history))return undefined;
+ if(statusQuestion || updates>0&&reaffirmsHumanRequest(text,history)){
   const status="I don't have confirmation of a completed transfer yet.";
   return history.some(t=>t.role==='assistant'&&t.content===status)?'':status;
  }
  // Silence after one acknowledgment and one status update prevents a waiting loop.
- return [`Please wait while I connect you to the ${recipient}.`,'Your connection request is in progress.',''][Math.min(updates,2)];
+ return updates===0?'Alright, please wait.':'';
 }
 
 /** Fast flexible opening; explicit mandatory/verbatim openings stay with the model. */

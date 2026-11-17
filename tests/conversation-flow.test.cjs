@@ -50,3 +50,35 @@ test('intro replies explain the script purpose before permission without assumin
  assert.equal(scriptPurpose({script:'Introduce yourself and qualify the lead.',goal:'Collect age and address'}),undefined);
  assert.equal(scriptPurpose({...cfg,instructions:'Read exactly the mandatory disclosure.'}),undefined);
 });
+
+test('audio complaints interrupt progression and recovery does not replay the introduction',()=>{
+ const {audioCheckReply}=require('../gateway/conversation-flow.cjs');
+ const h=[{role:'assistant',content:"I'm Lauren. I'm calling about your review."}];
+ for(const text of ['Why your voice is breaking?','I said why your voice is breaking.','Your audio is cutting out.',"I can't hear you.","You're breaking up."]){
+  assert.equal(audioCheckReply(text,h),'The audio may be cutting out. Is my voice clear now?');
+ }
+ h.push({role:'assistant',content:audioCheckReply('Your voice is breaking',h)});
+ assert.doesNotMatch(audioCheckReply('Yes',h),/Lauren|calling about/);
+ assert.match(audioCheckReply('Your voice is breaking',h),/still unclear/);
+ assert.equal(audioCheckReply('My voice is breaking',h),undefined);
+});
+test('clear audio resumes only the pending question',()=>{
+ const {audioCheckReply}=require('../gateway/conversation-flow.cjs');
+ const h=[{role:'assistant',content:"I'm Lauren. Which state do you live in?"},{role:'assistant',content:'The audio may be cutting out. Is my voice clear now?'}];
+ assert.equal(audioCheckReply('Yes',h),'Thank you. Which state do you live in?');
+});
+
+test('audio-check recovery never replays the greeting or wellbeing question',()=>{
+ const {audioCheckReply}=require('../gateway/conversation-flow.cjs');
+ assert.equal(audioCheckReply('Yes',[A('Hello, this is Lauren. How are you today?'),A('Can you hear me clearly?')]),"Yes, I'm here.");
+});
+
+test('presence variants and punctuated audio confirmations do not need a model or restart the pitch',()=>{
+ const {isPresenceCheck,audioCheckReply}=require('../gateway/conversation-flow.cjs');
+ for(const text of ['Anyone there?','Is anybody there?','Hello?'])assert.equal(isPresenceCheck(text),true,text);
+ assert.equal(isPresenceCheck('Hello, why are you calling me?'),false);
+ const h=[A('Which state do you live in?'),A('Can you hear me clearly?')];
+ assert.equal(audioCheckReply('Anyone there?',h),"I'm here and listening.");
+ for(const text of ['Yes, I can hear you.','Yeah, I can.','I can hear.','Yeah, you can.'])assert.equal(audioCheckReply(text,h),'Which state do you live in?',text);
+ assert.equal(audioCheckReply('Yes I can hear you. Why are you calling?',h),undefined);
+});

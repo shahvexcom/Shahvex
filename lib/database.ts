@@ -1,7 +1,8 @@
 import { Pool } from "pg";
+import { recordingSerialSchema } from "./recording-serial-schema";
 import { ensureVoipSchema } from "./voip-schema";
 
-const SCHEMA_VERSION = 36;
+const SCHEMA_VERSION = 37;
 const globalForDb = globalThis as unknown as { pool?: Pool; schemaReady?: Promise<void>; schemaVersion?: number };
 // pg v8 warns for `sslmode=require`; `verify-full` preserves its current
 // behaviour and is the explicit mode required by the upcoming pg release.
@@ -120,6 +121,7 @@ async function ensureSchema() {
     status VARCHAR(30) NOT NULL DEFAULT 'COMPLETED',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
+  await pool.query(recordingSerialSchema);
   await pool.query("ALTER TABLE agent_calls ADD COLUMN IF NOT EXISTS telnyx_call_control_id TEXT, ADD COLUMN IF NOT EXISTS telnyx_call_session_id TEXT, ADD COLUMN IF NOT EXISTS telnyx_connection_id TEXT, ADD COLUMN IF NOT EXISTS lead_name TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS lead_number VARCHAR(40) NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS recording_url TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS recording_id TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS notes TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS transcript TEXT NOT NULL DEFAULT '', ADD COLUMN IF NOT EXISTS answered_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
   await pool.query("ALTER TABLE agent_calls ADD COLUMN IF NOT EXISTS recording_size_bytes BIGINT NOT NULL DEFAULT 0");
   await pool.query("ALTER TABLE agent_calls ADD COLUMN IF NOT EXISTS conversation_history JSONB NOT NULL DEFAULT '[]'::jsonb, ADD COLUMN IF NOT EXISTS conversation_busy BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN IF NOT EXISTS conversation_state VARCHAR(30) NOT NULL DEFAULT 'INITIALIZING', ADD COLUMN IF NOT EXISTS current_response_id TEXT, ADD COLUMN IF NOT EXISTS failure_reason TEXT NOT NULL DEFAULT ''");

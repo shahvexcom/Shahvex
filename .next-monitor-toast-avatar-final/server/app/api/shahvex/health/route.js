@@ -1,0 +1,11 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/shahvex/health/route.js")
+R.c("server/chunks/lib_1ytwmof._.js")
+R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")
+R.c("server/chunks/[root-of-the-server]__15loqm2._.js")
+R.c("server/chunks/lib_20-rzby._.js")
+R.c("server/chunks/node_modules_next_dist_11w3z5e._.js")
+R.c("server/chunks/[root-of-the-server]__15bjnu5._.js")
+R.c("server/chunks/_1td2jp9._.js")
+R.c("server/chunks/_next-internal_server_app_api_shahvex_health_route_actions_0t4mp28.js")
+R.m(13605)
+module.exports=R.m(13605).exports

@@ -130,7 +130,7 @@ async function dashboard(principal: QuickDialPrincipal) {
       COALESCE(SUM(CASE WHEN created_at >= date_trunc('day',NOW()) AND answered_at IS NOT NULL THEN CASE WHEN status IN ('INITIATED','RINGING','ANSWERED') THEN EXTRACT(EPOCH FROM (NOW()-answered_at)) ELSE duration_seconds END ELSE 0 END),0)::int talk_seconds_today,
       COUNT(*) FILTER (WHERE recording_url<>'' AND created_at >= date_trunc('day',NOW()))::int recordings_today
       FROM agent_calls WHERE agent_id=$1 AND call_type='QUICK_DIAL'`, [principal.id]);
-    const records = await client.query(`SELECT id,status,lead_number,duration_seconds,quick_dial_charge::float8 charged_credits,answered_at,recording_url,recording_active,created_at,ended_at FROM agent_calls WHERE agent_id=$1 AND call_type='QUICK_DIAL' ORDER BY created_at DESC LIMIT 8`, [principal.id]);
+    const records = await client.query(`SELECT recording_serial,id,status,lead_number,duration_seconds,quick_dial_charge::float8 charged_credits,answered_at,recording_url,recording_active,created_at,ended_at FROM agent_calls WHERE agent_id=$1 AND call_type='QUICK_DIAL' ORDER BY created_at DESC LIMIT 8`, [principal.id]);
     if (principal.portal === "admin") return { metrics: metrics.rows[0] || {}, recordings: records.rows.map(row => ({ ...row, downloadable: Boolean(row.recording_url) })), billing: { balance: 0, minutePrice: 0, recordingPrice: 0 } };
     const pricing = await bpoUsagePricing(client);
     const account = await client.query("SELECT COALESCE(remaining_credits,0)::float8 remaining_credits FROM agents WHERE id=$1 AND role='BPO'", [principal.id]);

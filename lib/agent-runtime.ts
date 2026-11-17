@@ -12,12 +12,25 @@ export async function reserveAgent(client:Client,agentId:string,callId:string,ca
  WHERE agent_id=$1 AND state='READY' AND call_id IS NULL RETURNING agent_id`,[agentId,callId,campaignId]);
  return result.rowCount===1;
 }
-export async function mediaReady(callId:string){
- const pool=await db(),tx=await pool.connect();try{await tx.query('BEGIN');
- const r=await tx.query("UPDATE ai_agent_runtime_states SET state='BUSY',last_seen_at=NOW(),updated_at=NOW() WHERE call_id=$1 AND state='RESERVED' RETURNING agent_id",[callId]);
- if(r.rowCount)await tx.query("UPDATE agent_calls SET status='ANSWERED',conversation_state='LISTENING',answered_at=COALESCE(answered_at,NOW()),last_heartbeat_at=NOW() WHERE id=$1 AND status='INITIATED'",[callId]);
- await tx.query('COMMIT');return Boolean(r.rowCount);
- }catch(e){await tx.query('ROLLBACK');throw e;}finally{tx.release();}
+export async function mediaReady(callId:string,voiceSessionId?:string,event?:{connectionId:string;eventId:string;payloadHash:string;payload:object}){
+ // One atomic statement: audio readiness cannot leave a BUSY instance attached to
+ // an unactivated call, and no network round trips separate the two updates.
+ const result=await(await db()).query(`WITH candidate AS (
+ SELECT id FROM agent_calls WHERE id=$1 AND status='INITIATED' AND ($2::text IS NOT NULL OR voice_session_id IS NOT NULL) FOR UPDATE
+ ), activated AS (
+  UPDATE ai_agent_runtime_states r SET state='BUSY',last_seen_at=NOW(),updated_at=NOW()
+  WHERE r.call_id=$1 AND r.state='RESERVED' AND EXISTS(SELECT 1 FROM candidate)
+  RETURNING r.call_id
+ ), answered AS (UPDATE agent_calls c SET status='ANSWERED',voice_session_id=COALESCE($2::text,c.voice_session_id),conversation_state='LISTENING',
+ answered_at=COALESCE(answered_at,NOW()),last_heartbeat_at=NOW()
+ WHERE c.id IN (SELECT call_id FROM activated) AND c.status='INITIATED' RETURNING c.id
+ ), completed AS (
+ UPDATE vicidial_events e SET processing_state='COMPLETED',processed_at=NOW(),lease_expires_at=NULL,
+ response_payload=$6::jsonb,response_status=200
+ FROM answered a WHERE e.connection_id=$3::text AND e.event_id=$4::text AND e.payload_hash=$5::text AND e.processing_state='RUNNING' RETURNING e.event_id
+ ) SELECT a.id,CASE WHEN $3::text IS NULL THEN 1 ELSE 1/(SELECT COUNT(*)::int FROM completed) END AS event_saved FROM answered a`,
+ [callId,voiceSessionId||null,event?.connectionId||null,event?.eventId||null,event?.payloadHash||null,event?JSON.stringify(event.payload):null]);
+ return result.rowCount===1;
 }
 export async function setRuntimeState(callId:string,state:'ERROR'|'TRANSFERRING'|'BUSY',error=''){
  await (await db()).query('UPDATE ai_agent_runtime_states SET state=$1,last_error=$2,updated_at=NOW() WHERE call_id=$3',[state,error,callId]);

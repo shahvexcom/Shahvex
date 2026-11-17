@@ -34,7 +34,7 @@ test('a yes after greeting asks the first assigned question instead of treating 
 
 test('hold wording applies only to acknowledgments after a transfer offer',()=>{
  const ack=m.exports.transferAcknowledgment,offer=[{role:'assistant',content:'Let me connect you with a licensed specialist.'}];
- assert.equal(ack('Okay.',offer),'Please wait while I connect you to the licensed specialist.');
+ assert.equal(ack('Okay.',offer),'Alright, please wait.');
  assert.equal(ack('Okay.',[{role:'assistant',content:'Are you getting a rebate?'}]),undefined);
  assert.equal(ack('What information will they need?',offer),undefined);
  assert.equal(ack("Don't transfer me.",offer),undefined);
@@ -68,10 +68,28 @@ test('address response excludes adjacent timezone metadata',async()=>{
 
 test('identity, wellbeing, address and political detours answer only the requested topics',async()=>{
  const cfg={...config,name:'Database Name',script:'Hello, this is Laura from Senior Benefits Department.'};
- const identity=await answer(cfg,'Who you are?',[]);assert.equal(identity,"I'm Laura from Senior Benefits Department. How are you today?");assert.doesNotMatch(identity,/Phoenix|assist|help you today/);
+ const identity=await answer(cfg,'Who you are?',[]);assert.equal(identity,"I'm Laura from Senior Benefits Department.");assert.doesNotMatch(identity,/Phoenix|assist|help you today/);
  assert.equal(await answer(cfg,'What is your name?',[]),"I'm Laura.");
  assert.match(await answer(cfg,'What about you?',[]),/doing well/);
  const combined=await answer(cfg,'What about you and where you live?',[]);assert.match(combined,/Laura.*Senior Benefits.*Phoenix/);
  const address=await answer(cfg,'Where are you?',[]);assert.match(address,/Phoenix/);assert.doesNotMatch(address,/Laura/);
  const political=await answer(cfg,'Who should win the election?',[]);assert.match(political,/serves people's needs/);assert.doesNotMatch(political,/will win|cannot answer/i);
+});
+
+test('rebate-card explanations do not invent plan benefits, amounts, eligibility or entitlements',async()=>{
+ const campaign={...config,script:'Are you getting money on a rebate card? Medicare review.'};
+ const reply=await answer(campaign,'What is a rebate card?',[]);
+ assert.match(reply,/money or credit from a rebate/);assert.match(reply,/don.t have verified details/);assert.doesNotMatch(reply,/\$|each month|entitled|overcharged|eligible/);
+ assert.equal(await answer({...campaign,knowledge:'The rebate card is issued by the named plan under its terms.'},'What is a rebate card?',[]),undefined);
+});
+
+test('combined identity and calling-purpose questions answer both parts, including the saved script typo',async()=>{
+ const c={...config,script:'Hi, this is Lauren with Wellness Team. M calling about your benefit review. Are you receiving a rebate?'};
+ const reply=await answer(c,'Who are you? Why are you calling me?',[]);
+ assert.match(reply,/Lauren/);assert.match(reply,/calling about your benefit review/);assert.doesNotMatch(reply,/repeat|hear me|lost track/);
+ assert.match(await answer(c,'I can. What do you want to say? Why you call me?',[]),/calling about your benefit review/);
+});
+test('qualification answers do not become an eligibility or refund determination',async()=>{
+ const c={...config,script:'Medicare rebate review. Do you have Medicaid?'};
+ for(const text of ['Am I eligible?','Do I qualify now?','Does having Medicaid mean I qualify?'])assert.match(await answer(c,text,[]),/can.t confirm eligibility or a refund/);
 });

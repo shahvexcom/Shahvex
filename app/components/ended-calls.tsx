@@ -1,10 +1,11 @@
 "use client";
+import { recordingReference } from "@/lib/recording-reference";
 import { useMemo, useState } from "react";
 import { FiArchive, FiDownload, FiChevronLeft, FiChevronRight, FiPlay, FiExternalLink } from "react-icons/fi";
 import { RecordingModal } from "./recording-modal";
 
 type Call = {
-  id: string;
+  id: string; recording_serial?: string;
   status: string;
   agent_name: string;
   lead_name: string;
@@ -57,6 +58,7 @@ export function EndedCalls({ calls }: { calls: Call[] }) {
 
   const exportReport = (call: Call) => {
     const rows = [
+      ["Recording serial", recordingReference(call)],
       ["Agent", call.agent_name || "Unknown agent"],
       ["Lead", call.lead_name || "Unnamed client"],
       ["Lead Number", call.lead_number || "N/A"],
@@ -105,7 +107,7 @@ export function EndedCalls({ calls }: { calls: Call[] }) {
               <div className="ended-calls-row" key={call.id}>
                 <span className="ended-call-cell ended-call-lead">
                   <b>{call.lead_name || "Unnamed client"}</b>
-                  <small>{call.lead_number || "No number"}</small>
+                  <small>{call.lead_number || "No number"}</small><small>Recording: {recordingReference(call)}</small>
                 </span>
                 <span className="ended-call-cell ended-call-duration">{callDuration(call)}</span>
                 <span className="ended-call-cell">{call.agent_name || "Unknown agent"}</span>

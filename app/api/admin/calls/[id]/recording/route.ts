@@ -1,3 +1,4 @@
+import { recordingReference } from "@/lib/recording-reference";
 import { cookies } from "next/headers";
 import { db } from "@/lib/database";
 import { ADMIN_SESSION_COOKIE, readSession } from "@/lib/session";
@@ -11,7 +12,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/i.test(id)) return Response.json({ message: "Invalid call ID." }, { status: 400 });
-  const result = await (await db()).query(`SELECT c.telephony_provider,c.call_type,c.recording_id,c.recording_url,t.secret_ciphertext
+  const result = await (await db()).query(`SELECT c.recording_serial,c.telephony_provider,c.call_type,c.recording_id,c.recording_url,t.secret_ciphertext
     FROM agent_calls c
     LEFT JOIN agent_credentials ac ON ac.agent_id=c.agent_id AND ac.provider='TELNYX'
     LEFT JOIN ai_credentials t ON t.id=ac.credential_id
@@ -41,7 +42,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const extension = contentType.includes("webm") ? "webm" : contentType.includes("ogg") ? "ogg" : contentType.includes("wav") ? "wav" : "mp3";
   const headers = new Headers({
     "Content-Type": contentType,
-    "Content-Disposition": `${new URL(request.url).searchParams.get("inline") === "1" ? "inline" : "attachment"}; filename="call-${id.slice(0, 8)}.${extension}"`,
+    "Content-Disposition": `${new URL(request.url).searchParams.get("inline") === "1" ? "inline" : "attachment"}; filename="recording-${recordingReference({id,recording_serial:call.recording_serial})}.${extension}"`,
+    "X-Recording-Serial": recordingReference({id,recording_serial:call.recording_serial}),
     "Cache-Control": "private, no-store",
     "Accept-Ranges": audio.headers.get("accept-ranges") || "bytes",
   });

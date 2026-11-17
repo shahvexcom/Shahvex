@@ -1,3 +1,4 @@
+import { directPrefixReadSql, directAdmissionSql, turnAdmissionSql, turnCompletionSql } from "./vicidial-turn-admission";
 import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -32,17 +33,29 @@ async function startVoice(callId:string,agentId:string,config:TestConfig) {
   return newTest(owner,agentId,voiceConfig);
 }
 
+// Only turn-signing material is cached. The atomic SQL rechecks the current
+// encrypted secret before claiming an event or touching the customer call.
+const turnConnections=new Map<string,{until:number;value:any}>();
 export async function vicidialCallback(request:Request) {
   const connectionId=request.headers.get("x-shahvex-connection")||"";
   if(!z.string().uuid().safeParse(connectionId).success)return json({error:"Unauthorized"},401);
-  const pool=await db(), c=(await pool.query("SELECT * FROM voip_connections WHERE id=$1",[connectionId])).rows[0];
-  if(!c?.bridge_secret_ciphertext)return json({error:"Unauthorized"},401);
+  const pool=await db();
   const parts:Uint8Array[]=[];let size=0;
   if(request.body)for await(const chunk of request.body as unknown as AsyncIterable<Uint8Array>){size+=chunk.length;if(size>3000000)return json({error:"Payload too large"},413);parts.push(chunk);}
   const bytes=Buffer.concat(parts),path=new URL(request.url).pathname;
-  if(!verifyBridgeSignature(decryptCredential(c.bridge_secret_ciphertext),request.headers.get("x-shahvex-timestamp")||"",request.headers.get("x-shahvex-signature")||"",request.method,path,bytes))return json({error:"Unauthorized"},401);
   const parsed=message.safeParse(JSON.parse(bytes.toString()));if(!parsed.success)return json({error:"Invalid event"},400);
-  const v=parsed.data,live=vicidialLiveConfig.parse(c.live_config);
+  const v=parsed.data;
+  const cached=v.action==='turn'&&process.env.SHAHVEX_TURN_CONNECTION_CACHE==='1'?turnConnections.get(connectionId):undefined;
+  const prefixRead=process.env.SHAHVEX_DIRECT_ATOMIC_ADMISSION==='1'&&v.action==='resolve-prefix'&&Boolean(v.audioUuid);
+  let c=cached&&cached.until>Date.now()?cached.value:(await pool.query(prefixRead?directPrefixReadSql:"SELECT * FROM voip_connections WHERE id=$1",prefixRead?[connectionId,v.audioUuid!.slice(0,4)]:[connectionId])).rows[0];
+  const signed=()=>!!c?.bridge_secret_ciphertext&&verifyBridgeSignature(decryptCredential(c.bridge_secret_ciphertext),request.headers.get("x-shahvex-timestamp")||"",request.headers.get("x-shahvex-signature")||"",request.method,path,bytes);
+  if(!signed()&&cached){turnConnections.delete(connectionId);c=(await pool.query("SELECT * FROM voip_connections WHERE id=$1",[connectionId])).rows[0];}
+  if(!signed())return json({error:"Unauthorized"},401);
+  if(process.env.SHAHVEX_TURN_CONNECTION_CACHE==='1'){
+    if(turnConnections.size>=256)turnConnections.delete(turnConnections.keys().next().value!);
+    turnConnections.set(connectionId,{until:Date.now()+30000,value:c});
+  }
+  const live=vicidialLiveConfig.parse(c.live_config);
   if((!live.enabled||!c.enabled)&&v.action==='connected')return json({error:'Live calling disabled'},409);
   const key=decryptCredential(c.secret_ciphertext);
   // Speech probes are authenticated reads: do not serialize them through the
@@ -71,7 +84,7 @@ export async function vicidialCallback(request:Request) {
     if(!c.enabled||!live.enabled||!c.media_verified_at||!v.audioUuid)return json({error:'Direct campaign audio is not enabled'},409);
     const line=live.directAudioLines.find(line=>line.prefix===v.audioUuid!.slice(0,4).toLowerCase());
     if(!line||!live.remoteUsers.includes(line.remoteUser))return json({error:'Unknown audio line'},409);
-    const assigned=(await pool.query(`SELECT d.external_campaign_id FROM campaign_agent_assignments x
+    const assigned=prefixRead?(c.resolved_campaign_id?{external_campaign_id:c.resolved_campaign_id}:undefined):(await pool.query(`SELECT d.external_campaign_id FROM campaign_agent_assignments x
       JOIN campaign_definitions d ON d.id=x.campaign_id
       JOIN voip_agent_assignments va ON va.agent_id=x.agent_id AND va.connection_id=d.connection_id AND va.owner_id=d.owner_id AND va.campaign_id=d.external_campaign_id
       JOIN vicidial_pool_agents q ON q.agent_id=x.agent_id AND q.remote_user=$3 AND q.ready=TRUE
@@ -98,6 +111,43 @@ export async function vicidialCallback(request:Request) {
     return json(await reconcileVicidialQueues(c.id));
   }
   const eventHash=createHash('sha256').update(bytes).digest('hex');
+
+  if(process.env.SHAHVEX_DIRECT_ATOMIC_ADMISSION==='1'&&v.action==='connected'&&/^direct-[a-f0-9]{32}$/.test(v.externalCallId)){
+    const h=v.externalCallId.slice(7),uuid=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20)}`;
+    const line=live.directAudioLines.find(line=>line.prefix===uuid.slice(0,4)&&line.remoteUser===v.agentUser);
+    if(line&&v.audioUuid===uuid&&live.directAudioMode){
+      const result=(await pool.query(directAdmissionSql,[c.id,v.eventId,v.externalCallId,eventHash,uuid,line.agentId,line.remoteUser,c.owner_id,randomUUID(),line.prefix,c.bridge_secret_ciphertext])).rows[0];
+      if(result?.supported){
+        if(!result.connection_current)return json({error:'Direct audio connection or route changed'},409);
+        if(!result.claimed){const prior=result.prior;if(!prior||prior.payload_hash!==eventHash)return json({error:'Event ID reused with a different payload'},409);if(prior.processing_state==='COMPLETED')return json(prior.response_payload||{},prior.response_status||200);return json({error:'Event still processing'},409);}
+        const finish=async(payload:object,status=200)=>{await pool.query("UPDATE vicidial_events SET processing_state=$1,processed_at=NOW(),lease_expires_at=NULL,response_payload=$4::jsonb,response_status=$5 WHERE connection_id=$2 AND event_id=$3",[status<300?'COMPLETED':'FAILED',c.id,v.eventId,JSON.stringify(payload),status]);return json(payload,status);};
+        const call=result.admitted_call||result.existing_call;
+        if(!call)return finish({error:'Assigned direct audio agent is busy or unavailable'},409);
+        if(!result.admitted_call)return call.voice_session_id?finish({callId:call.id,first:call.script_snapshot.first,status:call.status,mediaReady:call.status==='ANSWERED'}):finish({error:'Direct voice startup incomplete; cleanup required',callId:call.id,recover:true},503);
+        try{const config=testConfig.parse(call.script_snapshot),payload={callId:call.id,first:config.first,mediaReady:true,maxCallDurationSeconds:call.max_call_duration_seconds||0},session=await startVoice(call.id,call.agent_id,config);if(!await mediaReady(call.id,session,{connectionId:c.id,eventId:v.eventId,payloadHash:eventHash,payload}))throw Error('Media reservation unavailable');return json(payload);}
+        catch{await setRuntimeState(call.id,'ERROR','Direct voice startup failed; cleanup required');return finish({error:'Direct voice startup failed',callId:call.id,recover:true},503);}
+      }
+    }
+  }
+  let admittedCall:any;
+  if(v.action==='turn'){
+    const directHex=/^direct-([a-f0-9]{32})$/.exec(v.externalCallId)?.[1];
+    const directUuid=directHex?`${directHex.slice(0,8)}-${directHex.slice(8,12)}-${directHex.slice(12,16)}-${directHex.slice(16,20)}-${directHex.slice(20)}`:null;
+    if(v.externalCallId.startsWith('direct-')&&!directUuid)return json({error:'Invalid direct audio identifier'},400);
+    const admission=(await pool.query(turnAdmissionSql,[c.id,v.eventId,v.callId||null,v.externalCallId,eventHash,directUuid,c.bridge_secret_ciphertext])).rows[0];
+    if(admission?.connection_current===false){turnConnections.delete(connectionId);return json({error:'Connection credentials changed'},401);}
+    if(!admission?.claimed){
+      const prior=admission?.prior;
+      if(!prior||prior.payload_hash!==eventHash)return json({error:'Event ID reused with a different payload'},409);
+      if(prior.processing_state==='COMPLETED')return json(prior.response_payload||{duplicate:true},prior.response_status||200);
+      return json({error:'Event still processing'},409);
+    }
+    admittedCall=admission.admitted_call;
+    if(!admittedCall){
+      await pool.query("UPDATE vicidial_events SET processing_state='FAILED',lease_expires_at=NULL WHERE connection_id=$1 AND event_id=$2",[c.id,v.eventId]);
+      return json({error:admission.current_call?'Call is busy or no longer handled by AI':'Call not found',retryable:!!admission.current_call},409);
+    }
+  }else{
   const accepted=await pool.query("INSERT INTO vicidial_events(connection_id,event_id,call_id,kind,payload_hash) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING RETURNING event_id",[c.id,v.eventId,v.callId||null,v.action,eventHash]);
   if(!accepted.rowCount){
     const prior=(await pool.query('SELECT payload_hash,processing_state,lease_expires_at,response_payload,response_status FROM vicidial_events WHERE connection_id=$1 AND event_id=$2',[c.id,v.eventId])).rows[0];
@@ -107,6 +157,7 @@ export async function vicidialCallback(request:Request) {
   }
   const claimed=await pool.query("UPDATE vicidial_events SET processing_state='RUNNING',lease_expires_at=NOW()+INTERVAL '180 seconds' WHERE connection_id=$1 AND event_id=$2 AND (processing_state<>'RUNNING' OR lease_expires_at<NOW()) RETURNING event_id",[c.id,v.eventId]);
   if(!claimed.rowCount)return json({error:'Event is processing'},409);
+  }
   try{
     const result=await processEvent();
     if(v.action!=='turn'||!result.ok){
@@ -119,9 +170,9 @@ export async function vicidialCallback(request:Request) {
   const directHex=/^direct-([a-f0-9]{32})$/.exec(v.externalCallId)?.[1];
   const directUuid=directHex?`${directHex.slice(0,8)}-${directHex.slice(8,12)}-${directHex.slice(12,16)}-${directHex.slice(16,20)}-${directHex.slice(20)}`:null;
   if(v.externalCallId.startsWith('direct-')&&!directUuid)return json({error:'Invalid direct audio identifier'},400);
-  let call=directUuid?(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND direct_audio_uuid=$2 AND telephony_provider='AUDIOSOCKET'",[c.id,directUuid])).rows[0]:(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",[c.id,v.externalCallId])).rows[0];
+  let call=admittedCall||(directUuid?(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND direct_audio_uuid=$2 AND telephony_provider='AUDIOSOCKET'",[c.id,directUuid])).rows[0]:(await pool.query("SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",[c.id,v.externalCallId])).rows[0]);
   if(v.action==='connected'&&directUuid){
-    if(call)return call.voice_session_id?json({callId:call.id,first:call.script_snapshot.first,status:call.status}):json({error:'Direct voice session unavailable; cleanup required',callId:call.id,recover:true},503);
+    if(call)return call.voice_session_id?json({callId:call.id,first:call.script_snapshot.first,status:call.status,mediaReady:call.status==='ANSWERED'}):json({error:'Direct voice session unavailable; cleanup required',callId:call.id,recover:true},503);
     const line=live.directAudioLines.find(line=>line.prefix===directUuid.slice(0,4)&&line.remoteUser===v.agentUser);
     if(!live.directAudioMode||!c.media_verified_at||!line||v.audioUuid!==directUuid)return json({error:'Direct AudioSocket mode or line is not enabled'},409);
     const tx=await pool.connect();let released=false;
@@ -148,9 +199,9 @@ export async function vicidialCallback(request:Request) {
         VALUES($1,$2,'INITIATED','AUDIOSOCKET',$3,$4,$5,$6,$7,$8::jsonb,'LISTENING','DIRECT',$9,'NOT_APPLICABLE')`,[id,a.id,c.id,directUuid,line.prefix,a.campaign_id,a.external_campaign_id,JSON.stringify(config),a.max_call_duration_seconds||0]);
       if(!await reserveAgent(tx,a.id,id,a.campaign_id))throw Error('Direct audio agent reservation changed');
       await tx.query('COMMIT');tx.release();released=true;
-      try{const session=await startVoice(id,a.id,config);await pool.query('UPDATE agent_calls SET voice_session_id=$1 WHERE id=$2',[session,id]);}
+      try{const session=await startVoice(id,a.id,config);await pool.query('UPDATE agent_calls SET voice_session_id=$1 WHERE id=$2',[session,id]);if(!await mediaReady(id))throw Error('Direct audio reservation could not activate');}
       catch{await setRuntimeState(id,'ERROR','Direct voice startup failed; audio cleanup required');return json({error:'Direct voice startup failed',callId:id,recover:true},503);}
-      return json({callId:id,first:config.first,maxCallDurationSeconds:a.max_call_duration_seconds||0});
+      return json({callId:id,first:config.first,mediaReady:true,maxCallDurationSeconds:a.max_call_duration_seconds||0});
     }catch(error){if(!released)await tx.query('ROLLBACK');throw error;}finally{if(!released)tx.release();}
   }
   if(v.action==='connected') {
@@ -266,12 +317,12 @@ export async function vicidialCallback(request:Request) {
   }
   if(v.action==='listen'||v.action==='turn'||v.action==='interrupt') {
     if(call.status!=='ANSWERED'||['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status))return json({error:"Call is no longer handled by AI",handoffPending:['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(call.transfer_status)},409);
-    if(!sessionId)return json({error:"Voice session is not ready"},409);
+    if(!sessionId){if(admittedCall)await pool.query("UPDATE agent_calls SET conversation_busy=FALSE WHERE id=$1",[call.id]);return json({error:"Voice session is not ready"},409);}
     const body=v.audio?Buffer.from(v.audio,'base64'):Buffer.from(JSON.stringify({text:v.text||"",opening:v.opening===true,...(v.silenceStep?{silenceStep:v.silenceStep}:{})}));
     const action=v.action==='interrupt'?'interrupt':v.action==='listen'?'listen':'turn';
     const init={method:"POST",signal:request.signal,headers:{"content-type":v.audio?'audio/wav':'application/json',"x-shahvex-session":sessionId,"x-shahvex-turn":v.eventId},body};
     let response:Response;
-    if(action==='turn'){
+    if(action==='turn'&&!admittedCall){
       const lease=await pool.query("UPDATE agent_calls SET conversation_busy=TRUE,transfer_consent=FALSE,handoff_ready=FALSE,qualification='{}'::jsonb,updated_at=NOW() WHERE id=$1 AND conversation_busy=FALSE RETURNING id",[call.id]);
       if(!lease.rowCount)return json({error:"Another voice turn is still finishing",retryable:true},409);
     }
@@ -302,8 +353,7 @@ export async function vicidialCallback(request:Request) {
     }catch{ /* Disconnects preserve only the received transcript; no restart. */ }finally{
       await progressWrite;
       if(user)history.push({role:'user',content:user});if(answer)history.push({role:'assistant',content:answer});
-      await pool.query("UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_busy=FALSE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN 'COMPLETED' ELSE $3 END,updated_at=NOW() WHERE id=$4",[JSON.stringify(history),history.map(t=>`${t.role==='user'?'CLIENT':'AGENT'}: ${t.content}`).join('\n'),done?'LISTENING':'INTERRUPTED',call.id]);
-      await pool.query("UPDATE vicidial_events SET processing_state='COMPLETED',processed_at=NOW(),lease_expires_at=NULL,last_error=$1 WHERE connection_id=$2 AND event_id=$3",[done?'':'Turn interrupted; do not replay spoken audio',c.id,v.eventId]);
+      await pool.query(turnCompletionSql,[JSON.stringify(history),history.map(t=>`${t.role==='user'?'CLIENT':'AGENT'}: ${t.content}`).join('\n'),done?'LISTENING':'INTERRUPTED',call.id,done?'':'Turn interrupted; do not replay spoken audio',c.id,v.eventId]);
       try{controller.close();}catch{/* Consumer disconnected. */}
     }}});
     return new Response(stream,{headers:{'content-type':'application/x-ndjson','cache-control':'no-store','x-accel-buffering':'no'}});

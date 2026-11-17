@@ -1,0 +1,11 @@
+var R=require("../../../../../../chunks/[turbopack]_runtime.js")("server/app/api/admin/calls/[id]/recording/route.js")
+R.c("server/chunks/lib_vicidial-recording_ts_1wb51_z._.js")
+R.c("server/chunks/_1td2jp9._.js")
+R.c("server/chunks/[root-of-the-server]__0ip_98r._.js")
+R.c("server/chunks/[root-of-the-server]__15bjnu5._.js")
+R.c("server/chunks/node_modules_next_dist_11w3z5e._.js")
+R.c("server/chunks/lib_0_c-9zv._.js")
+R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")
+R.c("server/chunks/_next-internal_server_app_api_admin_calls_[id]_recording_route_actions_0yicvva.js")
+R.m(95289)
+module.exports=R.m(95289).exports

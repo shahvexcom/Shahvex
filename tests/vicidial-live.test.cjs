@@ -1,7 +1,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict'),fs=require('node:fs'),ts=require('typescript');
 const path=require('node:path'),os=require('node:os'),net=require('node:net'),crypto=require('node:crypto');
-function load(file,deps={}){const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./agent-script-details'?load('lib/agent-script-details.ts'):n==='./agent-runtime'?load('lib/agent-runtime.ts',deps):n==='./campaign-config'?load('lib/campaign-config.ts'):n==='./vicidial-comment-merge'?load('lib/vicidial-comment-merge.ts'):n==='./vicidial-bridge'?{requestBridge:async()=>({accepted:true})}:require(n),m,m.exports);return m.exports;}
+function load(file,deps={}){const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./recording-reference'?load('lib/recording-reference.ts'):n==='./vicidial-turn-admission'?load('lib/vicidial-turn-admission.ts'):n==='./agent-script-details'?load('lib/agent-script-details.ts'):n==='./agent-runtime'?load('lib/agent-runtime.ts',deps):n==='./campaign-config'?load('lib/campaign-config.ts'):n==='./vicidial-comment-merge'?load('lib/vicidial-comment-merge.ts'):n==='./vicidial-bridge'?{requestBridge:async()=>({accepted:true})}:require(n),m,m.exports);return m.exports;}
 const leads=load('lib/vicidial-leads.ts');
 const config=load('lib/vicidial-config.ts');
 const vici=load('lib/vicidial.ts',{'server-only':{}});
@@ -136,7 +136,7 @@ test('AudioSocket bridge authenticates control, sends real PCM through the share
     assert.equal(signing.verifyBridgeSignature(secret,init.headers['x-shahvex-timestamp'],init.headers['x-shahvex-signature'],'POST','/api/telephony/vicidial',init.body),true);
     const value=JSON.parse(init.body);events.push(value);
     if(value.action==='connected')return Response.json({callId:'11111111-1111-4111-8111-111111111111',first:'customer'});
-    if(value.action==='turn'){assert.ok(value.audio);const audio=Buffer.from(value.audio,'base64');assert.equal(audio.toString('ascii',0,4),'RIFF');assert.equal(audio.readUInt32LE(24),16000);return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n'+JSON.stringify({type:'done'})+'\n');}
+    if(value.action==='turn'){if(value.opening){assert.equal(value.audio,undefined);}else{assert.ok(value.audio);const audio=Buffer.from(value.audio,'base64');assert.equal(audio.toString('ascii',0,4),'RIFF');assert.equal(audio.readUInt32LE(24),16000);}return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n'+JSON.stringify({type:'done'})+'\n');}
     return Response.json({saved:true});
   }});
   await Promise.all([new Promise(r=>b.control.listen(0,'127.0.0.1',r)),new Promise(r=>b.audio.listen(0,'127.0.0.1',r))]);
@@ -150,15 +150,18 @@ test('AudioSocket bridge authenticates control, sends real PCM through the share
     const received=[];socket.on('data',data=>received.push({at:Date.now(),data}));
     socket.write(bridge.packet(1,Buffer.from(uuid.replaceAll('-',''),'hex')));
     const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(3000,i);
-    socket.write(Buffer.concat([...Array.from({length:12},()=>bridge.packet(0x10,voice)),...Array.from({length:38},()=>bridge.packet(0x10,Buffer.alloc(320)))]));
     const deadline=Date.now()+4000;while(received.length<2&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
     assert.ok(events.some(e=>e.action==='turn'));assert.equal(received.length,2);assert.ok(received[1].at-received[0].at>=10);
+    assert.equal(events.find(e=>e.action==='turn').opening,true, 'Customer-first calls introduce themselves without waiting for speech');
+    socket.write(Buffer.concat([...Array.from({length:12},()=>bridge.packet(0x10,voice)),...Array.from({length:38},()=>bridge.packet(0x10,Buffer.alloc(320)))]));
+    const audioDeadline=Date.now()+2000;while(!events.some(e=>e.action==='turn'&&e.audio)&&Date.now()<audioDeadline)await new Promise(r=>setTimeout(r,10));
+    assert.ok(events.some(e=>e.action==='turn'&&e.audio));
     const prepare=await post('/command',{callId:'11111111-1111-4111-8111-111111111111',action:'handoff-prepare'});assert.equal(prepare.status,200);
     const aiFile=path.join(folder,'recordings',uuid+'.wav'),before=fs.readFileSync(aiFile);
     socket.write(bridge.packet(0x10,Buffer.alloc(320,44)));await new Promise(r=>setTimeout(r,40));assert.deepEqual(fs.readFileSync(aiFile),before);
     const disconnected=new Promise(r=>socket.once('close',r));
     const handoff=await post('/handoff-event',{action:'human-answered',externalCallId:'Y0316001655000402028',humanUser:'human-1'});assert.equal(handoff.status,200);await disconnected;
-    await new Promise(r=>setTimeout(r,30));await b.flushEvents();assert.ok(events.some(e=>e.action==='ended'));assert.equal(events.filter(e=>e.action==='turn').length,1,'Human audio must never start another AI turn');
+    await new Promise(r=>setTimeout(r,30));await b.flushEvents();assert.ok(events.some(e=>e.action==='ended'));assert.equal(events.filter(e=>e.action==='turn').length,2,'Only opening and customer speech may start AI turns; human audio must not');
     const recording=events.find(e=>e.action==='recording');assert.ok(recording.aiRecordingId);const audio=fs.readFileSync(path.join(folder,'recordings',recording.aiRecordingId+'.wav'));assert.equal(audio.readUInt16LE(22),2);assert.equal(audio.readUInt32LE(24),8000);assert.ok(audio.length>44);
   }finally{socket?.destroy();b.close();assert.equal(path.dirname(path.resolve(folder)),path.resolve(os.tmpdir()));assert.ok(path.basename(folder).startsWith("shahvex-vici-"));fs.rmSync(folder,{recursive:true,force:true});}
 });
@@ -203,6 +206,13 @@ test('human transfer checks readiness and never repeats an uncertain provider co
   a.script_snapshot={script:'Ask age.'};a.conversation_history=[{role:'user',content:'I am 65.'}];
   a.qualification={steps:[{id:'age',requirement:'Ask age.',kind:'customer_answer',conditional:false}],stepChecks:[{id:'age',status:'complete',customerEvidence:['I am 65.'],agentEvidence:[]}],scriptHash:results.qualificationHash(a.script_snapshot),historyHash:results.conversationHash(a.conversation_history)};
   a.handoff_ready=false;await assert.rejects(results.transferVicidialCall('call'),/not eligible/);assert.equal(commands,0);a.handoff_ready=true;
+  // A stale saved boolean is insufficient; re-evaluate the actual words before any native action.
+  await assert.rejects(results.transferVicidialCall('call'),/not eligible/);assert.equal(commands,0);
+  a.conversation_history.push({role:'assistant',content:'Let me connect you with a licensed specialist.'},{role:'user',content:'Why do you want to connect me with the licensed agent?'});
+  a.qualification.historyHash=results.conversationHash(a.conversation_history);
+  await assert.rejects(results.transferVicidialCall('call'),/not eligible/);assert.equal(commands,0);
+  a.conversation_history.push({role:'assistant',content:'Would you like me to connect you?'},{role:'user',content:'Yes.'});
+  a.qualification.historyHash=results.conversationHash(a.conversation_history);
   await assert.rejects(results.transferVicidialCall('call'),/No human agent/);assert.equal(commands,0);
   waiting=1;uncertain=true;await assert.rejects(results.transferVicidialCall('call'),/uncertain/);assert.equal(commands,1);assert.equal(a.transfer_status,'UNCERTAIN');
   await assert.rejects(results.transferVicidialCall('call'),/already submitted/);assert.equal(commands,1);
@@ -214,15 +224,15 @@ test('website playback exposes only the private AI recording, never the native h
   const server=http.createServer((req,res)=>{requests++;assert.equal(req.url,`/recordings/${recordingId}.wav`);assert.equal(signing.verifyBridgeSignature(secret,req.headers['x-shahvex-timestamp'],req.headers['x-shahvex-signature'],'GET',req.url,Buffer.alloc(0)),true);assert.equal(req.headers.range,'bytes=0-3');res.writeHead(206,{'content-type':'audio/wav','content-range':'bytes 0-3/100','accept-ranges':'bytes'});res.end('RIFF');});
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   const base=`http://127.0.0.1:${server.address().port}/`,saved=process.env.SHAHVEX_VOIP_ALLOWED_HOSTS;process.env.SHAHVEX_VOIP_ALLOWED_HOSTS='127.0.0.1';
-  const c={ai_recording_id:null,recording_url:'',live_config:{...liveConfig,bridgeUrl:base,recordingBaseUrl:base},server_url:'https://dialer.example.test',username:'api',secret_ciphertext:'key',bridge_secret_ciphertext:secret,vicidial_lead_id:'234',vicidial_agent_user:'9001',vicidial_lead_id:'234'};
-  const query=async(sql,p)=>{if(sql.startsWith('SELECT a.*')||sql.startsWith('SELECT a.ai_recording_id'))return {rows:[c]};if(sql.startsWith('UPDATE agent_calls')){stored=p;c.vicidial_recording_url=p[0];return {rows:[]};}throw Error('Unexpected recording SQL');};
+  const c={recording_serial:'42',ai_recording_id:null,recording_url:'',live_config:{...liveConfig,bridgeUrl:base,recordingBaseUrl:base},server_url:'https://dialer.example.test',username:'api',secret_ciphertext:'key',bridge_secret_ciphertext:secret,vicidial_lead_id:'234',vicidial_agent_user:'9001',vicidial_lead_id:'234'};
+  const query=async(sql,p)=>{if(sql.startsWith('SELECT a.*')||sql.startsWith('SELECT a.recording_serial,a.ai_recording_id'))return {rows:[c]};if(sql.startsWith('UPDATE agent_calls')){stored=p;c.vicidial_recording_url=p[0];return {rows:[]};}throw Error('Unexpected recording SQL');};
   const service=load('lib/vicidial-recording.ts',{'./database':{db:async()=>({query})},'./vicidial':{...vici,vicidialRequest:async()=>`start_time|user|recording_id|lead_id|duration|location\n2026-11-11 12:00:00|9001|42|234|60|${base}full-human-recording.wav`},'./credential-crypto':{decryptCredential:v=>v},'./vicidial-config':config,'./vicidial-bridge':signing});
   try{
     assert.equal(await service.syncVicidialRecording('call'),false);assert.equal(stored[0],base+'full-human-recording.wav');assert.equal(c.recording_url,'');
     assert.equal((await service.vicidialRecordingResponse('call',new Request('https://website.example.test/recording'))).status,404);assert.equal(requests,0);
     c.ai_recording_id=recordingId;
     const response=await service.vicidialRecordingResponse('11111111-1111-4111-8111-111111111111',new Request('https://website.example.test/recording?inline=1',{headers:{range:'bytes=0-3'}}));
-    assert.equal(response.status,206);assert.equal(await response.text(),'RIFF');assert.equal(requests,1);assert.match(response.headers.get('content-disposition'),/^inline/);
+    assert.equal(response.status,206);assert.equal(await response.text(),'RIFF');assert.equal(requests,1);assert.match(response.headers.get('content-disposition'),/^inline/);assert.match(response.headers.get('content-disposition'),/recording-REC-000042\.wav/);assert.equal(response.headers.get('x-recording-serial'),'REC-000042');
   }finally{await new Promise(r=>server.close(r));if(saved===undefined)delete process.env.SHAHVEX_VOIP_ALLOWED_HOSTS;else process.env.SHAHVEX_VOIP_ALLOWED_HOSTS=saved;}
 });
 

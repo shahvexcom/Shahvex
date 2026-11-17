@@ -12,7 +12,7 @@ export async function vicidialCallCommand(id:string,action:string,agentId?:strin
     WHERE a.id=$1 AND a.telephony_provider IN ('VICIDIAL','AUDIOSOCKET') AND ($2::text IS NULL OR a.agent_id=$2) AND (NOT $3::boolean OR NOT EXISTS(SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=a.agent_id))`,[id,agentId||null,controllerOnly])).rows[0];
   if(!a)return null;
   try {
-    if(a.telephony_provider==='AUDIOSOCKET'&&!a.vicidial_call_id&&['sync-comments','transfer','record-start','record-stop'].includes(action))throw Error('This direct audio call is not linked to a native VICIdial call; native sync and transfer are unavailable');
+    if(a.telephony_provider==='AUDIOSOCKET'&&!a.vicidial_call_id&&['sync-comments','transfer'].includes(action))throw Error('This direct audio call is not linked to a native VICIdial call; native sync and transfer are unavailable');
     if(action==='sync-comments'){await syncVicidialComments(id);return Response.json({message:"VICIdial comments synchronized."});}
     if(action==='transfer'){await syncVicidialComments(id);await transferVicidialCall(id);return Response.json({message:"Human transfer submitted; waiting for dialer confirmation."});}
     if(!['ANSWERED','RINGING','INITIATED'].includes(a.status))throw Error("This call has ended");
@@ -20,6 +20,7 @@ export async function vicidialCallCommand(id:string,action:string,agentId?:strin
       const live=vicidialLiveConfig.parse(a.live_config);
       const result=await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),'/command',{callId:id,action:'close-audio'});
       if(result.accepted!==true)throw Error('Audio bridge did not confirm call closure');
+      await pool.query("UPDATE agent_calls SET ending_requested=TRUE,conversation_state='ENDING',updated_at=NOW() WHERE id=$1",[id]);
       return Response.json({message:'Closing direct audio call.'});
     }
     if(action==='hangup') {
@@ -27,7 +28,14 @@ export async function vicidialCallCommand(id:string,action:string,agentId?:strin
       await pool.query("UPDATE agent_calls SET ending_requested=TRUE,conversation_state='ENDING',updated_at=NOW() WHERE id=$1",[id]);
       return Response.json({message:"Ending call; waiting for VICIdial confirmation."});
     }
-    if(action==='record-start'||action==='record-stop')throw Error("VICIdial campaign recording is automatic. Manage it on the dialer; this control cannot stop the dialer's recording.");
+    if(action==='record-start'||action==='record-stop'){
+      if(a.ai_leg_released||a.transfer_status==='ANSWERED')throw Error('AI recording has ended');
+      const live=vicidialLiveConfig.parse(a.live_config);
+      const result=await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),'/command',{callId:id,action});
+      if(result.accepted!==true||typeof result.recordingActive!=='boolean')throw Error('Recording control was not confirmed');
+      await pool.query(`UPDATE agent_calls SET recording_active=$1,ai_recording_id=COALESCE($2,ai_recording_id),recording_size_bytes=COALESCE($3,recording_size_bytes),updated_at=NOW() WHERE id=$4`,[result.recordingActive,result.aiRecordingId||null,result.recordingSize||null,id]);
+      return Response.json({message:result.recordingActive?'AI recording started.':'AI recording stopped. The call continues.',recording_active:result.recordingActive,ai_recording_id:result.aiRecordingId||a.ai_recording_id});
+    }
     if(action==='hold'||action==='resume'){
       const live=vicidialLiveConfig.parse(a.live_config);
       const result=await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),'/command',{callId:id,action});

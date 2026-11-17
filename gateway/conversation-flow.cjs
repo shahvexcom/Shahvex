@@ -1,4 +1,7 @@
 'use strict';
+const {rememberQuestions}=require('./question-memory.cjs');
+const isPresenceCheck=text=>/^(?:(?:hello|hi|hey)[?!., ]*)+(?:(?:are you (?:still )?there|can you hear me)[?!., ]*)?$|^(?:are you (?:still )?there|(?:is )?(?:anyone|anybody|someone|somebody) there|can you hear me)[?!., ]*$/i.test(String(text||'').trim());
+const asksCallingPurpose=text=>/\bwhy\b[^.!?]{0,70}\bcall(?:ing|ed)?\b|\bwhat\b[^.!?]{0,50}\bcall\b[^.!?]{0,25}\babout\b/i.test(String(text||''));
 const acknowledgment=text=>/^(?:yes|yeah|yep|sure|okay|ok|alright|all right|go ahead|please do)[.! ,?]*$/i.test(String(text).trim());
 function interruptionKind(text){
  const value=String(text||'').trim().toLowerCase();
@@ -30,12 +33,31 @@ function audioCheckReply(text,history){
  const spoken=history.filter(t=>t.role==='assistant');
  if(!spoken.length)return;
  const check="Can you hear me clearly?";
+ const value=String(text||'').trim().replace(/[’]/g,"'");
+ const confirmed=/^(?:(?:yes|yeah|yep|sure|okay|ok)(?:[,!. ]+(?:I|you) can(?: hear(?: you)?)?)?|I can hear(?: you)?|(?:it(?:'s| is)|your voice is) clear now)[.! ,]*$/i.test(value);
+
+ const complaint=/\b(?:your|the) (?:voice|audio|sound|line)(?: is| keeps| sounds| seems)? (?:breaking(?: up)?|cutting(?: out)?|crackling|choppy|distorted|unclear|not clear|too (?:low|quiet))\b|\b(?:I )?(?:can(?:not|'t)|could(?: not|n't)) hear you\b|\byou(?:'re| are) (?:breaking up|cutting out)\b/i.test(value);
+ const recovery="The audio may be cutting out. Is my voice clear now?";
+ const repeatedRecovery="It sounds like the audio is still unclear. Would you like to pause the conversation?";
+ if(complaint)return spoken.some(t=>t.content===recovery||t.content===repeatedRecovery)?repeatedRecovery:recovery;
+ if([recovery,repeatedRecovery].includes(spoken.at(-1).content)){
+  if(confirmed){
+   if(spoken.at(-1).content===repeatedRecovery)return "Of course, take your time.";
+   // Resume only a pending question, never replay an introduction or sales pitch.
+   const question=rememberQuestions(history).pendingQuestion;
+   return question?`Thank you. ${question}`:"Thank you for letting me know. We can continue when you're ready.";
+  }
+  if(/^(?:no|nope|not really|still (?:breaking|unclear|not clear))[.! ,]*$/i.test(value))return repeatedRecovery;
+ }
  if(spoken.length===1&&/^(?:hello|hi)\b.*\bthis is\b/i.test(spoken[0].content)&&/How are you today\?$/.test(spoken[0].content)&&/^(?:hello|hi|hey)[?!., ]*$/i.test(String(text).trim()))return;
- if(/^(?:(?:hello|hi|hey)[?!., ]*)+(?:(?:are you (?:still )?there|can you hear me)[?!., ]*)?$|^(?:are you (?:still )?there|can you hear me)[?!., ]*$/i.test(String(text).trim()))return check;
+ if(isPresenceCheck(text)){
+  const replies=["Yes, I'm here and listening.","I'm with you. Please go ahead.","Go ahead, I'm listening."];
+  return replies.find(reply=>!spoken.some(turn=>turn.content===reply)) || '';
+ }
  if(spoken.at(-1).content!==check)return;
- if(/^(?:yes|yeah|yep|sure|okay|ok|I can hear you|yes I can hear you)[.! ,]*$/i.test(String(text).trim())){
-  const previous=spoken.findLast(t=>t.content!==check);
-  return previous?.content.replace(/\s*\[interrupted[^\]]*\]/gi,'').trim()||"Thank you. Is now a good time for a brief call?";
+ if(confirmed){
+  const question=rememberQuestions(history).pendingQuestion;
+  return question&&!/\bhow are you(?: today| doing)?\?/i.test(question)?question:"Yes, I'm here.";
  }
  if(/^(?:no|nope|not really|I can(?:not|'t) hear you)[.! ,]*$/i.test(String(text).trim()))return "I'm sorry the audio isn't clear. Can you hear me now?";
 }
@@ -43,7 +65,7 @@ function audioCheckReply(text,history){
 function scriptPurpose(config){
  const script=String(config.script||'');
  if(/\b(?:verbatim|exact (?:opening|wording)|mandatory disclosure|read exactly)\b/i.test(script+' '+(config.instructions||'')))return;
- const explicit=script.match(/\bI(?:'m| am) calling\b[^.!?\n]{4,240}[.!]/i)?.[0];
+ const explicit=script.match(/\b(?:I(?:'m| am)|M) calling\b[^.!?\n]{4,240}[.!]/i)?.[0]?.replace(/^M calling/i,"I'm calling");
  if(explicit)return explicit;
  const goal=String(config.goal||'').trim();
  if(/^(?:review|discuss|check|confirm|schedule)\b/i.test(goal)&&goal.length<180&&!/[\n.!?]/.test(goal.replace(/[.!]+$/,'')))return `I'm calling to ${goal[0].toLowerCase()+goal.slice(1).replace(/[.!]+$/,'')}.`;
@@ -80,4 +102,4 @@ function acknowledgmentReply(config,text,history,memory){
  if(missing)return `Before we finish, ${missing[0].toLowerCase()+missing.slice(1)}`;
 }
 const asksToWait=text=>! /\b(?:why|who|where|what|how|are you|do you)\b/i.test(String(text||''))&&/^(?:(?:please|just|okay|ok|um|uh|yeah|yes|yep)[, ]+)*(?:(?:wait|hold on|hang on)(?:\b[^?]*)|(?:give me|just|one|a) (?:a |one )?(?:sec(?:ond)?|moment|minute)\b[^?]*)[.! ]*$/i.test(String(text||'').trim());
-module.exports={scriptPurpose,audioCheckReply,openingCourtesyReply,asksToWait,interruptionKind,acknowledgmentReply,mainQuestions,key};
+module.exports={isPresenceCheck,asksCallingPurpose,scriptPurpose,audioCheckReply,openingCourtesyReply,asksToWait,interruptionKind,acknowledgmentReply,mainQuestions,key};

@@ -1,0 +1,13 @@
+var R=require("../../../../../chunks/[turbopack]_runtime.js")("server/app/api/bpo/live-monitor/local/route.js")
+R.c("server/chunks/lib_vicidial-live_ts_0za0of4._.js")
+R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")
+R.c("server/chunks/[root-of-the-server]__1ltopdd._.js")
+R.c("server/chunks/_0qc5cnu._.js")
+R.c("server/chunks/_1td2jp9._.js")
+R.c("server/chunks/node_modules_zod_v4_classic_external_1-pw2v2.js")
+R.c("server/chunks/[root-of-the-server]__15bjnu5._.js")
+R.c("server/chunks/node_modules_next_dist_11w3z5e._.js")
+R.c("server/chunks/lib_20-rzby._.js")
+R.c("server/chunks/_next-internal_server_app_api_bpo_live-monitor_local_route_actions_1jrrzgy.js")
+R.m(96741)
+module.exports=R.m(96741).exports

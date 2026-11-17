@@ -31,6 +31,20 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
   const { handleTestSession } = load('agent-test-speculative');
   const json = (status, body) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
   let capacityChanging=false;
+  const warmingOpenings = new Map();
+  function warmOpening(config) {
+    if (typeof ai.engine !== 'function') return;
+    const text = load('agent-context-answer').briefAgentOpening(config);
+    if (!text) return;
+    const key = JSON.stringify([config.voice, text]);
+    if (warmingOpenings.has(key)) return;
+    const work = load('agent-test-stream').streamAgentReply({
+      messages: [], fixedSpeech: text, voice: config.voice, openingAudio: true, cacheAudio: true,
+      signal: AbortSignal.timeout(15000), engine: ai.engine,
+      send: async () => {}, timing: async () => {}, onText: () => {},
+    }).catch(() => {}).finally(() => warmingOpenings.delete(key));
+    warmingOpenings.set(key, work);
+  }
   async function dispatch(request) {
     const got = Buffer.from(request.headers.get('x-shahvex-ai-key') || '');
     const expected = Buffer.from(secret);
@@ -110,6 +124,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       // No awaits between admission and allocation; single-process admission is atomic.
       const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
       if (others >= maxSessions) return json(429, { error: 'Another test session is active. End that session and try again.', code:'CAPACITY' });
+      warmOpening(config); // Prepare audio while media admission proceeds.
       return json(200, { id: ai.newTest(owner, input.agentId, config),...(input.deriveFromScript===true?{derivedFromScript:true}:{}) });
     }
     const id = request.headers.get('x-shahvex-session') || '';

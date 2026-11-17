@@ -1,5 +1,6 @@
 "use client";
 
+import { recordingReference } from "@/lib/recording-reference";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { FiArrowLeft, FiDownload, FiFileText, FiMic, FiPause, FiPhoneOff, FiPlay, FiSave, FiVolume2 } from "react-icons/fi";
@@ -8,7 +9,7 @@ type Turn = { role: "user" | "assistant"; content: string; at?: string };
 type Call = {
   telephony_provider?:string; collected_fields?:Record<string,{value:string}>; vicidial_sync_status?:string; transfer_status?:string; transfer_consent?:boolean;
   id: string; status: string; conversation_state?: string; agent_name: string; agent_avatar?: string; lead_name: string; lead_number: string;
-  recording_url?: string; recording_id?: string; recording_active?: boolean; on_hold?: boolean; duration_seconds?: number;
+  recording_serial?: string; recording_url?: string; recording_id?: string; recording_active?: boolean; on_hold?: boolean; duration_seconds?: number;
   summary: string; notes: string; start_note?: string; mid_note?: string; final_note?: string; outcome?: string;
   transcript?: string; conversation_history?: Turn[]; script_lead_headers?: string[]; script_text?: string; created_at: string; answered_at?: string; ended_at?: string;
 };
@@ -185,11 +186,11 @@ export default function CallDetailPage({ portal = "admin" }: { portal?: "admin" 
     const seconds = Math.max(0, Math.floor((new Date(turn.at).getTime() - new Date(call.answered_at).getTime()) / 1000));
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   };
-  const report = `CALL REPORT\nAgent: ${call.agent_name}\nClient: ${customer}\nNumber: ${call.lead_number}\nStatus: ${call.status}\nOutcome: ${call.outcome || "Not classified"}\nDuration: ${time}\n\nSUMMARY\n${call.summary || "Not available"}\n\nNOTES\n${notesDraft || "Not available"}\n\nTRANSCRIPT\n${call.transcript || "Not available"}`;
+  const report = `CALL REPORT\nRecording serial: ${recordingReference(call)}\nAgent: ${call.agent_name}\nClient: ${customer}\nNumber: ${call.lead_number}\nStatus: ${call.status}\nOutcome: ${call.outcome || "Not classified"}\nDuration: ${time}\n\nSUMMARY\n${call.summary || "Not available"}\n\nNOTES\n${notesDraft || "Not available"}\n\nTRANSCRIPT\n${call.transcript || "Not available"}`;
 
   return <main className="admin-page call-detail-page">
     <button className="admin-outline call-back" onClick={goBack}><FiArrowLeft /> Back</button>
-    <div className="call-detail-title"><div><p>{active ? "LIVE CALL CONTROL" : "COMPLETED CALL"}</p><h1>{call.agent_name} <span>→</span> {customer}</h1></div><span className="call-live-timer">{time}</span></div>
+    <div className="call-detail-title"><div><p>{active ? "LIVE CALL CONTROL" : "COMPLETED CALL"}</p><h1>{call.agent_name} <span>→</span> {customer}</h1><p>Recording serial: <strong>{recordingReference(call)}</strong></p></div><span className="call-live-timer">{time}</span></div>
     {call.telephony_provider==="VICIDIAL"&&<section className="admin-card"><h3>Collected lead details</h3>{Object.entries(call.collected_fields||{}).map(([name,field])=><p key={name}><strong>{name}:</strong> {field.value}</p>)}<p>VICIdial comments: {call.vicidial_sync_status||"PENDING"} ? Transfer: {call.transfer_status||"Not requested"}</p>{!active&&<button disabled={busy} onClick={()=>command("sync-comments")}>Retry comments sync</button>}</section>}
     <section className="call-detail-columns">
       <article className="admin-card detail-column conversation-column">
@@ -216,7 +217,7 @@ export default function CallDetailPage({ portal = "admin" }: { portal?: "admin" 
           <button onClick={() => downloadText(`${baseName}-transcript.txt`, call.transcript || "No transcript available.")}><FiFileText /><span>Transcript</span></button>
           <button onClick={() => downloadText(`${baseName}-report.txt`, report)}><FiDownload /><span>Report</span></button>
         </div>}
-        {(call.recording_id || call.recording_url) && <RecordingPlayer src={`${apiBase}/${call.id}/recording?inline=1`} title={`${call.agent_name} × ${customer}`} subtitle="Call recording" />}
+        {(call.recording_id || call.recording_url) && <RecordingPlayer src={`${apiBase}/${call.id}/recording?inline=1`} title={`${call.agent_name} × ${customer}`} subtitle={`Recording serial: ${recordingReference(call)}`} />}
         {active && <p className="recording-note">{call.recording_active ? "● Recording automatically" : "Recording paused by controller"}</p>}
       </article>
       <article className="admin-card detail-column notes-column">

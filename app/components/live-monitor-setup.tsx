@@ -1,5 +1,6 @@
 "use client";
 
+import toast from "react-hot-toast";
 import { useEffect, useState } from "react";
 import { LocalMonitorConnect } from "./local-monitor-connect";
 
@@ -8,7 +9,6 @@ export function LiveMonitorSetup({ portal }: { portal: "admin" | "bpo" }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [retry, setRetry] = useState(0);
   const endpoint = `/api/${portal}/live-monitor/settings`;
   useEffect(() => {
@@ -24,14 +24,15 @@ export function LiveMonitorSetup({ portal }: { portal: "admin" | "bpo" }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [endpoint, retry]);
+  useEffect(() => { if(error)toast.error(error,{id:"monitor-settings",duration:4000}); },[error]);
   async function save() {
-    setSaving(true); setMessage(""); setError("");
+    setSaving(true); setError(""); toast.loading("Saving initial script…",{id:"monitor-settings"});
     try {
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ initialScript: script }), signal: AbortSignal.timeout(15000) });
       const data = await response.json();
       if (!response.ok) throw Error(data.error || "Unable to save script.");
-      setScript(data.initialScript); setMessage(data.message);
+      setScript(data.initialScript); toast.success(data.message || "Initial script saved.",{id:"monitor-settings",duration:3000});
     } catch (err) { setError(err instanceof Error ? err.message : "Unable to save script."); }
     finally { setSaving(false); }
   }
@@ -42,11 +43,10 @@ export function LiveMonitorSetup({ portal }: { portal: "admin" | "bpo" }) {
         <p>Save the initial script for your localhost agent here.</p>
         <label htmlFor="monitor-initial-script">Default initial script</label>
         <textarea id="monitor-initial-script" rows={8} minLength={10} maxLength={16000} required
-          disabled={loading || saving} value={script} onChange={event => { setScript(event.target.value); setMessage(""); }} />
+          disabled={loading || saving} value={script} onChange={event => { setScript(event.target.value); }} />
         <p>After saving, click Connect localhost to apply the script to your next local call.</p>
         <button disabled={loading || saving || script.trim().length < 10}>{saving ? "Saving…" : loading ? "Loading…" : "Save initial script"}</button>
-        {error && <p role="alert">{error} <button type="button" disabled={loading || saving} onClick={() => setRetry(value => value + 1)}>Reload saved script</button></p>}
-        {message && <p role="status">{message}</p>}
+        {error && <button type="button" disabled={loading || saving} onClick={() => setRetry(value => value + 1)}>Reload saved script</button>}
       </form>
     </details>
     <LocalMonitorConnect portal={portal} />

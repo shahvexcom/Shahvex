@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  distDir: process.env.SHAHVEX_NEXT_DIST_DIR || ".next",
   reactCompiler: true,
   async headers() {
     return [{ source: "/test/agent/:path*", headers: [

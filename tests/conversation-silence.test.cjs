@@ -37,15 +37,16 @@ test('presence checks use the selected voice without model inference or fake cus
       assert.equal(result.filter(e=>e.type==='end_call').length,step===3?1:0);
       assert.equal(result.at(-1).type,'done');
     }
-    assert.equal(new Set(spoken).size,3);
-    assert.deepEqual(spoken.slice(0,2),['Are you still there?','Can you hear me?']);assert.match(spoken[2],/Goodbye/);
+    assert.ok(new Set(spoken).size>=3);
+    assert.deepEqual(spoken.filter(text=>!text.startsWith('Hello,')).slice(0,2),['Are you still there?','Can you hear me?']);assert.match(spoken.slice(2).join(' '),/Goodbye/);
     assert.ok(!sessionStore.get(id).messages.some(m=>m.role==='user'));
+    const spokenBeforeInvalidRequests=spoken.length;
     for(const body of [{silenceStep:4},{silenceStep:1,text:'yes'},{silenceStep:1,opening:true}]){
       const result=await events(await dispatch(req('turn',id,body)));
       assert.ok(result.some(e=>e.type==='error'));
       assert.ok(!result.some(e=>e.type==='pcm'||e.type==='end_call'));
     }
-    assert.equal(spoken.length,3);
+    assert.equal(spoken.length,spokenBeforeInvalidRequests);
     await dispatch(req('stop',id,{}));assert.equal(sessionStore.has(id),false);
   }finally{if(id)await dispatch(req('stop',id,{}));global.fetch=original;}
 });
@@ -70,7 +71,7 @@ test('unrecognized validated speech asks for clarification without inventing a t
   global.fetch=async(url,init)=>{
     if(String(url).includes('8766'))return Response.json({text:''});
     assert.ok(!String(url).includes('11434'));
-    assert.match(JSON.parse(init.body).text,/Could you say it again/);
+    const text=JSON.parse(init.body).text;if(!text.startsWith('Hello,'))assert.equal(text,'Please repeat your last question.');
     return new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
   };
   const {dispatch,sessionStore}=createTesterService({secret,testHooks:true});let id;
@@ -84,7 +85,7 @@ test('unrecognized validated speech asks for clarification without inventing a t
     const request=req('turn',id,{});
     request.headers.set('content-type','audio/wav');
     const result=await events(await dispatch(new Request(request.url,{method:'POST',headers:request.headers,body:wav})));
-    assert.ok(result.some(e=>e.type==='delta'&&e.text.includes("didn't catch")));
+    assert.ok(result.some(e=>e.type==='delta'&&e.text==='Please repeat your last question.'));
     assert.ok(result.some(e=>e.type==='pcm'));
     assert.ok(!result.some(e=>e.type==='user'||e.type==='error'||e.type==='end_call'));
     assert.ok(!sessionStore.get(id).messages.some(m=>m.role==='user'));

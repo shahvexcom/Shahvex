@@ -1,11 +1,12 @@
 "use client";
+import {recordingReference} from "@/lib/recording-reference";
 import { useCurrency } from "./currency-provider";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FiActivity, FiClock, FiDownload, FiMic, FiMicOff, FiPause, FiPhone, FiPhoneCall, FiPhoneOff, FiPlay, FiRefreshCw, FiRadio, FiVolume2, FiVolumeX, FiWifi, FiWifiOff } from "react-icons/fi";
 import "./bpo-quick-dial.css";
 
-type CallRecord = { id: string; status: string; lead_number: string; duration_seconds: number; charged_credits: number; answered_at: string | null; recording_url: string; recording_active: boolean; created_at: string; downloadable: boolean };
+type CallRecord = { id: string; recording_serial?: string; status: string; lead_number: string; duration_seconds: number; charged_credits: number; answered_at: string | null; recording_url: string; recording_active: boolean; created_at: string; downloadable: boolean };
 type Dashboard = { metrics: { dials_today?: number; connected_today?: number; talk_seconds_today?: number; recordings_today?: number }; recordings: CallRecord[]; billing: { balance: number; minutePrice: number; recordingPrice: number } };
 type SoftphoneCall = {
   id?: string; state?: string; localStream?: MediaStream; remoteStream?: MediaStream;
@@ -350,7 +351,7 @@ export default function BpoQuickDial({ endpoint = "/api/bpo/quick-dial", adminMo
     <section className="quick-recordings">
       <header><div><p className="bpo-eyebrow">RECENT ACTIVITY</p><h2>Quick Dial history</h2><p>Only calls the customer answered have talk time and a charge. Unanswered calls always show 00:00 and {formatMoney(0)}.</p></div><span>{dashboard.recordings.length} calls</span></header>
       {loading ? <div className="quick-recording-loading">Loading live Quick Dial data…</div> : dashboard.recordings.length ? <div className="quick-recording-list">{dashboard.recordings.map(call => <article key={call.id}>
-        <div><strong>{call.lead_number}</strong><small>{new Date(call.created_at).toLocaleString()} · Call time: {fmtTime(Number(call.duration_seconds || 0))} · Charge: {formatMoney(call.charged_credits || 0)}</small></div>
+        <div><strong>{call.lead_number}</strong><small>Recording: {recordingReference(call)}</small><small>{new Date(call.created_at).toLocaleString()} · Call time: {fmtTime(Number(call.duration_seconds || 0))} · Charge: {formatMoney(call.charged_credits || 0)}</small></div>
         <em className={call.answered_at ? call.status.toLowerCase() : "not-connected"}>{call.answered_at ? call.status === "ANSWERED" ? "LIVE" : call.status : "NOT CONNECTED"}</em>
         {call.downloadable ? <div className="quick-recording-actions"><audio controls preload="metadata" src={`${recordingApiBase}/${call.id}/recording?inline=1`} aria-label={`Recording for ${call.lead_number}`} /><a href={`${recordingApiBase}/${call.id}/recording`} data-tooltip="Download recording"><FiDownload /> Download</a></div> : <span className="quick-recording-pending">{call.recording_active ? "Recording…" : "No recording"}</span>}
       </article>)}</div> : <div className="quick-recording-empty"><FiPhone /><h3>No Quick Dial calls yet</h3><p>Your one-to-one calls and their recordings will appear here.</p></div>}

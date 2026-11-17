@@ -1,0 +1,13 @@
+# Bounded silence after introduction — 17 November 2026
+
+The first customer response now has an independent eight-second silence deadline measured from the last intro audio frame actually sent by the bridge. New incoming voiced audio starts a fresh eight-second listening window, so an answer beginning near the deadline is not cut off. A recognized customer reply permanently disables this opening-only cutoff; the existing conversation silence policy handles later turns. Hold, transfer preparation and human handoff suspend the opening deadline.
+
+The cutoff runs before the normal silence handler and does not wait for metadata synchronization, buffered-speech recognition, SSE completion or database callbacks. The existing brief presence reminder can run first when the normal callback path is healthy, but it does not reset the opening deadline. Consequently a silent opening no longer goes through the old three-reminder sequence or remains open because one of those background flags is stuck.
+
+At timeout, the bridge marks the call ending, cancels pending AI work, clears queued audio, durably queues the exact-call hangup and closes its AudioSocket locally. A 500 ms fallback destroys an unresponsive audio socket. Provider/database reconciliation proceeds independently and retains its queued event until acknowledged. For the direct AudioSocket/DIALER route used by 3531, closing the AI socket lets the dialplan hang up without waiting for the website. For a provider-dependent native leg, the exact provider hangup remains queued if its API is unavailable; closing AI media alone cannot prove the remote carrier has terminated its channel. No human handoff leg is closed by this cutoff.
+
+Changed files: `gateway/opening-response-timeout.cjs`, `deployment/vicidial-bridge/server.cjs`, and focused tests. The existing opening prewarm and repeat-question wording were reflected in two stale test expectations; no conversation-engine behavior was changed for those fixtures.
+
+Verification: 56 tests passed. Coverage includes a real-clock synthetic silent call ending between eight and ten seconds after admission with a short intro, deliberately stuck opening response/SSE, pending sync, a hung hangup backend, durable retry preservation, late customer speech, recognized replies, pause-safe clock behavior, input-gap recovery, recording, live listening, voicemail and native-call behavior. Test AudioSocket legs were local synthetic fixtures; no customer calls were placed.
+
+Deployment: restarted only `shahvex-campaign-bridge` and `shahvex-local-audio-test` after signed health checks showed zero active/starting calls and zero connected media sockets. Both services were active and healthy afterward; concurrency remains 101.

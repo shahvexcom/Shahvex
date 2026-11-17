@@ -23,8 +23,8 @@ test('zero, partial and full answer sets use requested-human mode without a qual
 });
 test('waiting gets one acknowledgment, one status and then silence, never a false connection claim',()=>{
  const {transferAcknowledgment:reply}=load('lib/agent-context-answer.ts');let history=[U('Transfer me.')];
- const first=reply('Transfer me.',[]);assert.match(first,/Please wait while I connect/);history.push(A(first));
- const second=reply('Okay, I am waiting.',history);assert.equal(second,'Your connection request is in progress.');history.push(U('Okay, I am waiting.'),A(second));
+ const first=reply('Transfer me.',[]);assert.equal(first,'Alright, please wait.');history.push(A(first));
+ const second=reply('Okay, I am waiting.',history);assert.equal(second,'');history.push(U('Okay, I am waiting.'),A(second));
  for(let i=0;i<4;i++){assert.equal(reply('I am still waiting.',history),'');history.push(U('I am still waiting.'));}
  const status=reply('Have you transferred me?',history);assert.equal(status,"I don't have confirmation of a completed transfer yet.");
  assert.equal(reply('Have you transferred me?',[...history,A(status)]),'');
@@ -104,4 +104,44 @@ test('native update_lead writes mapped details and partial-handoff instructions 
  }});
  await r.syncVicidialComments('call');assert.equal(writes,1);assert.equal(native.first_name,'Alex');assert.equal(native.last_name,'Smith');
  for(const text of ['Existing operator note','name: Alex Smith','age: 67','complete remaining script details','uncollected: unknown'])assert.ok(native.comments.includes(text),text);
+});
+
+test('handoff explanation questions never become human requests or transfer consent at any layer',()=>{
+ const r=results();
+ const offer=A('Let me connect you with a licensed specialist who can look up your exact plan.');
+ const questions=['Why do you wanna connect me with a licensed agent?','Why do you want to connect me with the license agent?','Why are you transferring me?','How will you connect me to the agent?','What happens if you connect me with someone?','Do you want to speak to a licensed agent?','I asked why you want to connect me with a specialist.','Why should I want to talk to a human?'];
+ for(const text of questions){
+  assert.equal(intent.customerRequestsHuman(text),false,text);
+  assert.equal(r.hasTransferConsent([offer,U(text)]),false,text);
+  assert.equal(r.hasRequestedHumanHandoff([offer,U(text)]),false,text);
+  assert.equal(r.hasTransferConsent([offer,U(text),U('Yes.')]),false,'An unanswered question consumed the old offer: '+text);
+ }
+});
+test('the failed recording cannot prepare a customer-requested transfer or write false consent',async()=>{
+ let writes=0;const r=results(async()=>{writes++;return {rowCount:1}});
+ const h=[A('Let me connect you with a licensed specialist.'),U('Why do you wanna connect me with a licensed agent?'),A('Alright, please wait.'),U('Wait for what?')];
+ await assert.rejects(r.prepareRequestedHumanHandoff('call',h,{}),/No current customer request/);assert.equal(writes,0);
+ assert.equal(intent.handoffWaiting(h),false);
+});
+test('real transfer commands and polite first-person requests retain consent, while presence does not grant it',()=>{
+ const r=results();
+ for(const text of ['Please connect me with a licensed specialist.','Can you please connect me with an agent?','I would like to talk to a human.',"I'd like to speak to an agent.",'Why is this necessary? Please connect me to the specialist.']){
+  assert.equal(intent.customerRequestsHuman(text),true,text);assert.equal(r.hasRequestedHumanHandoff([U(text)]),true,text);
+ }
+ for(const text of ["I'm here.",'I am waiting.','Yes, I can hear you.','Yeah, you can.','Hello?'])assert.equal(r.hasTransferConsent([A('Would you like me to connect you?'),U(text)]),false,text);
+ const h=[A('Would you like me to connect you?'),U('Yes.'),A('Alright, please wait.')];assert.equal(intent.handoffWaiting(h),true);
+});
+test('handoff explanation answers why and invites an explicit choice without claiming action success',()=>{
+ const script='Let me connect you with a licensed specialist who can look up your exact plan that fits you.';
+ const h=[A(script)];
+ const reply=intent.handoffExplanationReply('Why do you wanna connect me with a licensed agent?',h,script);
+ assert.match(reply,/specialist can look up your exact plan/);assert.match(reply,/Would you like me to connect you\?/);assert.doesNotMatch(reply,/please wait|refund owed|have connected/);
+ assert.match(intent.handoffExplanationReply('Wait for what?',[...h,A('Alright, please wait.')],script),/should have explained/);
+ assert.equal(intent.handoffExplanationReply('Please connect me.',h,script),undefined);
+ assert.equal(intent.transferConsent([...h,U('Why connect me?'),A(reply),U('Yes.')]),true);
+});
+
+test('a specialist definition uses the assigned role rather than invented sales or refund claims',()=>{
+ const reply=intent.handoffExplanationReply('What is a licensed specialist?',[],'Let me connect you with a licensed specialist who can review your plan.');
+ assert.match(reply,/professional license/);assert.match(reply,/role here is to review your plan/);assert.doesNotMatch(reply,/don.t sell|certified|refund|eligible/);
 });

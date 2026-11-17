@@ -7,7 +7,7 @@ import http from "node:http";
 import { Readable } from "node:stream";
 
 /** Private AI-leg recording; native human-call recordings are never proxied here. */
-export async function bridgeRecordingResponse(base:string,secret:string,id:string,request:Request) {
+export async function bridgeRecordingResponse(base:string,secret:string,id:string,request:Request,reference?:string) {
   if(!/^[a-f0-9-]{36}$/.test(id))return Response.json({message:"Invalid AI recording"},{status:400});
   const url=new URL(base);vicidialURL(url.origin);
   if(url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw Error('Invalid bridge origin');
@@ -24,7 +24,8 @@ export async function bridgeRecordingResponse(base:string,secret:string,id:strin
     }},resolve);req.setTimeout(30000,()=>req.destroy(Error('AI recording timed out')));req.on('error',reject);req.end();
   });
   if(![200,206].includes(upstream.statusCode||0)||!String(upstream.headers['content-type']).startsWith('audio/')){upstream.resume();return Response.json({message:"AI recording is not ready"},{status:404});}
-  const out=new Headers({'content-type':'audio/wav','cache-control':'private, no-store','content-disposition':`${new URL(request.url).searchParams.get('inline')==='1'?'inline':'attachment'}; filename="ai-call-${id}.wav"`});
+  const out=new Headers({'content-type':'audio/wav','cache-control':'private, no-store','content-disposition':`${new URL(request.url).searchParams.get('inline')==='1'?'inline':'attachment'}; filename="${reference ? `recording-${reference}` : `ai-call-${id}`}.wav"`});
+  if(reference)out.set('X-Recording-Serial',reference);
   for(const key of ['content-length','content-range','accept-ranges']){const value=upstream.headers[key];if(typeof value==='string')out.set(key,value);}
   return new Response(Readable.toWeb(upstream) as ReadableStream<Uint8Array>,{status:upstream.statusCode,headers:out});
 }

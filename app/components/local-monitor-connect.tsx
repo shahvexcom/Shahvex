@@ -1,4 +1,5 @@
 "use client";
+import toast from "react-hot-toast";
 import { useEffect, useState } from "react";
 import { localTestVoices, isLocalTestVoice } from "../../gateway/local-test-voices.cjs";
 
@@ -6,8 +7,6 @@ export function LocalMonitorConnect({ portal }: { portal: "admin" | "bpo" }) {
   const [form, setForm] = useState({ url: "http://127.0.0.1:8792", secret: "", name: "Lissa", voice: "lissa", first: "ai" });
   const [savedSecret, setSavedSecret] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
   const endpoint = `/api/${portal}/live-monitor/local`;
   useEffect(() => {
     const controller = new AbortController();
@@ -21,14 +20,14 @@ export function LocalMonitorConnect({ portal }: { portal: "admin" | "bpo" }) {
     return () => controller.abort();
   }, [endpoint]);
   async function connect() {
-    setBusy(true); setMessage(""); setError("");
+    setBusy(true); toast.loading("Connecting local bridge…",{id:"monitor-local-connect"});
     try {
       const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...form, secret: form.secret || undefined }), signal: AbortSignal.timeout(10000) });
       const data = await response.json();
       if (!response.ok) throw Error(data.error || "Local connection failed.");
-      setSavedSecret(true); setForm(current => ({ ...current, secret: "", name: data.agent.name, voice: data.agent.voice, first: data.agent.first })); setMessage(data.message);
-    } catch (err) { setError(err instanceof Error ? err.message : "Local connection failed."); }
+      setSavedSecret(true); setForm(current => ({ ...current, secret: "", name: data.agent.name, voice: data.agent.voice, first: data.agent.first })); toast.success(data.message || "Local bridge connected.",{id:"monitor-local-connect",duration:3000});
+    } catch (err) { toast.error(err instanceof Error ? err.message : "Local connection failed.",{id:"monitor-local-connect",duration:4000}); }
     finally { setBusy(false); }
   }
   return <details open>
@@ -52,8 +51,6 @@ export function LocalMonitorConnect({ portal }: { portal: "admin" | "bpo" }) {
       </fieldset>
       <button disabled={busy}>{busy ? "Connecting…" : "Connect localhost"}</button>
       <p>Choose Lissa, Emma or Olivia, then click Connect localhost to apply it to the next incoming test call. Dial your configured Asterisk extension. Finish an active call before changing the voice or script.</p>
-      {error && <p role="alert">{error}</p>}
-      {message && <p role="status">{message}</p>}
     </form>
   </details>;
 }

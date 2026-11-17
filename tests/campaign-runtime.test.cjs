@@ -1,5 +1,5 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),ts=require('typescript');
-function load(file,deps={}){const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:require(n),m,m.exports);return m.exports;}
+function load(file,deps={}){const m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:n==='./vicidial-turn-admission'?load('lib/vicidial-turn-admission.ts'):require(n),m,m.exports);return m.exports;}
 const config=load('lib/campaign-config.ts'),comments=load('lib/vicidial-comment-merge.ts');
 test('campaign configuration accepts custom categories/scripts and rejects fake TTS controls',()=>{
  const c=config.campaignSettings.parse({goal:'Custom goal',requiredLeadFields:['Name'],companyName:'Configured business'});

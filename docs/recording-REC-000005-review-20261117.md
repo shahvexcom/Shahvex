@@ -1,0 +1,17 @@
+# REC-000005 review and input-gap fix — 17 November 2026
+
+User file: `call-da8df785-20a1-4bc6-a558-0248d477d9a0.wav` in Downloads. Database call `da8df785-20a1-4bc6-a558-0248d477d9a0`, serial `REC-000005`, extension 3531, created 20:16:02 PKT and ended 20:17:27 PKT. This is an earlier call, before the later listening and serial-number deployments.
+
+Audio evidence: stereo PCM16, 8 kHz, 83.22 seconds. Agent channel has the introduction in the first approximately five seconds and digital silence thereafter. Customer channel contains a short initial nonzero burst, approximately 240 ms, followed by digital silence. Separate-channel transcription through the existing private speech engine found the introduction only; the customer segment yielded no recognized words. Saved conversation history and transcript also contain only the introduction. No incorrect answer to a recognized customer question is present in this file.
+
+Call events show the opening turn and a completed metadata-sync response with verificationPending=true, followed by call end and recording events; no customer speech recognition or subsequent conversation turn was stored. Logs report first output PCM 887 ms after AudioSocket admission. Database connection timeouts also appear around this time; these are evidence of a concurrent backend problem, not proof that they caused the missing customer audio.
+
+A reproducible code defect was found: buffered speech is normally finalized when enough silent PCM frames arrive. If the sender suppresses silence and sends no further frames after a short burst, the buffered utterance can remain pending indefinitely and block the no-response clock. A 240 ms synthetic burst during the introduction reproduced the freeze in a regression test before the change.
+
+The bridge now also finalizes captured speech when no new input packet arrives for the configured end-of-speech interval. It passes only the captured audio to the existing classifier, fabricates no customer words or recording samples, and preserves playback unless the normal interruption classifier confirms a meaningful interruption. After an empty/noise result, normal no-response reminders and final hangup proceed. Added end-of-call diagnostics record input/output byte counts, voiced milliseconds, gap flush count and pending speech bytes without customer numbers or credentials.
+
+Validation: the new test failed before the fix and passed afterward, including three no-response steps and eventual hangup. 45 focused voice, voicemail, listening, recording, retry and native-call regressions passed. Both bridges were idle before restarting only those changed services. Website and adapter were not restarted. Post-deployment health checks passed with capacity 101 and no active calls. No customer call was made during verification.
+
+Limit: the old WAV cannot establish whether the remote sender stopped sending packets, sent zero-valued frames, or why usable customer audio did not reach this recording. The reproduced packet-gap freeze is fixed; restoring audio absent upstream requires evidence from a fresh affected call and its newly logged media counters. Do not claim this change repairs every possible one-way-audio or database outage.
+
+Follow-up: [opening-no-response-cutoff-20261117.md](./opening-no-response-cutoff-20261117.md) supersedes the opening's multi-reminder wait with an independent eight-second cutoff and local media closure, including when background callbacks stall.

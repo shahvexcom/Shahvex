@@ -230,3 +230,40 @@ test('outbound goal speech stays short while retaining the actual question and s
  }});
  assert.match(final,/May I know your exact age/);assert.doesNotMatch(final,/Fourth|Fifth|assist/);assert.equal(spoken.length,4);
 });
+
+test('acknowledgment-only model output is held and repaired before any filler reaches speech',async()=>{
+ let modelCalls=0;const spoken=[];let answer='';
+ await streamAgentReply({messages:[{role:'system',content:'Ask the pending script question.'}],voice:'voice',signal:new AbortController().signal,onText:t=>{answer=t;},send:async()=>{},timing:async()=>{},engine:async(port,path,init)=>{
+  if(port===11434)return new Response(JSON.stringify({message:{content:++modelCalls===1?'Mm-hmm.':'Do you have coverage?'},done:true})+'\n');
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(4800).fill(12),{headers:pcmHeaders});
+ }});
+ assert.equal(modelCalls,2);assert.equal(answer,'Do you have coverage?');assert.deepEqual(spoken,['Do you have coverage?']);
+});
+
+test('wellbeing greeting can only be spoken once even when the model changes its wording',async()=>{
+ let result='';const spoken=[];
+ await streamAgentReply({messages:[{role:'assistant',content:'Hello. How are you today?'},{role:'user',content:'I am good. How about you?'}],voice:'voice',signal:new AbortController().signal,onText:t=>{result=t;},send:async()=>{},timing:async()=>{},engine:async(port,path,init)=>{
+  if(port===11434)return new Response(JSON.stringify({message:{content:"I'm doing well. How are you doing? Which day works for you?"},done:true})+'\n');
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(4800).fill(12),{headers:pcmHeaders});
+ }});
+ assert.doesNotMatch(result,/How are you/);assert.match(result,/Which day/);assert.ok(spoken.every(t=>!t.includes('How are you')));
+});
+
+test('cached speech replays identical PCM without another synthesis request',async()=>{
+ require('../gateway/tts-pcm-cache.cjs').shared.clear();let syntheses=0;const outputs=[];
+ const options={cacheAudio:true,fixedSpeech:'A cache isolation test.',messages:[],voice:'cache-test',signal:new AbortController().signal,onText:()=>{},timing:async()=>{},send:async e=>{if(e.type==='pcm')outputs.push(e.data);},engine:async()=>{syntheses++;return new Response(new Uint8Array(4800).fill(12),{headers:pcmHeaders});}};
+ await streamAgentReply(options);const first=outputs.splice(0);await streamAgentReply(options);assert.equal(syntheses,1);assert.deepEqual(outputs,first);
+ require('../gateway/tts-pcm-cache.cjs').shared.clear();
+});
+
+test('history replay and copied customer answers are blocked before transcript and TTS, then retried once',async()=>{
+ const spoken=[],events=[];let calls=0,full='';
+ const history=[{role:'system',content:'Answer the customer.'},{role:'assistant',content:"I'm good, thanks! I'm calling about the benefit review."},{role:'user',content:'Yes.'},{role:'assistant',content:'Do you have Part A and B?'},{role:'user',content:'Part A and B.'}];
+ await streamAgentReply({messages:history,customerText:'Are you serious?',voice:'lissa',phraseStreaming:true,signal:new AbortController().signal,onText:t=>{full=t;},send:async e=>{events.push(e);},timing:async()=>{},engine:async(port,path,init)=>{
+  if(port===11434){calls++;const text=calls===1?"I'm good, thanks! I'm calling about the benefit review. Yes. Part A and B.":'I missed your point. What would you like to ask?';return new Response(JSON.stringify({message:{content:text},done:true})+'\n');}
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+ }});
+ assert.equal(calls,2);assert.equal(full,'I missed your point. What would you like to ask?');
+ assert.deepEqual(spoken,['I missed your point.','What would you like to ask?']);
+ assert.ok(!events.filter(e=>e.type==='delta').some(e=>/Part A|benefit review/.test(e.text)));
+});

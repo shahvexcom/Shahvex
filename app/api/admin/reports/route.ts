@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   if (!await admin()) return Response.json({ message: "Unauthenticated" }, { status: 401 });
   const client = await db();
   const [calls, metrics] = await Promise.all([
-    client.query(`SELECT c.id,c.call_type,c.status,c.lead_name,c.lead_number,c.recording_url,c.summary,c.notes,c.outcome,c.created_at,c.answered_at,c.ended_at,a.name AS agent_name
+    client.query(`SELECT c.recording_serial,c.id,c.call_type,c.status,c.lead_name,c.lead_number,c.recording_url,c.summary,c.notes,c.outcome,c.created_at,c.answered_at,c.ended_at,a.name AS agent_name
       FROM agent_calls c JOIN agents a ON a.id=c.agent_id WHERE c.call_type IN ('LEAD','TEST')
         AND NOT EXISTS (SELECT 1 FROM bpo_created_agents b WHERE b.agent_id=c.agent_id)
       ORDER BY c.created_at DESC ${new URL(request.url).searchParams.get("export") === "all" ? "" : "LIMIT 250"}`),

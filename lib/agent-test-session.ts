@@ -1,6 +1,9 @@
-import { audioCheckReply, openingCourtesyReply, asksToWait, interruptionKind, acknowledgmentReply, mainQuestions, key as flowQuestionKey } from "../gateway/conversation-flow.cjs";
-import { handoffWaiting } from "../gateway/handoff-intent.cjs";
-import { contextualQuestionReply, initialScriptQuestion, transferAcknowledgment, briefAgentOpening } from '@/lib/agent-context-answer';
+import { recoveryReply } from "../gateway/conversation-recovery.cjs";
+import { scriptQuestionProgress, nextScriptQuestion, customerFloorReply } from "../gateway/reply-integrity.cjs";
+import { isVoicemailGreeting } from "../gateway/voicemail-detection.cjs";
+import { audioCheckReply, openingCourtesyReply, asksToWait, interruptionKind, acknowledgmentReply, isPresenceCheck } from "../gateway/conversation-flow.cjs";
+import { handoffWaiting, handoffExplanationReply, routineHandoffOffer, handoffDeclineReply } from "../gateway/handoff-intent.cjs";
+import { contextualQuestionReply, initialScriptQuestion, transferAcknowledgment, briefAgentOpening, voiceIdentity } from '@/lib/agent-context-answer';
 import { expressionCapabilityReply } from '../gateway/voice-emotion.cjs';
 import { conductDecision } from "../gateway/customer-conduct.cjs";
 import { streamAgentReply } from "@/lib/agent-test-stream";
@@ -39,7 +42,7 @@ export async function handleTestSession(
       if(bytes.length>2_000_000)return json({error:"Recording too long"},413);
       if(!inspectSpeechWav(bytes).speech)return json({text:"",kind:"ignore"});
       const text=await recognizeSpeechWav(bytes,async audio=>{const form=new FormData();form.append('audio',audio,'speech.wav');const response=await engine(8766,'/transcribe',{method:'POST',body:form,signal:request.signal});if(!response.ok)throw Error('Speech recognition unavailable');return String((await response.json()).text||'');});
-      return json({text,kind:interruptionKind(text)});
+      return json({text,kind:interruptionKind(text),voicemail:isVoicemailGreeting(text)});
     }
     if (action === "stop") {
       session.abort?.abort();
@@ -179,15 +182,13 @@ export async function handleTestSession(
                 });
               if (!text) {
                 session.unclearSpeechCount=(session.unclearSpeechCount||0)+1;
-                if(session.unclearSpeechCount>1){
-                  await send({type:'rejected',reason:'Speech was heard but words remain unclear; waiting for a clear reply'});
-                  await send({type:'done'});return;
-                }
+                const recovery = recoveryReply(session.messages);
+                if (!recovery) { await send({type:'done'}); return; }
                 // Validated speech was heard, but STT could not resolve words.
                 // Ask for clarification; do not manufacture a customer answer.
                 await streamAgentReply({
                   messages: [],
-                  fixedSpeech: "I didn't catch that. Could you say it again?",
+                  fixedSpeech: recovery,
                   voice: session.config.voice,
               customerText: text,
               emotionState: (session.voiceEmotionState ??= { turn: 0 }),
@@ -199,6 +200,7 @@ export async function handleTestSession(
                     answer = text;
                   },
                 });
+                if (answer) session.messages.push({ role: 'assistant', content: answer });
                 await send({ type: "done" });
                 return;
               }
@@ -223,7 +225,6 @@ export async function handleTestSession(
                 !silenceStep &&
                 !(
                   body.opening === true &&
-                  session.config.first === "ai" &&
                   session.messages.length === 1
                 )
               )
@@ -259,7 +260,7 @@ export async function handleTestSession(
               return;
             }
             if (text) {
-              session.unclearSpeechCount=0;
+              // Keep the clarification budget for the entire call.
               if (process.env.NODE_ENV === "development")
                 console.debug("[Shahvex transcript commit]", {
                   turnId,
@@ -284,6 +285,11 @@ export async function handleTestSession(
             }
             // Conduct and stop decisions outrank sales/script progression. The bridge
             // and browser already consume end_call after draining queued playback.
+            if(isVoicemailGreeting(text)){
+              session.endedReason='voicemail';
+              await send({type:'end_call',reason:'voicemail'});
+              await send({type:'done'});return;
+            }
             const conduct = conductDecision(text, session.conductWarned === true);
             if (conduct) {
               await streamAgentReply({
@@ -304,19 +310,65 @@ export async function handleTestSession(
             if(asksToWait(text)){await streamAgentReply({messages:[],fixedSpeech:'Of course, take your time.',voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});await send({type:'done'});return;}
             const flowHistory=session.messages.slice(1,-1);
             const flowMemory=questionMemory(session.messages.slice(1));
+            const transferReply=transferAcknowledgment(text,session.messages.slice(1,-1),session.config.script);
+            if(transferReply!==undefined){
+              if(transferReply)await streamAgentReply({messages:[],fixedSpeech:transferReply,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            if(handoffWaiting(flowHistory)&&!/[?]|\b(?:what|why|who|where|how|when|can you|could you)\b/i.test(text)){
+              await send({type:'done'});return;
+            }
+
+            const handoffExplanation=handoffDeclineReply(text,flowHistory) ?? handoffExplanationReply(text,flowHistory,session.config.script);
+            if(handoffExplanation){
+              await streamAgentReply({messages:[],fixedSpeech:handoffExplanation,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            const floorReply=customerFloorReply(text,flowHistory);
+            if(floorReply){
+              await streamAgentReply({messages:[],fixedSpeech:floorReply,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            const repetitionComplaint=/\b(?:why (?:are )?you\b[^?]{0,90}\b(?:again|repeat)|you already (?:told|answered)|already told me|don['’]?t tell me (?:this|that)|stop repeating|keep repeating|how many times[^?]{0,100}how are you|again and again|you (?:already )?told me[^?]{0,60}your name)\b/i.test(text);
+            if(repetitionComplaint){
+              const apology="You're right. I'll stop repeating that.";
+              const reply=flowHistory.some(m=>m.role==='assistant'&&m.content===apology)?"I'll pause and let you speak.":apology;
+              await streamAgentReply({messages:[],fixedSpeech:reply,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            const repeatQuestion=questionToRepeat(flowHistory,text);
+            if(repeatQuestion){
+              await streamAgentReply({messages:[],fixedSpeech:repeatQuestion,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            if(/^(?:(?:yes|yeah)[,.! ]*)?I(?:'m| am) (?:still )?here[.! ]*$|\bwhy (?:(?:are )?you|you are) (?:so )?quiet\b|^(?:what happened)[?! .]*$/i.test(text.trim())){
+              const pending=flowMemory.pendingQuestion;
+              await streamAgentReply({messages:[],fixedSpeech:pending?`I'm here. ${pending}`:"I'm here and listening.",voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
             const courtesy=audioCheckReply(text,flowHistory) ?? openingCourtesyReply(text,flowHistory,session.config);
             if(courtesy){
               await streamAgentReply({messages:[],fixedSpeech:courtesy,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
 
+            const nextQuestion=nextScriptQuestion(session.config.script,flowMemory,text);
+            if(nextQuestion){
+              await streamAgentReply({messages:[],fixedSpeech:nextQuestion,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
+            const closingOffer=routineHandoffOffer(session.config.script,flowMemory,text);
+            if(closingOffer){
+              await streamAgentReply({messages:[],fixedSpeech:closingOffer,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:'done'});return;
+            }
             const ackReply=transferAcknowledgment(text,flowHistory,session.config.script)===undefined?acknowledgmentReply(session.config,text,flowHistory,flowMemory):undefined;
             if(ackReply){
               await streamAgentReply({messages:[],fixedSpeech:ackReply,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
             // A recognized presence check is valid speech, never an unclear-audio reply.
-            const presenceGreeting=/^(?:(?:hello|hi|hey)[?!., ]*)+(?:(?:are you (?:still )?there|can you hear me)[?!., ]*)?$|^(?:are you (?:still )?there|can you hear me)[?!., ]*$/i.test(text.trim());
+            const presenceGreeting=isPresenceCheck(text);
             if(presenceGreeting && session.messages.some(m=>m.role==='assistant')){
               await streamAgentReply({messages:[],fixedSpeech:session.messages.some(m=>m.role==='assistant')?"Yes, I'm here.":`Hello, this is ${session.config.name}.`,voice:session.config.voice,
                 customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
@@ -326,12 +378,7 @@ export async function handleTestSession(
             const opening = !session.messages.some(m=>m.role==='assistant') && (!text || presenceGreeting)
               ? briefAgentOpening(session.config) : undefined;
             if(opening){
-              await streamAgentReply({messages:[],fixedSpeech:opening,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
-              await send({type:'done'});return;
-            }
-            const transferReply=transferAcknowledgment(text,session.messages.slice(1,-1),session.config.script);
-            if(transferReply!==undefined){
-              if(transferReply)await streamAgentReply({messages:[],fixedSpeech:transferReply,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await streamAgentReply({messages:[],fixedSpeech:opening,openingAudio:true,cacheAudio:true,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
             const firstQuestion=initialScriptQuestion(session.config.script,text,session.messages.slice(1,-1));
@@ -339,15 +386,11 @@ export async function handleTestSession(
               await streamAgentReply({messages:[],fixedSpeech:firstQuestion,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
-            const initialCourtesy=flowHistory.filter(m=>m.role==='assistant').length===1 && /How are you today\?$/.test(flowHistory.find(m=>m.role==='assistant')?.content||'');
-            const contextual=initialCourtesy ? undefined : await contextualQuestionReply(session.config,text,session.messages.slice(1,-1),{signal:abort.signal});
+            const contextual=await contextualQuestionReply(session.config,text,session.messages.slice(1,-1),{signal:abort.signal});
             const expression=session.config.voice==='lissa'?expressionCapabilityReply(text):undefined;
             const pending=questionMemory(session.messages.slice(1)).pendingQuestion;
-            const questions=mainQuestions(session.config.script);
-            const nextContextQuestion=questions.find(q=>!flowHistory.some(m=>m.role==='assistant'&&flowQuestionKey(m.content).includes(flowQuestionKey(q))));
-            const resume=contextual && !/\b(?:who|your name|company|how are you|what about you)\b/i.test(text)
-              ? nextContextQuestion?` ${nextContextQuestion}`:pending&&questions.length===1&&!session.messages.some(m=>m.role==='assistant'&&m.content.includes(`Coming back to the question: ${pending}`))?` Coming back to the question: ${pending}`:''
-              : '';
+            const resume=contextual && pending && !/\b(?:who|why|what|where|how)\b/i.test(text) && !contextual.includes('?')
+              ? ` ${pending}` : '';
             if(contextual||expression){
               await streamAgentReply({messages:[],fixedSpeech:contextual ? contextual+resume : expression!,voice:session.config.voice,customerText:text,
                 emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
@@ -404,14 +447,16 @@ export async function handleTestSession(
             // This engine honors the initial system message but can ignore later
             // system messages. Keep grounding and current progress in that first
             // message, while preserving the actual user/assistant history.
+            const scriptProgress=scriptQuestionProgress(session.config.script,flowMemory);
             const groundedMessages = text
               ? [
                   {
                     role: "system",
                     content:
                       session.messages[0].content +
-                      "\n" +
-                      "\nCompleted question answers are binding evidence: skip them for either yes or no. A coverage answer such as Medicaid is meaningful, not unclear audio. After answering a side question, return to unresolvedQuestion; never restart.\n" +
+                      "\nSCRIPT QUESTION CHECKLIST (server evidence; unanswered questions remain pending, not completed): " + JSON.stringify(scriptProgress) +
+                      "\nBefore offering a routine handoff, finish every applicable pending question in script order. An explicit customer request for a human uses the supported requested-human path. Side conversation never answers age, coverage, or consent. If the customer says just tell me one thing or let me ask, invite their question and WAIT; do not give the pitch or add a screening question. Answer their actual question first. Never output prior dialogue, transcripts, or the customer role.\n" +
+                      "\nCompleted question answers are binding evidence: skip them for either yes or no. A coverage answer such as Medicaid is meaningful, not unclear audio. After answering a side question, return to unresolvedQuestion; never restart. A yes or no answers only the immediately preceding unambiguous question. Never claim coverage, age, eligibility, or a refund was confirmed from an answer about another topic. Do not recap the pitch or collected facts unless the customer asks for that recap. Give one relevant question at a time and never end a usable customer answer with only Mm-hmm.\n" +
                       conversationProgress(
                         session.messages.slice(1, -1),
                         text,
@@ -464,8 +509,8 @@ export async function handleTestSession(
               messages: replyMessages,
               outbound:true,
               maxStatementSentences: undefined,
-              introducedName: session.messages.some(m=>m.role==='assistant') && !/\b(?:your name|who (?:is|are)|who am I (?:talking|speaking)|who(?:'s| is) (?:calling|speaking)|(?:what|which) company)\b/i.test(text) ? session.messages.find(m=>m.role==='assistant')?.content.match(/\bthis is ([^.!?,]+?)(?: from |[.!?,]|$)/i)?.[1] || session.config.name : undefined,
-              completedQuestions: repeat ? [] : [...flowMemory.completed.map(item=>item.question),...flowHistory.filter(m=>m.role==="assistant").flatMap(m=>m.content.match(/[^.!?\n]+\?/g)||[]).filter((q,_,all)=>all.filter(other=>flowQuestionKey(other)===flowQuestionKey(q)).length>=2),...(mainQuestions(session.config.script).some(q=>!flowHistory.some(m=>m.role==="assistant"&&flowQuestionKey(m.content).includes(flowQuestionKey(q))))?flowHistory.filter(m=>m.role==="assistant").flatMap(m=>m.content.match(/[^.!?\n]+\?/g)||[]):[])],
+              introducedName: session.messages.some(m=>m.role==='assistant') ? voiceIdentity(session.config).name : undefined,
+              completedQuestions: repeat ? [] : flowMemory.completed.map(item=>item.question),
               allowTimePermission: hasAssignedRules,
               voice: session.config.voice,
               customerText: text,

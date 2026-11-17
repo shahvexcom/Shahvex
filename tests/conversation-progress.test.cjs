@@ -66,7 +66,7 @@ test('repeat-last-question handling excludes identity requests, normal answers a
   assert.equal(questionToRepeat([assistant('Do you have time? [interrupted]')],'Say that again?'),'');
 });
 
-test('real tester retains script restrictions and progress when repeating a question',async()=>{
+test('real tester retains progress and repeats only the unheard question without another model request',async()=>{
   const original=global.fetch,prompts=[];
   global.fetch=async(url,init)=>{
     if(String(url).includes('11434')){
@@ -90,10 +90,8 @@ test('real tester retains script restrictions and progress when repeating a ques
     assert.match(prompts[0][0].content,/Current conversation progress/);
     assert.match(prompts[0][0].content,/latest reply is YES/);
     assert.equal(prompts[0].at(-1).content,'Yes, I have.');
-    assert.ok(prompts[1].length>2);
-    assert.match(prompts[1][0].content,/After permission ask about the existing benefit/);
-    assert.match(prompts[1][0].content,/customer asks to hear the last point again/);
-    assert.equal(prompts[1].at(-1).content,'What did you say?');
+    assert.equal(prompts.length,1);
+    assert.equal(sessionStore.get(id).messages.at(-1).content,'Do you receive a benefit?');
     assert.equal(sessionStore.get(id).messages.filter(m=>m.role==='user').length,3);
   }finally{if(id)await call('stop',{});global.fetch=original;}
 });

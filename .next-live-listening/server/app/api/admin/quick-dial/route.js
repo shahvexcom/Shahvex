@@ -1,0 +1,13 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/admin/quick-dial/route.js")
+R.c("server/chunks/_0thvjye._.js")
+R.c("server/chunks/[root-of-the-server]__1bdtc_9._.js")
+R.c("server/chunks/lib_0_c-9zv._.js")
+R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")
+R.c("server/chunks/[root-of-the-server]__0yuosha._.js")
+R.c("server/chunks/[root-of-the-server]__15bjnu5._.js")
+R.c("server/chunks/node_modules_zod_v4_classic_external_1-pw2v2.js")
+R.c("server/chunks/node_modules_next_dist_11w3z5e._.js")
+R.c("server/chunks/_1td2jp9._.js")
+R.c("server/chunks/_next-internal_server_app_api_admin_quick-dial_route_actions_0-87mye.js")
+R.m(94381)
+module.exports=R.m(94381).exports

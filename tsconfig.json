@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -19,7 +23,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"]
+      "@/*": [
+        "./*"
+      ]
     }
   },
   "include": [
@@ -28,7 +34,45 @@
     "**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts"
+    "**/*.mts",
+    ".next-live/types/**/*.ts",
+    ".next-live/dev/types/**/*.ts",
+    ".next-live-next/types/**/*.ts",
+    ".next-live-next/dev/types/**/*.ts",
+    ".next-live-final/types/**/*.ts",
+    ".next-live-final/dev/types/**/*.ts",
+    ".next-live-ready/types/**/*.ts",
+    ".next-live-ready/dev/types/**/*.ts",
+    ".next-live-handoff/types/**/*.ts",
+    ".next-live-handoff/dev/types/**/*.ts",
+    ".next-live-conversation/types/**/*.ts",
+    ".next-live-conversation/dev/types/**/*.ts",
+    ".next-live-final-conversation/types/**/*.ts",
+    ".next-live-final-conversation/dev/types/**/*.ts",
+    ".next-live-onequery/types/**/*.ts",
+    ".next-live-onequery/dev/types/**/*.ts",
+    ".next-live-direct/types/**/*.ts",
+    ".next-live-direct/dev/types/**/*.ts",
+    ".next-live-monitor/types/**/*.ts",
+    ".next-live-monitor/dev/types/**/*.ts",
+    ".next-live-monitor-final/types/**/*.ts",
+    ".next-live-monitor-final/dev/types/**/*.ts",
+    ".next-live-monitor-ready/types/**/*.ts",
+    ".next-live-monitor-ready/dev/types/**/*.ts",
+    ".next-live-voicemail/types/**/*.ts",
+    ".next-live-voicemail/dev/types/**/*.ts",
+    ".next-live-call-controls/types/**/*.ts",
+    ".next-live-call-controls/dev/types/**/*.ts",
+    ".next-live-listening/types/**/*.ts",
+    ".next-live-listening/dev/types/**/*.ts",
+    ".next-recording-serial/types/**/*.ts",
+    ".next-recording-serial/dev/types/**/*.ts",
+    ".next-monitor-toast-avatar/types/**/*.ts",
+    ".next-monitor-toast-avatar/dev/types/**/*.ts",
+    ".next-monitor-toast-avatar-final/types/**/*.ts",
+    ".next-monitor-toast-avatar-final/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }

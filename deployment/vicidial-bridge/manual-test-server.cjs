@@ -42,9 +42,10 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
         return json({callId:id,first:agent.first,maxCallDurationSeconds:callLimitSeconds,testOnly:true});
       }finally{starting--;}
     }
-    const c=calls.get(v.callId);
+    const c=calls.get(v.callId)||recent.find(item=>item.id===v.callId);
     if(!c)return v.action==='ended'?json({saved:true,testOnly:true}):json({error:'Manual session not found'},404);
     if(c.externalCallId!==v.externalCallId)return json({error:'Manual session mismatch'},409);
+    if(v.action==='recording'){c.ai_recording_id=v.aiRecordingId;c.recording_active=false;return json({saved:true});}
     if(v.action==='media-ready')return json({saved:true,testOnly:true});
     if(v.action==='ended'||v.action==='hangup'){c.status='COMPLETED';c.conversation_state='COMPLETED';recent.unshift(c);recent.splice(20);calls.delete(c.id);await stop(c);return json({ended:true,testOnly:true});}
     if(v.action==='interrupt')return request('interrupt',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}',signal:init.signal},c.owner);
@@ -74,7 +75,7 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
       if(calls.size||starting)throw Error('Finish the current local call before changing its settings');
       Object.assign(agent,{name:a.name.trim(),voice:a.voice,script:a.script,first:a.first});
     }
-    return {testOnly:true,calls:[...calls.values(),...recent].map(c=>({id:c.id,agent_name:c.agent_name,status:c.status,conversation_state:c.conversation_state,conversation_history:c.conversation_history})),agent:{name:agent.name,voice:agent.voice,first:agent.first}};
+    return {testOnly:true,calls:[...calls.values(),...recent].map(c=>({id:c.id,agent_name:c.agent_name,status:c.status,conversation_state:c.conversation_state,conversation_history:c.conversation_history,ai_recording_id:c.ai_recording_id,recording_active:c.recording_active||false})),agent:{name:agent.name,voice:agent.voice,first:agent.first}};
   },async close(){const active=[...calls.values()];calls.clear();await Promise.allSettled(active.map(stop));}};
 }
 

@@ -209,6 +209,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
         if (event.type === "timing") metric({ stage: event.stage, elapsedMs: event.elapsedMs, turnId: event.turnId });
         if (event.type === "error") throw Error(event.error);
         if (event.turnId !== turnId) return;
+        if (event.type === "end_call" && event.reason === "voicemail") { stop(); setStatus("Call ended — voicemail detected"); return; }
         if (event.type === "end_call" && event.reason === "no_response") endAfterPlayback.current = true;
         if (!hiddenTurns.current.has(turnId) && event.type === "user" && event.final === true && event.source === (audio ? "stt" : "typed")) setLines(old => old.some(v => v.id === turnId && v.role === "Customer") ? old : [...old, { id: turnId, role: "Customer", text: event.text }]);
         if (!hiddenTurns.current.has(turnId) && event.type === "delta") setLines(old => old.some(v => v.id === turnId && v.role === "Agent")

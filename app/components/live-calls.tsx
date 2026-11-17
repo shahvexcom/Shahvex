@@ -11,6 +11,7 @@ import {
   FiGrid,
   FiList,
   FiPhoneOff,
+  FiPause,
   FiPlay,
   FiRadio,
   FiSearch,
@@ -234,13 +235,16 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
           <a href="/controler/live-monitor" className="admin-outline">Open live conversation monitor</a>
           <small className="live-pakistan-clock">Pakistan time {currentTime || "--:--"}</small>
         </div>
+        <button className="admin-outline" disabled={busy || loading} onClick={() => command({ action: "pause-all" })} title="Stop new VICIdial calls while current calls continue">
+          <FiPause /><span>Pause new calls</span>
+        </button>
         <button className="admin-outline danger-outline" disabled={busy || loading || !live.length} onClick={() => command({ action: "hangup-all" })}>
           <FiPhoneOff />
           <span>End all active ({live.length})</span>
         </button>
         <button className="admin-primary live-start-all" disabled={busy || loading || !readyAgents.length} onClick={() => command({ action: "start-all" })}>
           <FiPlay />
-          <span>{busy ? "Starting..." : `Start all ready agents (${readyAgents.length})`}</span>
+          <span>{busy ? "Working..." : `Start all ready agents (${readyAgents.length})`}</span>
         </button>
       </div>
 

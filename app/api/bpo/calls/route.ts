@@ -115,7 +115,7 @@ async function dialingAgents(bpoId: string, mode: Mode, usage: Awaited<ReturnTyp
 }
 
 async function callProgressFor(bpoId: string, mode: Mode) {
-  const result = await (await db()).query(`SELECT c.id,c.status,c.lead_name,c.lead_number,c.duration_seconds,c.created_at,c.dialing_source,c.summary,c.notes,c.transcript,
+  const result = await (await db()).query(`SELECT c.recording_serial,c.id,c.status,c.lead_name,c.lead_number,c.duration_seconds,c.created_at,c.dialing_source,c.summary,c.notes,c.transcript,
     COALESCE(s.script_text,'') script_text FROM agent_calls c JOIN bpo_created_agents b ON b.agent_id=c.agent_id
     LEFT JOIN LATERAL (SELECT script_text FROM script_assignments WHERE agent_id=c.agent_id ORDER BY created_at DESC LIMIT 1) s ON TRUE
     WHERE b.bpo_id=$1 AND c.dialing_source=$2 ORDER BY c.created_at DESC LIMIT 30`, [bpoId, mode]);
@@ -124,7 +124,7 @@ async function callProgressFor(bpoId: string, mode: Mode) {
 
 async function endActiveCalls(bpoId: string, reason: "timer" | "minutes") {
   const client = await db();
-  const result = await client.query(`SELECT c.id,c.telnyx_call_control_id,t.secret_ciphertext,c.max_call_duration_seconds,c.answered_at
+  const result = await client.query(`SELECT c.recording_serial,c.id,c.telnyx_call_control_id,t.secret_ciphertext,c.max_call_duration_seconds,c.answered_at
     FROM agent_calls c JOIN bpo_created_agents b ON b.agent_id=c.agent_id
     JOIN agent_credentials ac ON ac.agent_id=c.agent_id AND ac.provider='TELNYX' JOIN ai_credentials t ON t.id=ac.credential_id
     WHERE b.bpo_id=$1 AND c.status='ANSWERED' AND c.telnyx_call_control_id IS NOT NULL AND c.ending_requested=FALSE`, [bpoId]);
@@ -185,7 +185,7 @@ export async function GET(request: Request) {
     }
     const client = await db();
     const [calls, metrics] = await Promise.all([
-      client.query(`SELECT c.id,c.call_type,c.status,c.lead_name,c.lead_number,c.duration_seconds,c.outcome,c.created_at,c.recording_url,c.summary,c.transcript,a.name agent_name,COALESCE(a.avatar_url,'') agent_avatar
+      client.query(`SELECT c.recording_serial,c.id,c.call_type,c.status,c.lead_name,c.lead_number,c.duration_seconds,c.outcome,c.created_at,c.recording_url,c.summary,c.transcript,a.name agent_name,COALESCE(a.avatar_url,'') agent_avatar
         FROM agent_calls c JOIN agents a ON a.id=c.agent_id LEFT JOIN bpo_created_agents b ON b.agent_id=c.agent_id
         WHERE (c.call_type='LEAD' AND b.bpo_id=$1) OR (c.call_type='QUICK_DIAL' AND c.agent_id=$1) ORDER BY c.created_at DESC LIMIT 100`, [session.agentId]),
       client.query(`SELECT COUNT(*)::int total,COUNT(*) FILTER (WHERE c.created_at >= date_trunc('day',NOW()))::int today,COUNT(*) FILTER (WHERE c.status='COMPLETED')::int completed,COUNT(*) FILTER (WHERE c.recording_url IS NOT NULL AND c.recording_url <> '')::int recordings,COUNT(*) FILTER (WHERE c.outcome IS NOT NULL AND c.outcome <> '')::int outcomes
