@@ -23,7 +23,7 @@ import {
 
 type Call = {
   id: string;
-  agent_id?: string;
+  agent_id?: string; native_only?:boolean; native_connected?:boolean;
   updated_at?: string;
   status: string;
   agent_name: string;
@@ -60,6 +60,7 @@ type AgentCard = {
   telephony_provider?:string;
   is_queued?:boolean;
   id: string;
+  nativeOnly?: boolean;
   kind: "running" | "ready" | "idle";
   name: string;
   outbound_number: string;
@@ -77,6 +78,7 @@ type AgentCard = {
 const activeStates = ["INITIATED", "RINGING", "ANSWERED"];
 
 function duration(call: Call, now: number) {
+  if(call.native_only)return "Connected";
   const s = Math.max(0, Math.floor((now - new Date(call.answered_at || call.created_at).getTime()) / 1000));
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
@@ -89,7 +91,7 @@ function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAg
     const schedule = agent.schedule || { isEnabled: false, startTime: "09:00", endTime: "17:00", isActive: false };
     const isReady = Boolean(agent.is_ready);
     return {
-      id: agent.id,
+      id: agent.id,nativeOnly:runningCall?.native_only,
       local_voice_name:agent.local_voice_name||agent.local_voice_id,extension_route:agent.extension_route,remote_user:agent.remote_user,campaign_name:agent.campaign_name,campaign_category:agent.campaign_category,
       is_queued: agent.is_queued,
       telephony_provider: agent.telephony_provider,
@@ -112,7 +114,7 @@ function buildAgentCards(calls: Call[], ready: ReadyAgent[], allAgents: RosterAg
     .filter((call) => activeStates.includes(call.status))
     .filter((call) => !rosterCards.some((agent) => agent.name === call.agent_name))
     .map((call) => ({
-      id: call.id,
+      id: call.id,nativeOnly:call.native_only,
       kind: "running",
       name: call.agent_name,
       outbound_number: call.agent_number,
@@ -142,12 +144,15 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
   const [now, setNow] = useState<number>(0);
   const [currentTime, setCurrentTime] = useState("");
 
+  const nativeFailed=useRef(false);
+  const reportNative=(data:{native_status?:{available:boolean}})=>{const failed=data.native_status?.available===false;if(failed&&!nativeFailed.current)onAction("VICIdial live status is temporarily unavailable.","error");nativeFailed.current=failed;};
   const fullLoadBusy=useRef(false);
   const load = useCallback(async () => {
     if(fullLoadBusy.current)return;fullLoadBusy.current=true;
     try {
       const r = await fetch("/api/admin/calls", { cache: "no-store", signal: AbortSignal.timeout(15000) }), d = await r.json();
       if (r.ok) {
+        reportNative(d);
         setCalls(previous=>{const prior=new Map(previous.map(c=>[c.id,c]));return (d.calls||[]).map((c:Call)=>{const old=prior.get(c.id);return old&&Date.parse(old.updated_at||'')>Date.parse(c.updated_at||'')?{...c,...old}:c;});});
         setReady(d.readyAgents || []);
         setAllAgents(d.allAgents || []);
@@ -197,7 +202,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
     let stopped=false,timer:ReturnType<typeof setTimeout>;const controller=new AbortController();
     const refresh=async()=>{try{
       const response=await fetch('/api/admin/calls?updates=1',{cache:'no-store',signal:AbortSignal.any([controller.signal,AbortSignal.timeout(8000)])});
-      if(!response.ok)return;const data=await response.json();if(stopped)return;
+      if(!response.ok)return;const data=await response.json();if(stopped)return;reportNative(data);
       setCalls(previous=>{const old=new Map(previous.map(c=>[c.id,c]));return (data.calls||[]).map((c:Call)=>{const prior=old.get(c.id);return prior&&Date.parse(prior.updated_at||'')>Date.parse(c.updated_at||'')?prior:{...prior,...c};});});
       setMetrics(data.metrics||{});setCurrentTime(data.currentTime||'');onLiveCount((data.calls||[]).filter((c:Call)=>activeStates.includes(c.status)).length);
     }catch{/* Existing status stays visible while the next poll reconnects. */}finally{if(!stopped)timer=setTimeout(refresh,1000);}};
@@ -205,7 +210,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
   },[onLiveCount]);
 
   const live = calls.filter(c=>activeStates.includes(c.status));
-  const readyAgents = useMemo(() => allAgents.filter((agent) => Boolean(agent.is_ready) && !agent.is_running && !agent.deleted_at), [allAgents]);
+  const readyAgents = useMemo(() => allAgents.filter((agent) => Boolean(agent.is_ready) && !agent.is_running && !agent.deleted_at && !calls.some(call=>call.agent_id===agent.id&&activeStates.includes(call.status))), [allAgents,calls]);
   const agents = useMemo(() => {
     const candidate = buildAgentCards(calls, ready, allAgents);
     const searchValue = query.trim().toLowerCase();
@@ -238,7 +243,7 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
         <button className="admin-outline" disabled={busy || loading} onClick={() => command({ action: "pause-all" })} title="Stop new VICIdial calls while current calls continue">
           <FiPause /><span>Pause new calls</span>
         </button>
-        <button className="admin-outline danger-outline" disabled={busy || loading || !live.length} onClick={() => command({ action: "hangup-all" })}>
+        <button className="admin-outline danger-outline" disabled={busy || loading || !live.some(c=>!c.native_only)} onClick={() => command({ action: "hangup-all" })}>
           <FiPhoneOff />
           <span>End all active ({live.length})</span>
         </button>
@@ -401,11 +406,11 @@ export function LiveCalls({ onAction, onLiveCount }: { onAction: (message: strin
 function ReadyAgents({ agents, view, busy, startingId, start, viewCall, stopQueue }: { agents: AgentCard[]; view: string; busy: boolean; startingId: string; start: (id: string) => void; viewCall: (id: string) => void; stopQueue: (id:string)=>void }) {
  const groups=[...new Set(agents.map(a=>a.campaign_category||a.campaign_name||'Unassigned agents'))].sort((a,b)=>Math.min(...agents.filter(x=>(x.campaign_category||x.campaign_name||'Unassigned agents')===a).map(x=>Number(x.remote_user)||999999))-Math.min(...agents.filter(x=>(x.campaign_category||x.campaign_name||'Unassigned agents')===b).map(x=>Number(x.remote_user)||999999))||a.localeCompare(b));
  return <div className="call-agent-groups">{groups.map(group=><section className="call-agent-group" key={group}><header className="call-agent-group-title"><div><span>Campaign team</span><h3>{group}</h3></div><b>{agents.filter(a=>(a.campaign_category||a.campaign_name||'Unassigned agents')===group).length} agents</b></header><div className={`ready-agent-grid ${view}`}>{agents.filter(a=>(a.campaign_category||a.campaign_name||'Unassigned agents')===group).sort((a,b)=>(Number(a.remote_user)||999999)-(Number(b.remote_user)||999999)||a.name.localeCompare(b.name)).map(agent=><article key={agent.id} className={`call-agent-card ${agent.kind}`}>
-  <header className="call-agent-heading"><div className="call-agent-avatar">{agent.avatar_url?<img src={agent.avatar_url} alt=""/>:agent.name.split(' ').map(p=>p[0]).join('').slice(0,2)}</div><div className="call-agent-identity"><span className="call-agent-state"><i/>{agent.kind==='running'?'On a call':agent.kind==='ready'?'Ready to call':agent.is_queued?'Waiting for a call':agent.extension_route?'Not ready':'Route needed'}</span><h3>{agent.name}</h3><p>{agent.campaign_category||agent.campaign_name||'No campaign assigned'}{agent.outbound_number&&agent.campaign_name?` · ${agent.outbound_number}`:''}</p></div></header>
+  <header className="call-agent-heading"><div className="call-agent-avatar">{agent.avatar_url?<img src={agent.avatar_url} alt=""/>:agent.name.split(' ').map(p=>p[0]).join('').slice(0,2)}</div><div className="call-agent-identity"><span className="call-agent-state"><i/>{agent.nativeOnly?'Connected in VICIdial':agent.kind==='running'?'On a call':agent.kind==='ready'?'Ready to call':agent.is_queued?'Waiting for a call':agent.extension_route?'Not ready':'Route needed'}</span><h3>{agent.name}</h3><p>{agent.campaign_category||agent.campaign_name||'No campaign assigned'}{agent.outbound_number&&agent.campaign_name?` · ${agent.outbound_number}`:''}</p></div></header>
   <div className="call-agent-routing"><div><span>Extension route</span><strong>{agent.extension_route||'Not assigned'}</strong></div><div><span>Remote agent</span><strong>{agent.remote_user||'Not assigned'}</strong></div></div>
   <div className="call-agent-detail"><span>Voice <b>{agent.local_voice_name||'Not selected'}</b></span><span><b>{agent.dialed_calls||0}</b> calls</span></div>
   {agent.kind==='running'&&<p className="call-agent-customer">{agent.lead_name} <span>{agent.lead_number}</span></p>}
-  <footer>{agent.kind==='running'?<button className="admin-primary" onClick={()=>agent.callId&&viewCall(agent.callId)}><FiExternalLink/>Open live call</button>:agent.is_queued?<button className="admin-outline" disabled={busy} onClick={()=>stopQueue(agent.id)}><FiPhoneOff/>Stop queue</button>:agent.kind==='ready'?<button className="admin-primary" disabled={busy||Boolean(startingId)} onClick={()=>start(agent.id)}><FiPlay/>{startingId===agent.id?'Starting…':'Start agent'}</button>:<span className="call-agent-setup">{agent.extension_route?'Complete calling setup to start':'Assign a route in VoIP to receive calls'}</span>}</footer>
+  <footer>{agent.nativeOnly?<span className="call-agent-setup">Connected in VICIdial · AI audio not linked</span>:agent.kind==='running'?<button className="admin-primary" onClick={()=>agent.callId&&viewCall(agent.callId)}><FiExternalLink/>Open live call</button>:agent.is_queued?<button className="admin-outline" disabled={busy} onClick={()=>stopQueue(agent.id)}><FiPhoneOff/>Stop queue</button>:agent.kind==='ready'?<button className="admin-primary" disabled={busy||Boolean(startingId)} onClick={()=>start(agent.id)}><FiPlay/>{startingId===agent.id?'Starting…':'Start agent'}</button>:<span className="call-agent-setup">{agent.extension_route?'Complete calling setup to start':'Assign a route in VoIP to receive calls'}</span>}</footer>
  </article>)}</div></section>)}</div>;
 }
 

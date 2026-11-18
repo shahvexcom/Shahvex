@@ -1,5 +1,5 @@
 import * as openingPcmCache from "../gateway/opening-pcm-cache.cjs";
-import { recoveryReply } from "../gateway/conversation-recovery.cjs";
+import { recoveryReply, groundedReplyText } from "../gateway/conversation-recovery.cjs";
 import { createReplayGuard } from "../gateway/reply-integrity.cjs";
 import { shared as pcmCache } from "../gateway/tts-pcm-cache.cjs";
 import { createSpeechRenderer } from "../gateway/speech-text.cjs";
@@ -145,7 +145,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
         // Hold questions until complete so split tokens cannot leak into text or audio.
         const phraseAllowed = () => maxStatementSentences===undefined && !(messages as {role:string}[]).some(m=>m.role==='assistant') && !completedQuestions.length && !repeatedIntroduction(phrase) && phraseStreaming && !/^\s*(?:got it\b|thank(?:s| you)\b)/i.test(phrase) && !/^\s*(?:is|are|do|would|will|can|could|may|have)\b/i.test(phrase);
         while ((boundary = phraseAllowed() ? speechBoundary(phrase, true) : sentenceBoundary(phrase))) {
-          let part = withoutPatienceFiller(withoutInterruptionMarkers(phrase.slice(0, boundary)));
+          let part = groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase.slice(0, boundary))),customerText);
           phrase = phrase.slice(boundary);
           if (!part.trim() || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !replayGuard.allow(part) || !allowTimePermission && isTimePermission(part)) continue;
           if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(part.trim())){fillerPrefix=part;continue;}
@@ -165,7 +165,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       let at; while ((at = pending.indexOf("\n")) >= 0) { const line = pending.slice(0, at); pending = pending.slice(at + 1); await consume(line); }
     }
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
-    phrase = withoutPatienceFiller(withoutInterruptionMarkers(phrase));
+    phrase = groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText);
     if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(phrase.trim())){fillerPrefix=phrase;phrase='';}
     if (phrase && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && replayGuard.allow(phrase) && (allowTimePermission || !isTimePermission(phrase))) {
       if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}

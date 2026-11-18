@@ -24,6 +24,14 @@ test('conditional branch selection stays with the model after the first question
  assert.equal(acknowledgmentReply({script:branched},'Yes',[A('Do you have existing coverage?')],{completed:[]}),undefined);
 });
 
+test('okay after an answer to a side question resumes the pending question in a branched script',()=>{
+ const {rememberQuestions}=require('../gateway/question-memory.cjs');
+ const history=[A('Do you have existing coverage?'),U('Why are you calling me?'),A('I am calling to review your service appointment.')];
+ const memory=rememberQuestions([...history,U('Okay.')]);
+ const branched=script+'\nIf yes, ask about the policy.';
+ assert.equal(acknowledgmentReply({script:branched},'Okay.',history,memory),'Do you have existing coverage?');
+});
+
 test('wait and pause requests are never fillers or acknowledgments',()=>{const {interruptionKind,asksToWait}=require('../gateway/conversation-flow.cjs');for(const text of ['Wait a second.','Wait one second please.','Hold on.','Just a second.','Give me a moment.','One second please.']){assert.equal(interruptionKind(text),'interrupt');assert.equal(asksToWait(text),true,text);}assert.equal(asksToWait('Yeah'),false);assert.equal(asksToWait('I am 65.'),false);});
 
 test('audio confirmation repeats the unheard step and never advances on hello',()=>{

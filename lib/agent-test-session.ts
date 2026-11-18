@@ -240,9 +240,14 @@ export async function handleTestSession(
                 "Can you hear me?",
                 "I haven't heard a response, so I'll end the call now. Goodbye.",
               ];
+              // Speech can restart the quiet timer, but cannot renew the
+              // call-wide budget of presence questions.
+              let checkIndex = silenceStep - 1;
+              while(checkIndex < checks.length && session.messages.some(m=>m.role==='assistant'&&m.content===checks[checkIndex]))checkIndex++;
+              if(checkIndex >= checks.length){await send({type:'end_call',reason:'no_response',delayMs:0});await send({type:'done'});return;}
               await streamAgentReply({
                 messages: [],
-                fixedSpeech: checks[silenceStep - 1],
+                fixedSpeech: checks[checkIndex],
                 voice: session.config.voice,
               customerText: text,
               emotionState: (session.voiceEmotionState ??= { turn: 0 }),
@@ -254,7 +259,7 @@ export async function handleTestSession(
                   answer = text;
                 },
               });
-              if (silenceStep === 3)
+              if (checkIndex === 2)
                 await send({ type: "end_call", reason: "no_response", delayMs:5000 });
               await send({ type: "done" });
               return;
@@ -285,7 +290,7 @@ export async function handleTestSession(
             }
             // Conduct and stop decisions outrank sales/script progression. The bridge
             // and browser already consume end_call after draining queued playback.
-            if(isVoicemailGreeting(text)){
+            if(isVoicemailGreeting(text,session.messages.filter(m=>m.role==='user').slice(0,-1).slice(-3).map(m=>m.content))){
               session.endedReason='voicemail';
               await send({type:'end_call',reason:'voicemail'});
               await send({type:'done'});return;

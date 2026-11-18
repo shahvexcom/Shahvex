@@ -6,6 +6,7 @@ const {OpeningResponseTimeout}=require('../../gateway/opening-response-timeout.c
 const {interruptionKind}=require('../../gateway/conversation-flow.cjs');
 const http=require('node:http'),net=require('node:net'),crypto=require('node:crypto');
 const fs=require('node:fs'),path=require('node:path');
+const {setTimeout:delay}=require('node:timers/promises');
 const {createAiRecording,recoverAiRecording}=require('./ai-recording.cjs');
 const {publish:publishListeners,closeListeners}=require('./live-listeners.cjs');
 const {createTelephoneDownsampler}=require('./audio-quality.cjs');
@@ -43,8 +44,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     try{const response=await callback(value);if(response.ok){retryStates.delete(value.eventId);const result=await response.json();
       const active=[...calls.values()].find(c=>c.externalCallId===value.externalCallId);
       if(active&&value.action==='retry-sync'){
+        active.syncHandoffPending=Boolean(result.transferPending||result.transferUncertain||result.awaitingHuman);
         if(result.nativeLinkPending)active.linkChecks=(active.linkChecks||0)+1;
-        active.syncWanted=Boolean(result.syncPending||(result.nativeLinkPending&&(active.linkChecks||0)<5));
+        active.syncWanted=Boolean(active.syncDirty||result.syncPending||(result.nativeLinkPending&&(active.linkChecks||0)<5));
+        active.syncDirty=false;
         if(active.syncWanted)scheduleSync(active);
       }
       if(result.humanConnected||value.action==='customer-ended'||result.transferSubmitted)releaseAiMedia(value.externalCallId);
@@ -58,10 +61,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
   }finally{flushing=false;}}
   function scheduleSync(c){
     if(c.closed||c.transferred||c.syncRetryTimer)return;
-    c.syncRetryTimer=setTimeout(()=>{c.syncRetryTimer=undefined;if(c.syncWanted&&!c.closed&&!c.transferred)event(c,'retry-sync');},1000);c.syncRetryTimer.unref();
+    c.syncRetryTimer=setTimeout(()=>{c.syncRetryTimer=undefined;if(c.syncWanted&&!c.closed&&!c.transferred)event(c,'retry-sync',{},true);},1000);c.syncRetryTimer.unref();
   }
-  function event(c,action,extra={}){
-    if(action==='retry-sync'){c.syncWanted=true;if(deliveringCalls.has(c.externalCallId)){scheduleSync(c);return;}}
+  function event(c,action,extra={},scheduled=false){
+    if(action==='retry-sync'){c.syncWanted=true;if(deliveringCalls.has(c.externalCallId)){if(!scheduled)c.syncDirty=true;scheduleSync(c);return;}}
     const value=action==='retry-sync'&&pendingSync.get(c.externalCallId)||{action,eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,...extra};if(action==='retry-sync')pendingSync.set(c.externalCallId,value);persistEvent(value);
     if(urgent(action)||action==='retry-sync'){void deliverEvent(value,path.join(spoolDir,`${value.eventId}.event.json`),urgent(action));if(action==='retry-sync')scheduleSync(c);}else void flushEvents();
   }
@@ -171,7 +174,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       const input=c.captureInput.subarray(0,320);c.captureInput=c.captureInput.subarray(Math.min(320,c.captureInput.length));
       if(!c.playbackReady&&c.queue.length&&(c.queue.length>=bufferFrames||c.synthesisDone))c.playbackReady=true;
       if(c.playbackReady&&!c.queue.length&&c.processing&&!c.synthesisDone){c.underruns=(c.underruns||0)+1;c.playbackReady=false;}
-      const frame=!c.ending&&!c.hold&&!c.handoffPending&&!writing&&c.playbackReady&&c.queue.length?c.queue.shift():Buffer.alloc(0);
+      // Listen before speaking, and keep queued audio silent while the remote
+      // party is speaking or their utterance is being classified.
+      const listening=tick-c.started<500||c.frames.length>0||(c.recognizing||0)>0||(c.lastVoicedAt!==undefined&&tick-c.lastVoicedAt<350);
+      const frame=!listening&&!c.ending&&!c.hold&&!c.handoffPending&&!writing&&c.playbackReady&&c.queue.length?c.queue.shift():Buffer.alloc(0);
       publishListeners(c,input,frame);
       try{c.recorder?.frame(input,frame);}catch{logger('AI recording failed');void endCustomerCall();return;}
       if(!frame.length)return;
@@ -184,12 +190,22 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       const epoch=++c.epoch;c.controller?.abort();const abort=new AbortController();c.controller=abort;c.processing=true;c.playbackReady=false;c.synthesisDone=false;c.openingTurn=payload.opening===true;
       if(payload.text?.trim())c.openingResponse.response();
       try{
-        const response=await callback({action:'turn',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,...payload},abort.signal);
-        if(response.status===409){
+        let response;
+        for(let attempt=0;;attempt++){
+          if(abort.signal.aborted||closing||c.epoch!==epoch||c.ending||c.hold||c.transferred||c.handoffPending||c.prepareRequested)return;
+          response=await callback({action:'turn',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,...payload},abort.signal);
+          if(response.status!==409)break;
           const state=await response.json().catch(()=>({}));
+          // Rejected admissions have their own event records. Retry with a
+          // new ID only when the server says the turn was not admitted.
+          if(state.retryable&&!state.handoffPending&&attempt<4){
+            await delay(150*(attempt+1),undefined,{signal:abort.signal});
+            continue;
+          }
           if(state.handoffPending||state.retryable||state.error==='Call is no longer handled by AI'||state.error==='Another voice turn is still finishing'){
             logger('Voice turn deferred during handoff or an existing turn; customer call preserved');return;
           }
+          break;
         }
         if(!response.ok||!response.body)throw Error('Voice turn failed');
         let text='';const downsampler=createTelephoneDownsampler(),decoder=new TextDecoder();
@@ -200,9 +216,9 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
             while(c.outputCarry.length>=320){c.queue.push(c.outputCarry.subarray(0,320));c.outputCarry=c.outputCarry.subarray(320);}
             if(c.queue.length>3000)throw Error('Voice playback queue exceeded limit');
           }
-          if(e.type==='user'&&typeof e.text==='string'&&e.text.trim())c.openingResponse.response();
+          if(e.type==='user'&&typeof e.text==='string'&&e.text.trim()){if(machineHeard(e.text)){stopForVoicemail();return;}c.openingResponse.response();}
           if(e.type==='done')c.synthesisDone=true;
-          if(e.type==='end_call'){if(e.reason==='voicemail'){stopForVoicemail();return;}c.endAfterPlayback=true;c.noResponseEnding=e.reason==='no_response';}
+          if(e.type==='end_call'){if(e.reason==='voicemail'){stopForVoicemail();return;}c.endAfterPlayback=true;c.noResponseEnding=e.reason==='no_response';if(c.noResponseEnding)c.silenceClock.finish();}
         };
         for await(const chunk of response.body){if(c.epoch!==epoch||closing)throw Error('Cancelled');text+=decoder.decode(chunk,{stream:true});let at;while((at=text.indexOf('\n'))>=0){consume(text.slice(0,at));text=text.slice(at+1);}}
         text+=decoder.decode();if(text.trim())consume(text);
@@ -245,6 +261,9 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
           if(type===1){if(c||payload.length!==16)throw Error('Invalid AudioSocket identifier');const hex=payload.toString('hex');await initialize(`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`);return;}
           if(type===3)return; // DTMF is not invented customer speech.
           if(type!==0x10||!c||payload.length%2)throw Error('Expected PCM16 8 kHz mono');
+          // Empty AudioSocket heartbeats are not audio. They must not prevent
+          // the wall-clock finalizer from releasing a buffered utterance.
+          if(!payload.length)return;
           c.lastInputAt=Date.now();
           c.inputPcmBytes=(c.inputPcmBytes||0)+payload.length;
           if(!c.handoffPending&&!c.transferred)c.captureInput=Buffer.concat([c.captureInput,payload]).subarray(-16000);
@@ -252,7 +271,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
           let sum=0;for(let i=0;i<payload.length;i+=2)sum+=payload.readInt16LE(i)**2;
           const voiced=Math.sqrt(sum/Math.max(1,payload.length/2))>=(c.queue.length?800:350);
           const ms=payload.length/16;
-          if(voiced){c.openingResponse.voice(Date.now());c.inputVoicedMs=(c.inputVoicedMs||0)+ms;c.voiceFrames+=ms;c.silent=0;c.lastSpeech=Date.now();}else c.silent+=ms;
+          if(voiced){c.lastVoicedAt=Date.now();c.openingResponse.voice(c.lastVoicedAt);c.inputVoicedMs=(c.inputVoicedMs||0)+ms;c.voiceFrames+=ms;c.silent=0;c.lastSpeech=c.lastVoicedAt;}else c.silent+=ms;
           c.pre.push(payload);while(c.pre.reduce((n,b)=>n+b.length,0)>9600)c.pre.shift();
           if(c.voiceFrames>=180&&!c.frames.length){c.frames=c.pre.slice();c.silenceStep=0;c.silenceClock.speech();if(c.noResponseEnding){c.endAfterPlayback=false;c.noResponseEnding=false;}c.speechOverlap=Boolean(c.processing||c.queue.length||c.writing);c.bargeProbeCount=0;c.bargeConfirmed=false;}
           else if(c.frames.length)c.frames.push(payload);
@@ -262,7 +281,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
             c.bargeProbe=(async()=>{try{
               const response=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},AbortSignal.timeout(5000));
               if(!response.ok||c.closed||c.ending||c.handoffPending||c.transferred||c.epoch!==epoch)return;
-              const heard=await response.json();if(isVoicemailGreeting(heard.text)){stopForVoicemail();return;}if(interruptionKind(heard.text)!=='interrupt'||!(c.processing||c.queue.length||c.writing))return;
+              const heard=await response.json();if(machineHeard(heard.text)){stopForVoicemail();return;}if(interruptionKind(heard.text)!=='interrupt'||!(c.processing||c.queue.length||c.writing))return;
               c.bargeConfirmed=true;c.interruptions=(c.interruptions||0)+1;c.playbackReady=false;c.epoch++;c.controller?.abort();c.queue.length=0;c.outputCarry=Buffer.alloc(0);c.processing=false;
               const cancelled=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});
               if(!cancelled.ok)logger('Early speech cancellation pending; full recording retained');
@@ -287,7 +306,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
         if(!overlap){void turn({audio});return;}
         const probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},AbortSignal.timeout(8000));
         if(!probe.ok){logger('Speech classification unavailable; preserving current playback');return;}
-        const heard=await probe.json();if(isVoicemailGreeting(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
+        const heard=await probe.json();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
         if(c.closed||c.epoch!==epoch||!heard.text||['ignore','filler'].includes(heard.kind))return;
         const speaking=c.processing||c.queue.length||c.writing;
         if(heard.kind==='acknowledgment'&&speaking)return;
@@ -299,12 +318,18 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
         void turn({text:heard.text});
       }).catch(()=>logger('Speech decision unavailable; preserving current playback')).finally(()=>{c.recognizing=Math.max(0,(c.recognizing||1)-1);});
     }
+    function machineHeard(text){
+      const recent=c.machineHeardTexts||[];
+      const detected=isVoicemailGreeting(text,recent);
+      if(text&&recent.at(-1)!==text)c.machineHeardTexts=[...recent,text].slice(-3);
+      return detected;
+    }
     function stopForVoicemail(){
       if(!c||c.ending||c.closed||closing)return;
       c.voicemailDetected=true;c.epoch++;c.controller?.abort();c.queue.length=0;c.outputCarry=Buffer.alloc(0);
       c.playbackReady=false;c.processing=false;c.frames=[];c.pre=[];
       c.endAfterPlayback=false;c.noResponseEnding=false;
-      void endCustomerCall();
+      void endCustomerCall(true);
     }
     async function endCustomerCall(localDeadline=false){
       if(!c||c.ending||closing)return;c.ending=true;
@@ -314,7 +339,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
         // Persist/retry provider reconciliation without keeping the caller in silence.
         c.epoch++;c.controller?.abort();c.queue.length=0;c.outputCarry=Buffer.alloc(0);c.frames=[];c.pre=[];c.processing=false;
         persistEvent(value);void deliverEvent(value,path.join(spoolDir,`${value.eventId}.event.json`),true);
-        logger(`No customer response after opening: closing call ${c.callId}`);
+        logger(`${c.voicemailDetected?"Voicemail or automated call screening detected":"No customer response after opening"}: closing call ${c.callId}`);
         socket.end(packet(0));const deadline=setTimeout(()=>socket.destroy(),500);deadline.unref();
         return;
       }
@@ -330,10 +355,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     const silence=setInterval(()=>{
       if(!c||c.ending||c.voicemailDetected||closing)return;
       if(c.openingResponse.tick(Date.now(),Boolean(c.hold||c.transferred||c.handoffPending||c.prepareRequested))){void endCustomerCall(true);return;}
-      const blocked=c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.syncWanted||c.processing||c.queue.length||c.frames.length||c.writing||c.recognizing;
+      const blocked=c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.syncHandoffPending||c.processing||c.queue.length||c.frames.length||c.writing||c.recognizing;
       const step=c.silenceClock.tick(Date.now(),Boolean(blocked));
       if(blocked)return;
-      if((c.limit&&Date.now()-c.started>=c.limit*1000)||(c.endAfterPlayback&&!c.noResponseEnding)||(step===4&&c.endAfterPlayback&&c.noResponseEnding)){void endCustomerCall();return;}
+      if((c.limit&&Date.now()-c.started>=c.limit*1000)||(c.endAfterPlayback&&!c.noResponseEnding)||(step===4&&c.endAfterPlayback&&c.noResponseEnding)){void endCustomerCall(Boolean(c.noResponseEnding));return;}
       if(step===4){c.silenceClock.reset();return;}
       if(step){c.silenceStep=step;void turn({silenceStep:step});}
     },100);silence.unref();

@@ -70,7 +70,19 @@
     ".next-monitor-toast-avatar/types/**/*.ts",
     ".next-monitor-toast-avatar/dev/types/**/*.ts",
     ".next-monitor-toast-avatar-final/types/**/*.ts",
-    ".next-monitor-toast-avatar-final/dev/types/**/*.ts"
+    ".next-monitor-toast-avatar-final/dev/types/**/*.ts",
+    ".next-voicemail-screening-156/types/**/*.ts",
+    ".next-voicemail-screening-156/dev/types/**/*.ts",
+    ".next-native-live-sync/types/**/*.ts",
+    ".next-native-live-sync/dev/types/**/*.ts",
+    ".next-native-live-sync-final/types/**/*.ts",
+    ".next-native-live-sync-final/dev/types/**/*.ts",
+    ".next-six-recording-fixes/types/**/*.ts",
+    ".next-six-recording-fixes/dev/types/**/*.ts",
+    ".next-six-recording-fixes-final/types/**/*.ts",
+    ".next-six-recording-fixes-final/dev/types/**/*.ts",
+    ".next-fast-handoff-final/types/**/*.ts",
+    ".next-fast-handoff-final/dev/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"

@@ -4,6 +4,7 @@ class ConversationSilence{
  constructor(){this.reset();}
  reset(){this.quietSince=undefined;this.checks=0;}
  speech(){this.reset();}
+ finish(){this.checks=3;this.quietSince=undefined;}
  tick(now,blocked){
   if(blocked){this.quietSince=undefined;return;}
   if(this.checks>=4)return;

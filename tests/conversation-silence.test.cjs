@@ -91,3 +91,25 @@ test('unrecognized validated speech asks for clarification without inventing a t
     assert.ok(!sessionStore.get(id).messages.some(m=>m.role==='user'));
   }finally{if(id)await dispatch(req('stop',id,{}));global.fetch=original;}
 });
+
+test('presence prompts have a call-wide budget across intervening speech and cannot repeat',async()=>{
+ const original=global.fetch;
+ global.fetch=async()=>new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
+ const {dispatch,sessionStore}=createTesterService({secret,testHooks:true});let id;
+ try{
+  id=(await(await dispatch(req('start',null,{agentId:'budget',config:{...config,first:'customer'}}))).json()).id;
+  const spoken=[];
+  for(let n=0;n<4;n++){
+   const result=await events(await dispatch(req('turn',id,{silenceStep:1})));
+   spoken.push(...result.filter(e=>e.type==='delta').map(e=>e.text));
+   assert.equal(result.some(e=>e.type==='end_call'),n>=2);
+   sessionStore.get(id).messages.push({role:'user',content:n===0?'Well.':'Oh.'});
+  }
+  assert.deepEqual(spoken,['Are you still there?','Can you hear me?',"I haven't heard a response, so I'll end the call now. Goodbye."]);
+ }finally{if(id)await dispatch(req('stop',id,{}));global.fetch=original;}
+});
+test('an early final goodbye waits only for its final hangup window, and real speech cancels it',()=>{
+ const c=new ConversationSilence();c.tick(0,false);c.tick(5000,false);c.finish();
+ assert.equal(c.tick(5100,true),undefined);assert.equal(c.tick(10000,false),undefined);assert.equal(c.tick(14999,false),undefined);assert.equal(c.tick(15000,false),4);
+ c.speech();assert.equal(c.tick(20000,false),undefined);assert.equal(c.tick(25000,false),1);
+});

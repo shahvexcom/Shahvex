@@ -21,6 +21,11 @@ test('zero, partial and full answer sets use requested-human mode without a qual
   await r.prepareRequestedHumanHandoff('call',history,{script:'Ask age and state.'},audit);assert.equal(JSON.parse(saved.args[0]).handoffNotes.length,1);
  }
 });
+test('explicit acceptance of a transfer offer prepares fast handoff; unrelated yes does not',async()=>{
+ let writes=0,saved;const r=results(async(sql,args)=>{writes++;saved=JSON.parse(args[0]);return {rowCount:1};});
+ for(const answer of ['Okay.','Yes.','Go ahead.']){const history=[A('May I connect you with a licensed specialist?'),U(answer)];await r.prepareRequestedHumanHandoff('call',history,{});assert.equal(saved.mode,'CUSTOMER_ACCEPTED_HANDOFF');assert.equal(saved.handoffReady,true);assert.equal(r.hasCurrentQualification({qualification:saved,script_snapshot:{},conversation_history:history}),true);}
+ const before=writes;await assert.rejects(r.prepareRequestedHumanHandoff('call',[A('Can you hear me?'),U('Yes.')],{}),/No current customer consent/);assert.equal(writes,before);
+});
 test('waiting gets one acknowledgment, one status and then silence, never a false connection claim',()=>{
  const {transferAcknowledgment:reply}=load('lib/agent-context-answer.ts');let history=[U('Transfer me.')];
  const first=reply('Transfer me.',[]);assert.equal(first,'Alright, please wait.');history.push(A(first));
@@ -33,13 +38,13 @@ test('waiting gets one acknowledgment, one status and then silence, never a fals
 });
 
 test('requested handoff starts while lead sync is pending; a sync failure does not replace it with more qualification',async()=>{
- for(const fails of [false,true,'pending']){
+ for(const [fails,acceptedOffer] of [[false,false],[true,false],['pending',false],['pending',true]]){
   let syncStarted=false,transfers=0,resolveSync;
-  const call={id:crypto.randomUUID(),status:'ANSWERED',conversation_busy:false,conversation_history:[U('Transfer me.')],script_snapshot:{script:'Ask age then state.'},qualification:{},transfer_status:''};
+  const call={id:crypto.randomUUID(),status:'ANSWERED',conversation_busy:false,conversation_history:acceptedOffer?[A('May I connect you with a specialist?'),U('Okay.')]:[U('Transfer me.')],script_snapshot:{script:'Ask age then state.'},qualification:{},transfer_status:''};
   const c={id:crypto.randomUUID(),enabled:true,bridge_secret_ciphertext:'bridge-secret',secret_ciphertext:'dialer-secret',live_config:{enabled:true}};
   const query=async(sql)=>{if(sql.startsWith('SELECT * FROM voip_connections'))return {rows:[c]};if(sql.startsWith('INSERT INTO vicidial_events'))return {rowCount:1,rows:[{}]};if(sql.startsWith('SELECT transfer_status'))return {rows:[{transfer_status:call.transfer_status}]};if(sql.startsWith('SELECT * FROM agent_calls'))return {rows:[call]};return {rowCount:1,rows:[]};};
   const deps={'./database':{db:async()=>({query})},'./credential-crypto':{decryptCredential:v=>v},'./vicidial-bridge':{verifyBridgeSignature:()=>true},'./vicidial':{},'./vicidial-config':{vicidialLiveConfig:{parse:v=>v}},'./agent-test':{},'./agent-test-speculative':{},'./pc-ai-engine':{},'./vicidial-queue':{},'./vicidial-recording':{},'./agent-runtime':{},'./vicidial-handoff':{},'./bpo-entitlements':{},'./vicidial-results':{
-   hasTransferConsent:()=>true,hasRequestedHumanHandoff:()=>true,conversationHash:()=>'',qualificationHash:()=>'',prepareRequestedHumanHandoff:async()=>({consent:true,handoffReady:true}),collectVicidialResult:async()=>{throw Error('Must not run qualification extraction');},
+   hasTransferConsent:()=>true,hasRequestedHumanHandoff:()=>!acceptedOffer,conversationHash:()=>'',qualificationHash:()=>'',prepareRequestedHumanHandoff:async()=>({consent:true,handoffReady:true}),collectVicidialResult:async()=>{throw Error('Must not run qualification extraction');},
    syncVicidialComments:()=>{syncStarted=true;return new Promise((resolve,reject)=>{resolveSync=()=>fails===true?reject(Error('Native sync temporarily unavailable')):resolve();});},
    transferVicidialCall:async()=>{assert.equal(syncStarted,true);transfers++;call.transfer_status='SUBMITTED';if(fails!=='pending')resolveSync();},
   }};
@@ -49,7 +54,8 @@ test('requested handoff starts while lead sync is pending; a sync failure does n
  }
 });
 
-test('requested human transfer submits the real VICIdial command once despite pending lead sync and missing fields',async()=>{
+test('consented human transfer submits the real VICIdial command once despite pending lead sync and missing fields',async()=>{
+ for(const acceptedOffer of [false,true]){
  let commands=0;
  const call={id:'call',status:'ANSWERED',handoff_ready:true,transfer_consent:true,transfer_status:'',vicidial_sync_status:'RETRY',conversation_busy:false,conversation_history:[U('Transfer me.')],script_snapshot:{script:'Ask age and state.',campaignSettings:{requiredLeadFields:['Age','State']}},live_config:{transferInGroup:'LICENSED',remoteUsers:['9001']},vicidial_call_id:'native-call',vicidial_lead_id:'234',vicidial_agent_user:'9001',bridge_secret_ciphertext:'bridge',secret_ciphertext:'dialer'};
  const query=async(sql)=>{
@@ -63,9 +69,11 @@ test('requested human transfer submits the real VICIdial command once despite pe
   requireVicidialSuccess:v=>{assert.match(v,/SUCCESS:/);},
   vicidialRequest:async(_url,_user,_key,p)=>{if(p.function==='agent_status')return 'status|callerid|lead_id\nINCALL|native-call|234';if(p.function==='in_group_status')return 'ingroups|agents_waiting\nLICENSED|1';commands++;assert.equal(p.function,'ra_call_control');assert.equal(p.stage,'INGROUPTRANSFER');assert.equal(p.ingroup_choices,'LICENSED');return 'SUCCESS: ra_call_control';},
  }});
- call.qualification={mode:'CUSTOMER_REQUESTED_HUMAN',scriptHash:r.qualificationHash(call.script_snapshot),historyHash:r.conversationHash(call.conversation_history)};
+ if(acceptedOffer)call.conversation_history=[A('May I connect you with a licensed specialist?'),U('Okay.')];
+ call.qualification={mode:acceptedOffer?'CUSTOMER_ACCEPTED_HANDOFF':'CUSTOMER_REQUESTED_HUMAN',scriptHash:r.qualificationHash(call.script_snapshot),historyHash:r.conversationHash(call.conversation_history)};
  assert.deepEqual(await r.transferVicidialCall(call.id),{submitted:true});assert.equal(commands,1);
  await assert.rejects(r.transferVicidialCall(call.id),/already submitted/);assert.equal(commands,1);
+ }
 });
 test('a fact followed by an immediate transfer request retains the fact without treating the request as its value',()=>{
  const r=results(),history=[A('What is your age?'),U('I am 67. Please transfer me.')];
@@ -120,7 +128,7 @@ test('handoff explanation questions never become human requests or transfer cons
 test('the failed recording cannot prepare a customer-requested transfer or write false consent',async()=>{
  let writes=0;const r=results(async()=>{writes++;return {rowCount:1}});
  const h=[A('Let me connect you with a licensed specialist.'),U('Why do you wanna connect me with a licensed agent?'),A('Alright, please wait.'),U('Wait for what?')];
- await assert.rejects(r.prepareRequestedHumanHandoff('call',h,{}),/No current customer request/);assert.equal(writes,0);
+ await assert.rejects(r.prepareRequestedHumanHandoff('call',h,{}),/No current customer consent/);assert.equal(writes,0);
  assert.equal(intent.handoffWaiting(h),false);
 });
 test('real transfer commands and polite first-person requests retain consent, while presence does not grant it',()=>{

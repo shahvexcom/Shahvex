@@ -1,0 +1,3 @@
+module.exports=[11147,a=>{"use strict";var b=a.i(28881);function c({rows:a=4,label:d="Loading content",compact:e=!1}){return(0,b.jsxs)("div",{className:`sv-admin-skeleton ${e?"is-compact":""}`,role:"status","aria-label":d,"aria-busy":"true",children:[(0,b.jsx)("span",{className:"sv-skeleton-heading"}),Array.from({length:a},(a,c)=>(0,b.jsxs)("div",{children:[(0,b.jsx)("i",{}),(0,b.jsx)("span",{}),(0,b.jsx)("span",{})]},c))]})}a.s(["default",0,function(){return(0,b.jsx)("main",{style:{padding:32},children:(0,b.jsx)(c,{rows:8,label:"Loading admin panel"})})}],11147)},89742,function(a){a.n(a.i(11147))}];
+
+//# sourceMappingURL=app_controler_loading_tsx_1qvc32q._.js.map

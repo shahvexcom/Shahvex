@@ -1,0 +1,13 @@
+var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/admin/bpo/route.js")
+R.c("server/chunks/[root-of-the-server]__0v-mjjv._.js")
+R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")
+R.c("server/chunks/lib_20-rzby._.js")
+R.c("server/chunks/_1wmqd8m._.js")
+R.c("server/chunks/_1td2jp9._.js")
+R.c("server/chunks/node_modules_next_dist_11w3z5e._.js")
+R.c("server/chunks/[root-of-the-server]__03ygs4i._.js")
+R.c("server/chunks/node_modules_zod_v4_classic_external_1-pw2v2.js")
+R.c("server/chunks/[root-of-the-server]__15bjnu5._.js")
+R.c("server/chunks/_next-internal_server_app_api_admin_bpo_route_actions_00i64si.js")
+R.m(51624)
+module.exports=R.m(51624).exports

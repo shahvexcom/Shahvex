@@ -9,7 +9,7 @@ test('slow result sync cannot block another speech turn or the call-ended lifecy
   const value=JSON.parse(init.body);
   if(value.action==='connected')return Response.json({callId:crypto.randomUUID(),first:'customer'});
   if(value.action==='media-ready')ready=true;
-  if(value.action==='turn'){turns++;return new Response('{"type":"done"}\n');}
+  if(value.action==='turn'){if(!value.opening)turns++;return new Response('{"type":"done"}\n');}
   if(value.action==='retry-sync'&&!held){held=true;return blocker;}
   if(value.action==='ended'){assert.equal(resolved,false);ended=true;}
   return Response.json({saved:true});
@@ -19,6 +19,20 @@ test('slow result sync cannot block another speech turn or the call-ended lifecy
   const speak=()=>{const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?1500:-1500,i);socket.write(Buffer.concat([...Array.from({length:12},()=>packet(0x10,voice)),...Array.from({length:38},()=>packet(0x10,Buffer.alloc(320)))]));};
   speak();await waitFor(()=>held);speak();await waitFor(()=>turns===2);assert.equal(resolved,false);socket.destroy();await waitFor(()=>ended);
  }finally{releaseSync();socket?.destroy();await new Promise(r=>setTimeout(r,60));await b.flushEvents();b.close();await new Promise(r=>setTimeout(r,40));fs.rmSync(folder,{recursive:true,force:true});}
+});
+
+test('a completed customer turn during an in-flight sync triggers another sync',async()=>{
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-sync-race-'));let release,requests=0,ready=false,turns=0,socket;
+ const blocked=new Promise(r=>release=()=>r(Response.json({saved:true,verificationPending:true})));
+ const uuid='3531'+crypto.randomUUID().slice(4),external='direct-'+uuid.replaceAll('-','');
+ const b=createBridge({siteUrl:'https://isolated.example.test/',connectionId:crypto.randomUUID(),secret:'test-secret-'.repeat(5),spoolDir:folder,logger:()=>{},resolveRegistration:async()=>({uuid,audioUuid:uuid,agentUser:'78601',externalCallId:external}),fetchImpl:async(_url,init)=>{
+  const v=JSON.parse(init.body);if(v.action==='connected')return Response.json({callId:crypto.randomUUID()});if(v.action==='media-ready')ready=true;
+  if(v.action==='retry-sync'){requests++;if(requests===1)return blocked;}
+  if(v.action==='turn'){if(!v.opening)turns++;return new Response('{"type":"done"}\n');}return Response.json({saved:true});
+ }});
+ try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(uuid.replaceAll('-',''),'hex')));await waitFor(()=>ready&&requests===1);
+  const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?1500:-1500,i);socket.write(Buffer.concat([...Array.from({length:12},()=>packet(0x10,voice)),...Array.from({length:38},()=>packet(0x10,Buffer.alloc(320)))]));await waitFor(()=>turns===1);await new Promise(r=>setTimeout(r,40));release();await waitFor(()=>requests>=2);
+ }finally{release();socket?.destroy();b.close();await new Promise(r=>setTimeout(r,60));fs.rmSync(folder,{recursive:true,force:true});}
 });
 
 test('native customer-end closes the bot promptly even when its AudioSocket peer stays open',async()=>{

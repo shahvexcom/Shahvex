@@ -30,12 +30,13 @@ export function verifyVicidialUser(csv: string, username: string) {
   return rows.slice(1).some(row => row[0] === username && row[4] === "Y");
 }
 /** Read-only authenticated user_details probe. No dialer mutations or media claims. */
-export async function vicidialRequest(server: string, username: string, secret: string, fields: Record<string, string>, agentApi = false) {
+export async function vicidialRequest(server: string, username: string, secret: string, fields: Record<string, string>, agentApi = false, timeoutMs = 12000) {
+  timeoutMs=Math.max(1000,Math.min(12000,timeoutMs));const started=Date.now();
   const url = vicidialURL(server), host = url.hostname.replace(/^\[|\]$/g, "");
   let dnsTimer: ReturnType<typeof setTimeout> | undefined;
   const addresses = await Promise.race([
     lookup(host, { all: true }),
-    new Promise<never>((_resolve,reject)=>{dnsTimer=setTimeout(()=>reject(Error("VICIdial DNS verification timed out")),8000);}),
+    new Promise<never>((_resolve,reject)=>{dnsTimer=setTimeout(()=>reject(Error("VICIdial DNS verification timed out")),Math.min(8000,timeoutMs));}),
   ]).finally(()=>clearTimeout(dnsTimer));
   if (!addresses.length || (!allowedVoipHost(url.hostname) && addresses.some(a => !publicAddress(a.address)))) throw Error("VICIdial host is private or reserved and requires server-side approval");
   if (agentApi) url.pathname = url.pathname.replace(/\/vicidial\/non_agent_api\.php$/, "/agc/api.php");
@@ -52,7 +53,7 @@ export async function vicidialRequest(server: string, username: string, secret: 
       response.on("data", chunk => { bytes += chunk.length; if (bytes > 256000) req.destroy(Error("VICIdial response exceeded its limit")); else parts.push(chunk); });
       response.on("end", () => resolve(Buffer.concat(parts).toString("utf8"))); response.on("error", () => reject(Error("VICIdial response failed")));
     });
-    const timer = setTimeout(() => req.destroy(Error("VICIdial verification timed out")), 12000);
+    const timer = setTimeout(() => req.destroy(Error("VICIdial verification timed out")), timeoutMs<12000?Math.max(1,timeoutMs-(Date.now()-started)):timeoutMs);
     req.on("close", () => clearTimeout(timer)); req.on("error", () => reject(Error("VICIdial verification failed; check server access, TLS and API permissions")));
     req.end(data);
   });
