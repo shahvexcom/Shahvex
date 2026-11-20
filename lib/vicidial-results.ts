@@ -494,7 +494,7 @@
 //       continue;
 //     }
 //     if (!pending) continue;
-//     const original = turn.content.trim();
+//     const original = (turn.businessResponse || turn.content).trim();
 //     const text = original
 //       .split(
 //         /(?:[.!?]\s+|,\s*|\s+and\s+)(?=(?:please\s+)?(?:transfer|connect|put)\b)/i,
@@ -1240,7 +1240,7 @@ import { vicidialRequest, requireVicidialSuccess } from "./vicidial";
 import { setRuntimeState } from "./agent-runtime";
 import { requestBridge } from "./vicidial-bridge";
 import { vicidialLiveConfig } from "./vicidial-config";
-type Turn = { role: string; content: string; conversationOnly?: boolean };
+type Turn = { role: string; content: string; conversationOnly?: boolean; businessResponse?: string };
 const handoffStepSchema = z
   .object({
     id: z.string().min(1).max(60),
@@ -1375,11 +1375,12 @@ function answerToQuestion(history: Turn[], question: string) {
         )
       )
         continue;
-      if (clearAnswerPolarity(turn.content) && !turn.content.includes("?"))
+      const response = turn.businessResponse || turn.content;
+      if (clearAnswerPolarity(response) && !response.includes("?"))
         return {
           spoken,
-          answer: turn,
-          polarity: clearAnswerPolarity(turn.content),
+          answer: {...turn,content:response},
+          polarity: clearAnswerPolarity(response),
         };
       break;
     }
@@ -1708,7 +1709,7 @@ export function partialHandoffFields(history: Turn[]) {
       continue;
     }
     if (!pending) continue;
-    const original = turn.content.trim();
+    const original = (turn.businessResponse || turn.content).trim();
     const text = original
       .split(
         /(?:[.!?]\s+|,\s*|\s+and\s+)(?=(?:please\s+)?(?:transfer|connect|put)\b)/i,

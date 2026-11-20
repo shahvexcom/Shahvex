@@ -91,7 +91,7 @@ const message = z
   .strict();
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION } });
-type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean };
+type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
 const statusHeaders = (line: string) =>
   line
@@ -1298,6 +1298,7 @@ export async function vicidialCallback(request: Request) {
         answer = "",
         user = "",
         userConversationOnly = false,
+        businessResponse = "",
         done = false;
       const decoder = new TextDecoder();
       const history: ConversationTurn[] = Array.isArray(
@@ -1309,6 +1310,11 @@ export async function vicidialCallback(request: Request) {
         if (!line.trim()) return;
         const e = JSON.parse(line);
         if (e.type === "user") {user = e.text;userConversationOnly=e.conversationOnly===true;}
+        if (e.type === "conversation-only") userConversationOnly = true;
+        if (e.type === "business-answer" && typeof e.response === "string" && user.startsWith(e.response)) {
+          businessResponse = e.response;
+          userConversationOnly = false;
+        }
         if (e.type === "delta") answer += e.text;
         if (e.type === "done") done = true;
       };
@@ -1320,7 +1326,7 @@ export async function vicidialCallback(request: Request) {
         lastPublished = Date.now();
         const progress = [
           ...history,
-          ...(user ? [{ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}) }] : []),
+          ...(user ? [{ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}),...(businessResponse?{businessResponse}:{}) }] : []),
           ...(answer ? [{ role: "assistant", content: answer }] : []),
         ];
         try {
@@ -1364,7 +1370,7 @@ export async function vicidialCallback(request: Request) {
             /* Disconnects preserve only the received transcript; no restart. */
           } finally {
             await progressWrite;
-            if (user) history.push({ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}) });
+            if (user) history.push({ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}),...(businessResponse?{businessResponse}:{}) });
             if (answer) history.push({ role: "assistant", content: answer });
             await pool.query(turnCompletionSql, [
               JSON.stringify(history),

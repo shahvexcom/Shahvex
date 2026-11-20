@@ -1,13 +1,14 @@
 'use strict';
 const {isListeningSignal}=require('./conversation-resume.cjs');
+const {isPresenceCheck}=require('./conversation-flow.cjs');
 const {explicitlyEndsCall}=require('./customer-conduct.cjs');
 const {handoffWaiting}=require('./handoff-intent.cjs');
 const clarification = 'Please repeat your last question.';
 const isRecovery = text => /lost track|didn.t catch|could you (?:say|tell)|repeat your last question|could you repeat/i.test(text);
 function isCustomerQuestion(value) {
  const text=String(value || '').trim();
- if(isListeningSignal(text)||explicitlyEndsCall(text))return false;
- return /\?$/.test(text) || /^(?:what|why|when|where|who|which|how|can you|could you|would you|do you|did you|are you|is it|have you)\b/i.test(text);
+ if(isListeningSignal(text)||isPresenceCheck(text)||explicitlyEndsCall(text))return false;
+ return /(?:^|[.!?,]\s+)(?:what|why|when|where|who|which|how|(?:can|could|would|will|should|do|did|does|are|is|have|has) (?:you|I|it|this|that|they|he|she|we))\b/i.test(text);
 }
 function recoveryReply(history) {
  const customer=history.filter(m=>m.role==='user').at(-1)?.content || '';

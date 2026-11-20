@@ -40,14 +40,14 @@ test('audio confirmation repeats the unheard step and never advances on hello',(
  assert.equal(audioCheckReply('Hello?',history),'Can you hear me clearly?');
  history.push(U('Hello?'),A('Can you hear me clearly?'));
  assert.equal(audioCheckReply('Yes',history),'Which state do you live in?');
- assert.equal(openingCourtesyReply("I'm fine.",[A('Hello, this is Alex. How are you today?')],{script:"I'm calling to discuss your service appointment."}),"I'm calling to discuss your service appointment. Is now a good time for a brief call?");
+ assert.equal(openingCourtesyReply("I'm fine.",[A('Hello, this is Alex. How are you today?')],{script:"I'm calling to discuss your service appointment."}),"I'm calling to discuss your service appointment.");
 });
 
-test('intro replies explain the script purpose before permission without assuming screening consent',()=>{
+test('intro replies explain the script purpose then wait for acknowledgment',()=>{
  const {openingCourtesyReply,scriptPurpose,audioCheckReply}=require('../gateway/conversation-flow.cjs');
  const h=[A('Hello, this is Sofia from Shahvex. How are you today?')],cfg={script:"I'm calling about your service appointment.\nWhich day works for you?"};
  for(const text of ['Hello',"I am good",'Hello, I am good and how are you today?','How about you?']){
-  const reply=openingCourtesyReply(text,h,cfg);assert.match(reply,/calling about your service appointment\. Is now a good time for a brief call\?/);
+  const reply=openingCourtesyReply(text,h,cfg);assert.match(reply,/calling about your service appointment\.$/);
   assert.doesNotMatch(reply,/Which day|How is your day/);
  }
  assert.match(openingCourtesyReply('How are you today?',h,cfg),/^I'm doing well/);

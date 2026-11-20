@@ -1,11 +1,11 @@
 'use strict';
 const { rememberQuestions } = require('./question-memory.cjs');
-const FLOW_REVISION = 'REC414-playback-v13';
+const FLOW_REVISION = 'REC418-playback-v13.2-identity';
 const { mainQuestions } = require('./conversation-flow.cjs');
 
 // A short listening signal is not an answer to an interrupted business question.
 function isListeningSignal(value) {
-  return /^(?:(?:hello again|hello|hi|hey|absolutely|certainly|of course|please do|sounds good|that's fine|sure thing|carry on|proceed|yes|yeah|yep|yup|okay|ok|well|hmm|hm|mm|mhm|mm[- ]?hmm|uh[- ]?huh|sure|right|alright|all right|go ahead|please continue|continue|I'm listening|I am listening|I'm here|I am here|tell me more|fine|good|great|not bad|I'm fine|I am fine|I'm good|I am good|I'm well|I am well)[\s,.!?-]*)+$/i.test(String(value || '').trim());
+  return /^(?:(?:hello again|hello|hi|hey|absolutely|certainly|of course|please do|sounds good|that's fine|sure thing|carry on|proceed|yes|yeah|yep|yup|okay|ok|well|hmm|hm|mm|mhm|mm[- ]?hmm|uh[- ]?huh|sure|right|alright|all right|go ahead|please continue|continue|I'm listening|I am listening|I'm here|I am here|tell me more|you know|fine|good|great|not bad|I'm fine|I am fine|I'm good|I am good|I'm well|I am well)[\s,.!?-]*)+$/i.test(String(value || '').trim());
 }
 // A social answer to the intro is not a screening answer or a missing-question request.
 function isWellbeingReply(value) {
@@ -62,7 +62,7 @@ function repairInstruction(repair) {
   if (repair.kind === 'continue') return 'Keep ownership of this outbound call and continue from the next applicable unfinished script step. Completed answers remain binding. A listening signal is not a missing business answer. Do not repeat the introduction, purpose, answered questions or a declined handoff. Never say I am here and listening, please go ahead, or ask what the customer wants help with. If all applicable steps are finished, use the configured closing rather than restarting the pitch.';
 
   if (repair.kind === 'introduction') return 'The customer interrupted your initial introduction with a listening signal. Reintroduce the configured name and company in one short freshly phrased sentence. Preserve mandatory disclosures. Start with Hi or Hello, state the configured name and company, and finish with one natural wellbeing question such as How are you today? Do not explain the purpose yet. Wait for their reply. Source introduction: ' + JSON.stringify(repair.source);
-  if (repair.kind === 'purpose') return 'The customer has acknowledged your introduction and is listening. Briefly answer any wellbeing question first. Explain the actual purpose from the assigned script and goal in one or two natural sentences, around 20 to 35 words if supported. Use your own words, preserving required disclosures and uncertainty. Do not stop at a presence acknowledgment. Do not invent offers or facts. Then ask one relevant permission or next script question, respecting permission already given.';
+  if (repair.kind === 'purpose') return 'The customer has acknowledged your introduction and is listening. Briefly answer any wellbeing question first. Explain the actual purpose from the assigned script and goal in one or two natural sentences, around 20 to 35 words if supported. Use your own words, preserving required disclosures and uncertainty. Do not stop at a presence acknowledgment. Do not invent offers or facts. Then stop and wait for acknowledgment. Do not ask permission to screen or ask a screening question yet.';
   return 'The customer has not answered the pending question. This recovery rule overrides anti-repetition constraints for this unfinished step only. Ask that SAME question again, a little shorter and in natural different wording. Keep all names, alternatives, numbers and qualifying conditions. Do not add a presence check, introduction, purpose, new question or assumed answer. Output just one question. Source question: ' + JSON.stringify(repair.source);
 }
 function knownSalutation(history) {

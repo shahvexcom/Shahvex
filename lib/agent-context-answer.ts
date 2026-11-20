@@ -72,6 +72,27 @@ const cities = [
   },
 ];
 const weatherCache = new Map<string, { until: number; text: string }>();
+export function asksCompanyLocation(text: string) {
+  return /\bwhere(?:['’]s|\s+(?:are|r|were|is))\s+(?:you|u|your (?:company|team|office))\b|\bwhere (?:do you live|you live)\b|\bwhere\b[^.!?]{0,55}\b(?:calling|speaking|located|based|sitting|from|form)\b|\b(?:your|company|office) (?:location|address)\b|\b(?:street|postal|mailing|physical) address\b/i.test(text);
+}
+
+function companyLocationReply(source: string, text: string) {
+  const fact = (label: RegExp) => label.exec(source)?.[1]
+    ?.split(/\s+Time\s?zone\s*:/i)[0].replace(/[., ]+$/, "").trim();
+  const location = fact(/(?:office|company) location\s*:\s*([^\n]{3,160})/i);
+  const address = fact(/(?:office|company|street|postal|mailing|physical) address\s*:\s*([^\n]{3,160})/i);
+  const streetRequested = /\b(?:street|postal|mailing|physical|full|exact|specific) address\b|\b(?:street number|zip code|postal code)\b/i.test(text);
+  if (streetRequested) {
+    return address && /\d/.test(address)
+      ? `Our office address is ${address}.`
+      : "I don't have a street or postal address to share.";
+  }
+  const configured = location || address;
+  return configured
+    ? `Our listed office location is ${configured}.`
+    : "Our team is based in Phoenix, Arizona, United States of America.";
+}
+
 /** Only answer the requested contextual question; never alter qualification or transfer state. */
 export async function contextualQuestionReply(
   config: Pick<TestConfig, "script" | "instructions" | "knowledge"> & {
@@ -125,10 +146,7 @@ export async function contextualQuestionReply(
     /\b(?:what(?:'s| is)?(?: the)? time|what time|current time|time (?:right )?now)\b/i.test(
       text,
     );
-  const location =
-    /\bwhere (?:are you|do you live|you live|are you live)\b|\bwhere\b.{0,55}\b(?:calling|speaking|located|based|sitting|from)\b|\b(?:your|company|office) (?:location|address)\b/i.test(
-      text,
-    );
+  const location = asksCompanyLocation(text);
   const identity =
     /\b(?:who (?:are you|you are|is this)|who am I (?:talking|speaking) (?:to|with)|your name|what company|which company)\b/i.test(
       text,
@@ -264,19 +282,7 @@ export async function contextualQuestionReply(
       `It's ${new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit" }).format(now)} ${city ? `in ${city.name}` : zone === "UTC" ? "UTC" : zone.replaceAll("_", " ")}.`,
     );
   }
-  if (location) {
-    const office =
-      /(?:office location|company location|office address)\s*:\s*([^\n]{3,160})/i
-        .exec(source)?.[1]
-        ?.split(/\s+Time\s?zone\s*:/i)[0]
-        ?.replace(/[., ]+$/, "")
-        .trim();
-    replies.push(
-      office
-        ? `Our listed office location is ${office}.`
-        : "We are based in Phoenix, Arizona, United States of America.",
-    );
-  }
+  if (location) replies.push(companyLocationReply(source, text));
   if (time && /\b(?:laptop|cellphone|cell phone|mobile|device)\b/i.test(text))
     replies.push("This call is through our calling system.");
   return replies.join(" ");
@@ -423,15 +429,44 @@ export function voiceIdentity(
   return { name, company };
 }
 
-
 /** Answer only the configured calling-team role; never invent government or licensing affiliation. */
-export function configuredRepresentativeReply(config: Pick<TestConfig,"script"|"instructions"> & {name?:string;task?:string;goal?:string},text:string) {
- if(!/\b(?:are you|you are|you['’]re)\b[^?]{0,90}\b(?:representative|sales rep|sales agent)\b|^\s*(?:[a-z]+\s+){0,5}representative[,? ]+(?:right|correct)[?! .]*$/i.test(text))return;
- if(/\b(?:why|because|government|official|federal|licensed|certified|not|isn['’]t|aren['’]t)\b/i.test(text))return;
- const identity=voiceIdentity(config);if(!identity.company)return;
- const asked=text.toLowerCase().replace(/\b(?:are|you|a|an|the|with|from|representative|sales|rep|agent|right|correct|of)\b/g,'').replace(/[^a-z ]/g,'').trim();
- const words=asked.split(/\s+/).filter(Boolean);if(words.some(word=>!identity.company!.toLowerCase().includes(word)))return;
- const source=[config.script,config.instructions,config.task||'',config.goal||''].join('\n');
- const role=/\bsales (?:representative|rep|agent)\b/i.test(source)?'sales representative':/\brepresentative\b/i.test(source)?'representative':undefined;
- return role?`Yes, I'm a ${role} with ${identity.company}.`:`I'm calling with ${identity.company}.`;
+export function configuredRepresentativeReply(
+  config: Pick<TestConfig, "script" | "instructions"> & {
+    name?: string;
+    task?: string;
+    goal?: string;
+  },
+  text: string,
+) {
+  const question = text.trim().replace(/[?!., ]+$/, "");
+  const affiliation = /^(?:do you represent|are you (?:calling )?(?:from|with)|are you (?:an? |the )?(?:sales )?(?:representative|rep|agent) (?:of|for|with|from))\s+(.+)$/i.exec(question);
+  const namedRole = /^are you (?:an? |the )?(.+?) (?:sales )?(?:representative|rep|agent)$/i.exec(question);
+  const asked = affiliation?.[1] || namedRole?.[1];
+  if (/^are you (?:(?:calling )?from (?:where|what (?:company|city|country))|with (?:me|us|you))$/i.test(question)) return;
+  if (!asked) {
+    if (/^are you (?:an? |the )?(?:(?:official|government|federal|licensed|certified)\b|(?:medicare|medicaid)\b.*\b(?:representative|agent|specialist)\b)/i.test(question))
+      return "I can't confirm that affiliation or qualification.";
+    return;
+  }
+
+  const { company } = voiceIdentity(config);
+  const normalize = (value: string) => value.normalize("NFKD").toLowerCase()
+    .replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]+/g) || [];
+  const companyWords = normalize(company || "");
+  const askedName = normalize(asked).join("");
+  const initials = companyWords.map(word => word[0]).join("");
+  const companyName = companyWords.join("");
+  const collapseRepeatedLetters = (value: string) => value.replace(/([a-z])\1+/g, "$1");
+  const matches = company && (askedName === companyName ||
+    companyName.length >= 8 && collapseRepeatedLetters(askedName) === collapseRepeatedLetters(companyName) ||
+    initials.length >= 3 && askedName === initials);
+  if (!matches) return "I can't confirm that affiliation.";
+
+  const source = [config.instructions, config.script, config.task, config.goal].join("\n");
+  const assignedRole = /(?:^|[.!?\n]\s*)(?:agent role|role)\s*:\s*(?:an?\s+)?([^.!?\n]{2,80})/i.exec(source)?.[1]?.trim()
+    || /\b(?:you are|your role is|I am|I['’]m) (?:an? |the )?((?:sales )?(?:representative|rep|agent|coordinator|assistant))\b/i.exec(source)?.[1];
+  const role = assignedRole && !/\b(?:government|official|federal|licensed|certified)\b/i.test(assignedRole)
+    ? assignedRole : "representative";
+  const article = /^[aeiou]/i.test(role) ? "an" : "a";
+  return `Yes, I'm ${article} ${role} with ${company}.`;
 }

@@ -105,7 +105,7 @@
         "transform": "lodash/{{member}}"
       }
     },
-    "outputFileTracingRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/.rec414-build-3tS3bT",
+    "outputFileTracingRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
     "enablePrerenderSourceMaps": true,
     "cacheComponents": false,
     "cacheLife": {
@@ -327,13 +327,13 @@
       "playwright-core",
       "@sparticuz/chromium"
     ],
-    "repoRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/.rec414-build-3tS3bT",
+    "repoRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
     "turbopack": {
-      "root": "/home/syed-nazeer-ahmad/shahvex/restore/website/.rec414-build-3tS3bT"
+      "root": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex"
     },
     "distDirRoot": ".next-fast-handoff-final"
   },
-  "appDir": "/home/syed-nazeer-ahmad/shahvex/restore/website/.rec414-build-3tS3bT",
+  "appDir": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
   "relativeAppDir": "",
   "files": [
     ".next-fast-handoff-final/package.json",

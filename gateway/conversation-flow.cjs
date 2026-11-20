@@ -209,7 +209,7 @@ function openingCourtesyReply(text, history, config = {}) {
   const reciprocal = /\b(?:how are you|how about you|what about you)\b/i.test(
     value,
   );
-  return `${reciprocal ? "I'm doing well, thank you for asking. " : ""}${purpose} Is now a good time for a brief call?`;
+  return `${reciprocal ? "I'm doing well, thank you for asking. " : ""}${purpose}`;
 }
 function acknowledgmentReply(config, text, history, memory) {
   const spoken = history.filter((t) => t.role === "assistant");

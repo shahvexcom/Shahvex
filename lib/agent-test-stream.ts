@@ -1,7 +1,7 @@
 import { canonicalQuestion } from "../gateway/question-memory.cjs";
 import { isTransferOffer } from "../gateway/handoff-intent.cjs";
 import * as openingPcmCache from "../gateway/opening-pcm-cache.cjs";
-import { recoveryReply, groundedReplyText } from "../gateway/conversation-recovery.cjs";
+import { recoveryReply, groundedReplyText, isCustomerQuestion } from "../gateway/conversation-recovery.cjs";
 import { createReplayGuard } from "../gateway/reply-integrity.cjs";
 import { shared as pcmCache } from "../gateway/tts-pcm-cache.cjs";
 import { createSpeechRenderer } from "../gateway/speech-text.cjs";
@@ -54,6 +54,10 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
   const repeatedIntroduction=(text:string)=>Boolean(introduced&&new RegExp("\\b(?:this is|my name is|I(?:'m| am))\\s+"+introduced+"\\b",'i').test(text));
   const wellbeingQuestion=/\bhow (?:are you(?: doing| feeling)?|(?:is|was) your day)(?: today)?\s*\?/i;
   const wellbeingAsked=(messages as {role:string;content:string}[]).some(m=>m.role==='assistant'&&wellbeingQuestion.test(m.content));
+  const allowClarification = isCustomerQuestion(customerText || (messages as {role:string;content:string}[]).findLast(m=>m.role==="user")?.content);
+  const incompleteQuestion = (text: string) => /^\s*(?:(?:sir|ma['’]?am|okay|so|and)[, ]+)*(?:(?:are|is|am|do|does|did|have|has|can|could|would|will|should)\s+(?:you|I|it|this|that|they|we|your)|what|where|who|when|why|how|which)\b/i.test(text) &&
+    (!text.includes("?") || /\b(?:based|located|calling)\s*\?$/i.test(text) && /^(?:are|is)\b/i.test(text.trim()));
+  const rejectedSpeech = (text: string) => incompleteQuestion(text) || !allowClarification && /\brepeat your last question\b/i.test(text);
   const alreadyAnswered=(text:string)=>text.includes('?')&&(completed.has(questionKey(text))||Boolean(canonicalQuestion(text,completedQuestions))||(wellbeingAsked&&wellbeingQuestion.test(text)));
 
   const firstTransferWording=(text:string)=>!(messages as {role:string;content:string}[]).some(isTransferOffer)?text.replace(/Would you like me to connect you([^?]*)\?/gi,"Let me connect you$1."):text;
@@ -87,7 +91,8 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
           const cacheKey=audioCache.key({text,voice,emotion});
           const cachedPcm=cacheAudio?audioCache.get(cacheKey):undefined;
           const cached=attempt===0 && cachedPcm && cachedPcm.length>=minimumBytes ? cachedPcm : undefined;
-          const response = cached ? new Response(cached,{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}}) : await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice, ...(emotion !== "neutral" ? { emotion } : {}) }) });
+          const synthesisSignal = AbortSignal.any([signal, AbortSignal.timeout(25000)]);
+          const response = cached ? new Response(cached,{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}}) : await engine(8767, "/stream", { method: "POST", signal: synthesisSignal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice, ...(emotion !== "neutral" ? { emotion } : {}) }) });
           const captured:Uint8Array[]=[];let captureBytes=0;
           await timing(cached?'tts-cache-hit':'tts-cache-miss',{sentenceIndex:index});
           if (!response.ok || !response.body) throw Error("CosyVoice streaming synthesis failed");
@@ -178,7 +183,7 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
           if(answerOnly&&part.includes("?"))continue;
           if (isTransferOffer({role:"assistant",content:part}) && handoffSpokenInTurn) continue;
           if (requirePurpose && !answer.trim() && !purposeStatement(part)) continue;
-          if (!part.trim() || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part)) continue;
+          if (!part.trim() || outbound && rejectedSpeech(part) || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part)) continue;
           if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(part.trim())){fillerPrefix=part;continue;}
           if(fillerPrefix){part=fillerPrefix+' '+part.trimStart();fillerPrefix='';}
           if (!answer && responsePrefix) part = responsePrefix + part.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
@@ -200,7 +205,7 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
     phrase = firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText));
     if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(phrase.trim())){fillerPrefix=phrase;phrase='';}
-    if (phrase && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase))) {
+    if (phrase && !(outbound && rejectedSpeech(phrase)) && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase))) {
       if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}
       if (!answer && responsePrefix) phrase = responsePrefix + phrase.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
       answer += phrase; onText(answer);

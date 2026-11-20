@@ -210,7 +210,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     async function turn(payload,preserveOnError=false){
       if(!c||c.ending||c.voicemailDetected||c.hold||c.handoffPending||c.prepareRequested||closing)return;
       // A new turn must not inherit the previous epoch's partial frame.
-      const completedTurnId=c.completedTurnId;c.completedTurnId=undefined;
+      const completedTurnId=c.completedTurnId;
       c.outputCarry=Buffer.alloc(0);c.turnWrittenBytes=0;
       const epoch=++c.epoch;c.controller?.abort();const abort=new AbortController();c.controller=abort;c.processing=true;c.playbackReady=false;c.synthesisDone=false;c.playbackReported=false;c.renderedThisTurn=false;c.lastVoiceTurnId=undefined;c.turnText='';c.openingTurn=payload.opening===true;
       if(payload.text?.trim())c.openingResponse.response();
@@ -235,6 +235,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
           break;
         }
         if(!response.ok||!response.body)throw Error('Voice turn failed');
+        if(c.completedTurnId===completedTurnId)c.completedTurnId=undefined;
         const workerRevision=response.headers.get('x-shahvex-flow-revision');if(workerRevision&&workerRevision!=='missing'){c.voiceFlowRevision=workerRevision;logger('Active call voice flow revision: '+workerRevision);}
         let text='';const downsampler=createTelephoneDownsampler(),decoder=new TextDecoder();
         const consume=line=>{if(!line.trim()||c.ending||c.closed||c.epoch!==epoch)return;const e=JSON.parse(line);if(e.type==='error')throw Error('Shared voice engine error');if(e.type==='timing'&&e.stage==='flow-ready'){if(c.voiceFlowRevision!==e.revision)logger('Active call voice flow revision: '+String(e.revision||'missing'));c.voiceFlowRevision=e.revision;}
@@ -348,6 +349,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     async function speechFallback(source,issue){
       if(!c||closing||c.closed||c.ending||c.transferred||c.handoffPending)return;
       c.speechProbeFailures=(c.speechProbeFailures||0)+1;c.lastSpeechIssue=issue;
+      if(c.frames.length||c.recognizing||c.turnCarry)return;
       // A failed probe cannot establish an interruption. In particular, echo
       // and line noise must not cancel a queued or synthesizing response.
       if(c.processing||c.queue.length||c.writing){
@@ -367,23 +369,31 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       c.recognizing=(c.recognizing||0)+1;
       let released=false;const releaseRecognition=()=>{if(!released){released=true;c.recognizing=Math.max(0,(c.recognizing||1)-1);}};
       c.speechDecisions=(c.speechDecisions||Promise.resolve()).then(async()=>{
-        const epoch=c.epoch;
-        if(c.closed||c.ending||c.transferred||c.handoffPending||c.epoch!==epoch)return;
+        if(c.closed||c.ending||c.transferred||c.handoffPending||c.hold)return;
         const source=Buffer.concat([...(c.turnCarry?[c.turnCarry]:[]),raw]).subarray(-320000),audio=wav(upsample(source)).toString('base64');c.turnCarry=undefined;c.turnHoldUntil=undefined;
         if(c.recognizing>1){c.turnCarry=source;c.turnHoldUntil=Date.now()+350;return;}
-        let probe;try{probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},AbortSignal.timeout(3000));}catch{releaseRecognition();await speechFallback(source,'transport_error');return;}
+        const probeDeadline=AbortSignal.timeout(3000);
+        let probe;try{probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},probeDeadline);}catch{releaseRecognition();await speechFallback(source,'transport_error');return;}
         if(!probe.ok){releaseRecognition();await speechFallback(source,'http_'+probe.status);return;}
         let heard;try{heard=await probe.json();}catch{releaseRecognition();await speechFallback(source,'invalid_response');return;}if(!String(heard.text||'').trim()){releaseRecognition();await speechFallback(source,'empty_transcript');return;}if(heard.text)c.openingResponse.response();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
-        if(c.closed||c.epoch!==epoch||!heard.text||heard.kind==='ignore'||heard.kind==='filler'&&!isListeningSignal(heard.text))return;
+        if(c.closed||c.ending||c.hold||c.transferred||c.handoffPending||!heard.text||heard.kind==='ignore'||heard.kind==='filler'&&!isListeningSignal(heard.text))return;
         // Keep the caller's original waveform; probes never commit fragments to conversation history.
         if(c.frames.length||c.recognizing>1||c.lastVoicedAt>endedVoiceAt&&c.voiceFrames>=60){c.turnCarry=source;c.turnHoldUntil=Date.now()+350;return;}
         releaseRecognition(); // Playback may begin while the reply is still synthesizing.
         const speaking=c.processing||c.queue.length||c.writing;
         if(speaking&&affirmativeTransferConsent(heard.text)&&isTransferOffer({role:'assistant',content:c.turnText||''})&&!c.processing){c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);void turn({text:heard.text},true);return;}
+        if(speaking && /^(?:okay|ok|mm[- ]?hmm|uh[- ]?huh)[.!?, ]*$/i.test(heard.text.trim())){
+          c.deferredAcknowledgment=heard.text;
+          return;
+        }
+        c.deferredAcknowledgment=undefined;
         if(speaking){
           c.interruptions=(c.interruptions||0)+1;c.playbackReady=false;c.epoch++;c.controller?.abort();c.processing=false;c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);
-          const interrupted=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});
-          if(!interrupted.ok)logger('Voice cancellation callback declined; retrying caller turn through normal admission');
+          try{
+            const interrupted=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId},AbortSignal.timeout(1200));
+            if(!interrupted.ok)logger('Voice cancellation callback declined; retrying caller turn through normal admission');
+            void interrupted.body?.cancel().catch(()=>{});
+          }catch{logger('Voice cancellation callback unavailable; retrying caller turn through normal admission');}
         }
         void turn({text:heard.text},true);
       }).catch(()=>logger('Speech decision unavailable; preserving current playback')).finally(releaseRecognition);
@@ -434,6 +444,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       const blocked=c.waitingCustomer||(c.lastVoicedAt!==undefined&&Date.now()-c.lastVoicedAt<350)||c.turnCarry||c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.syncHandoffPending||c.processing||c.queue.length||c.frames.length||c.writing||c.recognizing;
       const step=c.silenceClock.tick(Date.now(),Boolean(blocked));
       if(blocked)return;
+      if(c.deferredAcknowledgment&&!c.endAfterPlayback){
+        const text=c.deferredAcknowledgment;c.deferredAcknowledgment=undefined;
+        void turn({text},true);return;
+      }
       if((c.limit&&Date.now()-c.started>=c.limit*1000)||(c.endAfterPlayback&&!c.noResponseEnding)||(step===5&&c.endAfterPlayback&&c.noResponseEnding)){void endCustomerCall(Boolean(c.noResponseEnding));return;}
       if(step===5){c.silenceClock.reset();return;}
       if(step){c.silenceStep=step;void turn({silenceStep:step});}
