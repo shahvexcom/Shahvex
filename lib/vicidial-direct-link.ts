@@ -26,8 +26,12 @@ export async function linkDirectNativeCall(call:any,connection:any) {
  const first=await read();if(!first)return call;
  let lead:Record<string,string>|undefined;
  try{lead=parseVicidialTable(await vicidialRequest(connection.server_url,connection.username,key,{function:'lead_all_info',lead_id:first.lead,stage:'pipe',header:'YES'})).find(x=>x.lead_id===first.lead);}
- catch{lead=await (await import('./vicidial-admin-lead')).readAdminLead(connection.server_url,connection.username,key,first.lead);}
- if(!lead)return call;
+ catch{/* Some installed builds reject lead_all_info; use the existing authenticated readback. */}
+ if(!lead){
+  try{lead=await (await import('./vicidial-admin-lead')).readAdminLead(connection.server_url,connection.username,key,first.lead);}
+  catch{return call;}
+ }
+ if(!lead||String(lead.lead_id)!==first.lead)return call;
  const second=await read();if(!second||second.id!==first.id||second.lead!==first.lead)return call;
  const result=await pool.query(`UPDATE agent_calls a SET vicidial_call_id=$2,vicidial_lead_id=$3,vicidial_agent_user=$4,
  lead_number=$5,vicidial_sync_status='PENDING',updated_at=NOW()
@@ -36,3 +40,4 @@ export async function linkDirectNativeCall(call:any,connection:any) {
  RETURNING a.*`,[call.id,first.id,first.lead,line.remoteUser,lead.phone_number||'']);
  return result.rows[0]||call;
 }
+

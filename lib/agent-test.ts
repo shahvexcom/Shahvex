@@ -47,7 +47,7 @@ export const customerResponseRules = [
   masterConversationPrompt,
 ].join("\n");
 
-type Message = { role: "system" | "user" | "assistant"; content: string };
+type Message = { role: "system" | "user" | "assistant"; content: string; conversationOnly?: boolean };
 
 export const briefTimeOffer =
   "I can keep this focused. Would you like to continue?";
@@ -373,7 +373,7 @@ export function conversationProgress(
     );
   if (midCallGreeting)
     directive +=
-      " MID-CALL GREETING: the customer only said a short greeting or presence check in the middle of the call. This is NOT a new call. Do not restart, do not greet again, do not repeat your name, company, purpose, goal or first question. Ask Can you hear me clearly? and wait for confirmation. Once confirmed, repeat only the last unheard statement or question. Do not advance the script on a presence check.";
+      " MID-CALL GREETING: the customer only said a short greeting or presence check in the middle of the call. This is NOT a new call. For an interrupted introduction, rephrase the configured introduction once and wait. For an interrupted or unanswered question, ask that same question again more briefly. Do not invent an answer or advance a business step. Use an audio check only when the customer reports an audio problem.";
   directive +=
     " Personal small-talk detours: follow the personal conversation rules. Keep the pre-detour business question pending unless the customer actually answered it; personal follow-ups and reciprocal small-talk answers are not task answers or consent. When small talk settles, return to that exact unfinished step, inviting a missing answer once if necessary, even when that question appears in askedQuestions. Do not restart or repeat completed steps.";
   const busyPattern =
@@ -402,11 +402,27 @@ export function conversationProgress(
     }) +
     "\nNext-turn rule: " +
     directive +
-    "\nLatest operator flow rule: After the first receptive reply to the introduction, state the campaign purpose once in one or two natural sentences, with enough script-based context to make the reason clear. Ask a permission-to-talk question only if permission is still needed. Do not ask lead questions until permission is granted. A wellbeing reply alone is not permission. Acknowledge permission and ask the first applicable question in the same turn; never stop at Thank you. Do not ask the same permission again. Ask one new question per turn; if an answer is missing, retain unknown and continue to the next applicable never-asked question instead of repeating immediately. After all applicable questions were attempted, revisit missing details once. An explicit request to repeat or clarify may be answered sooner. A mid-call hello is a presence or attention check: use the latest conversation context, acknowledge briefly and resume the pending point concisely. Do not restart the introduction or automatically repeat a question. Answer the actual latest customer question first, using verified script facts; never substitute an unrelated answer. Ask Please repeat your last question only once in the entire call if genuinely unclear; after that resume a shorter version of your last relevant point. Never say I lost track or I did not catch that. Do not repeat any earlier question or answer verbatim; explicit requests for explanation should receive a concise rephrasing. Why are you calling gets a one-sentence purpose and one relevant permission or next question, never a repeated pitch. Earlier rules about resuming a pending step must not force an immediate question repeat."
+    "\nCurrent operator flow rule: Keep the current unfinished script step across interruptions. After an interrupted introduction, rephrase the configured name and company and wait. Once the introduction was heard, a receptive reply gets the script purpose once and the next applicable question. A mid-call greeting or listening confirmation is not a business answer: rephrase the pending unanswered question directly, without a presence acknowledgment or replayed pitch. A yes or no answering a completed question advances its appropriate branch. Never say My last point was, I am here and listening, or Please go ahead and then stop. Do not generate Can you hear me or Are you still there; silence checks are scheduled by the server only. Clarification is allowed only for an actual customer question whose meaning cannot be resolved. Ask one relevant question at a time; never repeat a completed question or invent a missing answer. Preserve transfer and end-request handling."
+
   );
 }
 type Session = {
+  awaitingHearingConfirmation?: boolean;
+  hearingConfirmed?: boolean;
+  requirePlaybackAck?: boolean;
+  introPlaybackComplete?: boolean;
+  lastCompletedTurnId?: string;
+  speechPhase?: "introduction" | "purpose" | "conversation";
+  introRestartPending?: boolean;
+  purposeDelivered?: boolean;
+  handoffDeclined?: boolean;
   conductWarned?: boolean;
+  endOfferMade?: boolean;
+  awaitingEndDecision?: boolean;
+  endResumeQuestion?: string | null;
+  silenceQuestionRetried?: string;
+  silencePromptIndex?: number;
+  questionAliases?: Map<string, string>;
   unclearSpeechCount?: number;
   endedReason?: "harassment" | "customer_request" | "voicemail";
   voiceEmotionState?: { turn: number; lastTurn?: number; total?: number };
@@ -654,4 +670,5 @@ export async function warmSelectedVoice(voice: string, signal?: AbortSignal) {
     if (!signal) warmups.delete(voice);
   }
 }
+
 

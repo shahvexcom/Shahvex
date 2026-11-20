@@ -9,9 +9,9 @@ function testerTransport(config,fetchImpl=fetch){
   const loopback=['localhost','127.0.0.1','[::1]'].includes(base.hostname);
   if((base.protocol!=='https:'&&!(base.protocol==='http:'&&loopback))||base.username||base.password||base.pathname!=='/'||base.search||base.hash||typeof config.secret!=='string'||config.secret.length<32||Boolean(config.cfClientId)!==Boolean(config.cfClientSecret))throw Error('Configure a secure tester origin and its server credentials');
   return async(action,init,owner)=>{
-    if(!['start','turn','interrupt','stop'].includes(action))throw Error('Unsupported manual tester operation');
+    if(!['start','listen','turn','interrupt','stop','playback-complete'].includes(action))throw Error('Unsupported manual tester operation');
     const incoming=new Headers(init.headers),headers=new Headers({'x-shahvex-ai-key':config.secret,'x-shahvex-owner':owner});
-    for(const name of ['content-type','x-shahvex-session','x-shahvex-turn'])if(incoming.has(name))headers.set(name,incoming.get(name));
+    for(const name of ['content-type','x-shahvex-session','x-shahvex-turn','x-shahvex-turn-final'])if(incoming.has(name))headers.set(name,incoming.get(name));
     if(config.cfClientId){headers.set('CF-Access-Client-Id',config.cfClientId);headers.set('CF-Access-Client-Secret',config.cfClientSecret);}
     return fetchImpl(new URL(`/tester/${action}`,base),{...init,headers,redirect:'error',signal:AbortSignal.any([init.signal||new AbortController().signal,AbortSignal.timeout(120000)])});
   };
@@ -48,6 +48,8 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
     if(v.action==='recording'){c.ai_recording_id=v.aiRecordingId;c.recording_active=false;return json({saved:true});}
     if(v.action==='media-ready')return json({saved:true,testOnly:true});
     if(v.action==='ended'||v.action==='hangup'){c.status='COMPLETED';c.conversation_state='COMPLETED';recent.unshift(c);recent.splice(20);calls.delete(c.id);await stop(c);return json({ended:true,testOnly:true});}
+    if(v.action==='listen')return request('listen',{method:'POST',headers:{'content-type':'audio/wav','x-shahvex-session':c.sessionId,...(v.turnFinal?{'x-shahvex-turn-final':'1'}:{})},body:Buffer.from(v.audio||'','base64'),signal:init.signal},c.owner);
+    if(v.action==='playback-complete')return request('playback-complete',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:JSON.stringify({completedTurnId:v.completedTurnId}),signal:init.signal},c.owner);
     if(v.action==='interrupt')return request('interrupt',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}',signal:init.signal},c.owner);
     if(v.action==='turn'){
       if(Date.now()>c.expires)return new Response('{"type":"end_call"}\n',{headers:{'content-type':'application/x-ndjson'}});
@@ -104,3 +106,4 @@ if(require.main===module){
   (async()=>{const config=JSON.parse(fs.readFileSync(process.argv[2]||'/etc/shahvex-vicidial-manual.json','utf8')),manual=createManualBridge(config);await manual.listen();console.log('Isolated manual AudioSocket test ready; no VICIdial campaign calls are enabled.');process.once('SIGTERM',()=>void manual.close());process.once('SIGINT',()=>void manual.close());})().catch(()=>{console.error('Manual test could not start. Verify protected config, tester access and available ports.');process.exitCode=1;});
 }
 module.exports={createManualBridge,manualCallbacks,testerTransport};
+

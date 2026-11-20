@@ -11,6 +11,7 @@ export async function vicidialCallCommand(
   action: string,
   agentId?: string,
   controllerOnly = false,
+  nativeOnly = false,
 ) {
   const pool = await db();
   const a = (
@@ -41,9 +42,10 @@ export async function vicidialCallCommand(
         message: "Human transfer submitted; waiting for dialer confirmation.",
       });
     }
-    if (!["ANSWERED", "RINGING", "INITIATED"].includes(a.status))
+    if (!["ANSWERED", "RINGING", "INITIATED"].includes(a.status) && !(action === "hangup" && nativeOnly && a.vicidial_call_id))
       throw Error("This call has ended");
-    if (action === "hangup" && a.telephony_provider === "AUDIOSOCKET") {
+    if (action === "hangup" && a.telephony_provider === "AUDIOSOCKET" && !a.vicidial_call_id) {
+      if (nativeOnly) return Response.json({ message:"Native call identity is pending", nativeHangupPending:true },{status:409});
       const live = vicidialLiveConfig.parse(a.live_config);
       const result = await requestBridge(
         live.bridgeUrl,
@@ -54,14 +56,13 @@ export async function vicidialCallCommand(
       if (result.accepted !== true)
         throw Error("Audio bridge did not confirm call closure");
       await pool.query(
-        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state='ENDING',updated_at=NOW() WHERE id=$1",
+        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,updated_at=NOW() WHERE id=$1",
         [id],
       );
       return Response.json({ message: "Closing direct audio call." });
     }
     if (action === "hangup") {
-      requireVicidialSuccess(
-        await vicidialRequest(
+      const response = await vicidialRequest(
           a.server_url,
           a.username,
           decryptCredential(a.secret_ciphertext),
@@ -72,11 +73,16 @@ export async function vicidialCallCommand(
             stage: "HANGUP",
           },
           true,
-        ),
-        "ra_call_control",
-      );
+        );
+      // The exact historical caller-code fences a retry from a newer call.
+      if (!/ERROR:.*no active call found/i.test(response)) requireVicidialSuccess(response, "ra_call_control");
+      if (a.telephony_provider === "AUDIOSOCKET" && !nativeOnly) {
+        const live = vicidialLiveConfig.parse(a.live_config);
+        const closed = await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),"/command",{callId:id,action:"close-audio"});
+        if (closed.accepted !== true) throw Error("Native hangup submitted. AI audio closure is not yet confirmed");
+      }
       await pool.query(
-        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state='ENDING',updated_at=NOW() WHERE id=$1",
+        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,updated_at=NOW() WHERE id=$1",
         [id],
       );
       return Response.json({
@@ -144,3 +150,4 @@ export async function vicidialCallCommand(
     );
   }
 }
+

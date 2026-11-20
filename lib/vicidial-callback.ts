@@ -55,6 +55,7 @@ const message = z
       "media-ready",
       "resolve-prefix",
       "call-state",
+      "playback-complete",
     ]),
     eventId: z.string().uuid(),
     externalCallId: z.string().regex(/^[\w-]{16,40}$/),
@@ -73,6 +74,8 @@ const message = z
     callId: z.string().uuid().optional(),
     text: z.string().max(4000).optional(),
     audio: z.string().max(2800000).optional(),
+    turnFinal:z.boolean().optional(),
+    completedTurnId:z.string().min(1).max(80).optional(),
     opening: z.boolean().optional(),
     silenceStep: z.number().int().min(1).max(4).optional(),
     recordingUrl: z.string().url().max(2000).optional(),
@@ -84,7 +87,7 @@ const message = z
   .strict();
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { "cache-control": "no-store" } });
-type ConversationTurn = { role: "user" | "assistant"; content: string };
+type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
 const statusHeaders = (line: string) =>
   line
@@ -100,14 +103,16 @@ async function startVoice(callId: string, agentId: string, config: TestConfig) {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ agentId, config: voiceConfig }),
+        body: JSON.stringify({ agentId, config: voiceConfig,requirePlaybackAck:true }),
       },
       owner,
     );
     if (!response.ok) throw Error("Shared voice engine could not start");
     return String((await response.json()).id);
   }
-  return newTest(owner, agentId, voiceConfig);
+  const id=newTest(owner, agentId, voiceConfig);
+  const session=sessions.get(id);if(session)session.requirePlaybackAck=true;
+  return id;
 }
 
 // Only turn-signing material is cached. The atomic SQL rechecks the current
@@ -216,6 +221,8 @@ export async function vicidialCallback(request: Request) {
         headers: {
           "content-type": "audio/wav",
           "x-shahvex-session": call.voice_session_id,
+          "x-shahvex-turn": v.eventId,
+          ...(v.turnFinal?{"x-shahvex-turn-final":"1"}:{}),
         },
         body,
       };
@@ -1039,7 +1046,10 @@ export async function vicidialCallback(request: Request) {
             nativeLinkPending: true,
           });
       }
-      if (v.action === "hangup") return json({ ended: true }); // Bridge closes the actual audio leg, then emits ended.
+      if (v.action === "hangup" && !call.vicidial_call_id) {
+        try { call = await (await import("./vicidial-direct-link")).linkDirectNativeCall(call, c); } catch { /* Preserve the exact native identity requirement. */ }
+        if (!call.vicidial_call_id) return json({error:"Native call identity is not linked. Native hangup remains pending."},503);
+      }
       if (
         !call.vicidial_call_id &&
         ["ended", "recover", "customer-ended"].includes(v.action)
@@ -1145,7 +1155,7 @@ export async function vicidialCallback(request: Request) {
       ) {
         await (
           await import("./vicidial-controls")
-        ).vicidialCallCommand(call.id, "hangup", call.agent_id);
+        ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
         return json({ saved: true, syncPending: true });
       }
       if (
@@ -1155,17 +1165,16 @@ export async function vicidialCallback(request: Request) {
         return json({ saved: true, syncPending: true });
     }
     if (v.action === "hangup") {
-      if (["COMPLETED", "FAILED"].includes(call.status))
-        return json({ ended: true });
+      if (["SUBMITTED", "ANSWERED"].includes(call.transfer_status)) return json({ended:true,aiDetached:true});
       const response = await (
         await import("./vicidial-controls")
-      ).vicidialCallCommand(call.id, "hangup", call.agent_id);
+      ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
       return response || json({ error: "Call not found" }, 404);
     }
     if (
       v.action === "listen" ||
       v.action === "turn" ||
-      v.action === "interrupt"
+      v.action === "interrupt" || v.action === "playback-complete"
     ) {
       if (
         call.status !== "ANSWERED" ||
@@ -1199,11 +1208,12 @@ export async function vicidialCallback(request: Request) {
             JSON.stringify({
               text: v.text || "",
               opening: v.opening === true,
+              ...(v.completedTurnId?{completedTurnId:v.completedTurnId}:{}),
               ...(v.silenceStep ? { silenceStep: v.silenceStep } : {}),
             }),
           );
       const action =
-        v.action === "interrupt"
+        v.action === "playback-complete" ? "playback-complete" : v.action === "interrupt"
           ? "interrupt"
           : v.action === "listen"
             ? "listen"
@@ -1215,6 +1225,7 @@ export async function vicidialCallback(request: Request) {
           "content-type": v.audio ? "audio/wav" : "application/json",
           "x-shahvex-session": sessionId,
           "x-shahvex-turn": v.eventId,
+          ...(v.turnFinal?{"x-shahvex-turn-final":"1"}:{}),
         },
         body,
       };
@@ -1265,7 +1276,7 @@ export async function vicidialCallback(request: Request) {
       }
       if (
         action === "listen" ||
-        action === "interrupt" ||
+        action === "interrupt" || action === "playback-complete" ||
         !response.ok ||
         !response.body
       ) {
@@ -1279,6 +1290,7 @@ export async function vicidialCallback(request: Request) {
       let pending = "",
         answer = "",
         user = "",
+        userConversationOnly = false,
         done = false;
       const decoder = new TextDecoder();
       const history: ConversationTurn[] = Array.isArray(
@@ -1289,7 +1301,7 @@ export async function vicidialCallback(request: Request) {
       const consume = (line: string) => {
         if (!line.trim()) return;
         const e = JSON.parse(line);
-        if (e.type === "user") user = e.text;
+        if (e.type === "user") {user = e.text;userConversationOnly=e.conversationOnly===true;}
         if (e.type === "delta") answer += e.text;
         if (e.type === "done") done = true;
       };
@@ -1301,7 +1313,7 @@ export async function vicidialCallback(request: Request) {
         lastPublished = Date.now();
         const progress = [
           ...history,
-          ...(user ? [{ role: "user", content: user }] : []),
+          ...(user ? [{ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}) }] : []),
           ...(answer ? [{ role: "assistant", content: answer }] : []),
         ];
         try {
@@ -1345,7 +1357,7 @@ export async function vicidialCallback(request: Request) {
             /* Disconnects preserve only the received transcript; no restart. */
           } finally {
             await progressWrite;
-            if (user) history.push({ role: "user", content: user });
+            if (user) history.push({ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}) });
             if (answer) history.push({ role: "assistant", content: answer });
             await pool.query(turnCompletionSql, [
               JSON.stringify(history),
@@ -1374,6 +1386,7 @@ export async function vicidialCallback(request: Request) {
           "content-type": "application/x-ndjson",
           "cache-control": "no-store",
           "x-accel-buffering": "no",
+          "x-shahvex-flow-revision": response.headers.get("x-shahvex-flow-revision") || "missing",
         },
       });
     }
@@ -1641,3 +1654,4 @@ export async function vicidialCallback(request: Request) {
     return json({ saved: true });
   }
 }
+

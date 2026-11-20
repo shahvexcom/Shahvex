@@ -1,6 +1,7 @@
 'use strict';
 // Standalone AI-only Node service. Reuses the existing tester; never loads DB/auth.
 const http = require('node:http');
+const {FLOW_REVISION}=require('./conversation-resume.cjs');
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -50,7 +51,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     const expected = Buffer.from(secret);
     if (got.length !== expected.length || !crypto.timingSafeEqual(got, expected)) return json(401, { error: 'Unauthorized' });
     const url = new URL(request.url);
-    if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions});
+    if(url.pathname==='/internal/status'&&request.method==='GET')return json(200,{sessions:ai.sessions.size,busy:[...ai.sessions.values()].filter(s=>s.busy).length,capacity:maxSessions,flowRevision:FLOW_REVISION});
     if(url.pathname==='/internal/capacity'&&!url.search){
       if(!capacityControl)return json(503,{error:'Capacity management is not configured'});
       if(request.method==='GET'){try{return json(200,await capacityControl.read(maxSessions));}catch{return json(503,{error:'Cannot read live call capacity; check the audio bridges'});}}
@@ -65,7 +66,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       catch(error){return json(error.status===409?409:503,{error:error.publicMessage||'Capacity update was not confirmed; check the audio bridges'});}
       finally{capacityChanging=false;}
     }
-    const match = /^\/tester\/(start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping)$/.exec(url.pathname);
+    const match = /^\/tester\/(start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
@@ -125,14 +126,17 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
       if (others >= maxSessions) return json(429, { error: 'Another test session is active. End that session and try again.', code:'CAPACITY' });
       warmOpening(config); // Prepare audio while media admission proceeds.
-      return json(200, { id: ai.newTest(owner, input.agentId, config),...(input.deriveFromScript===true?{derivedFromScript:true}:{}) });
+      const sessionId=ai.newTest(owner,input.agentId,config);
+      const session=ai.sessions.get(sessionId);
+      if(session)session.requirePlaybackAck=input.requirePlaybackAck===true;
+      return json(200, { id:sessionId,flowRevision:FLOW_REVISION,...(input.deriveFromScript===true?{derivedFromScript:true}:{}) });
     }
     const id = request.headers.get('x-shahvex-session') || '';
     const turn = request.headers.get('x-shahvex-turn') || crypto.randomUUID();
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || !/^[a-zA-Z0-9_-]{1,80}$/.test(turn)) return json(400, { error: 'Invalid session or turn' });
     const target = new URL('http://127.0.0.1/tester');
     target.searchParams.set('action', match[1]); target.searchParams.set('id', id); target.searchParams.set('turnId', turn);
-    return handleTestSession(new Request(target, { method: 'POST', headers: { 'content-type': request.headers.get('content-type') || 'application/json' }, body, signal: request.signal }), owner, true);
+    return handleTestSession(new Request(target, { method: 'POST', headers: { 'content-type': request.headers.get('content-type') || 'application/json', 'x-shahvex-turn-final':request.headers.get('x-shahvex-turn-final')||'0' }, body, signal: request.signal }), owner, true);
   }
   const server = http.createServer(async (req, res) => {
     const abort = new AbortController();
@@ -155,3 +159,4 @@ if (require.main === module) {
   server.listen(Number(process.env.SHAHVEX_PC_TESTER_PORT || 8774), '127.0.0.1', () => process.stdout.write('PC AI adapter listening on loopback\n'));
 }
 module.exports = { createTesterService };
+

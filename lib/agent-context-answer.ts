@@ -422,3 +422,16 @@ export function voiceIdentity(
       ?.trim();
   return { name, company };
 }
+
+
+/** Answer only the configured calling-team role; never invent government or licensing affiliation. */
+export function configuredRepresentativeReply(config: Pick<TestConfig,"script"|"instructions"> & {name?:string;task?:string;goal?:string},text:string) {
+ if(!/\b(?:are you|you are|you['’]re)\b[^?]{0,90}\b(?:representative|sales rep|sales agent)\b|^\s*(?:[a-z]+\s+){0,5}representative[,? ]+(?:right|correct)[?! .]*$/i.test(text))return;
+ if(/\b(?:why|because|government|official|federal|licensed|certified|not|isn['’]t|aren['’]t)\b/i.test(text))return;
+ const identity=voiceIdentity(config);if(!identity.company)return;
+ const asked=text.toLowerCase().replace(/\b(?:are|you|a|an|the|with|from|representative|sales|rep|agent|right|correct|of)\b/g,'').replace(/[^a-z ]/g,'').trim();
+ const words=asked.split(/\s+/).filter(Boolean);if(words.some(word=>!identity.company!.toLowerCase().includes(word)))return;
+ const source=[config.script,config.instructions,config.task||'',config.goal||''].join('\n');
+ const role=/\bsales (?:representative|rep|agent)\b/i.test(source)?'sales representative':/\brepresentative\b/i.test(source)?'representative':undefined;
+ return role?`Yes, I'm a ${role} with ${identity.company}.`:`I'm calling with ${identity.company}.`;
+}

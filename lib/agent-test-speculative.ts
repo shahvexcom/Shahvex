@@ -21,6 +21,20 @@ function release(id: string, d: Draft) {
     d.parent.conductWarned = d.shadow.conductWarned;
     d.parent.unclearSpeechCount = d.shadow.unclearSpeechCount;
     d.parent.endedReason = d.shadow.endedReason;
+    d.parent.endOfferMade = d.shadow.endOfferMade;
+    d.parent.awaitingEndDecision = d.shadow.awaitingEndDecision;
+    d.parent.endResumeQuestion = d.shadow.endResumeQuestion;
+    d.parent.speechPhase = d.shadow.speechPhase;
+    d.parent.awaitingHearingConfirmation = d.shadow.awaitingHearingConfirmation;
+    d.parent.hearingConfirmed = d.shadow.hearingConfirmed;
+    d.parent.introPlaybackComplete = d.shadow.introPlaybackComplete;
+    d.parent.lastCompletedTurnId = d.shadow.lastCompletedTurnId;
+    d.parent.introRestartPending = d.shadow.introRestartPending;
+    d.parent.purposeDelivered = d.shadow.purposeDelivered;
+    d.parent.handoffDeclined = d.shadow.handoffDeclined;
+    d.parent.silenceQuestionRetried = d.shadow.silenceQuestionRetried;
+    d.parent.silencePromptIndex = d.shadow.silencePromptIndex;
+    d.parent.questionAliases = d.shadow.questionAliases;
   }
   d.parent.busy = false; d.parent.activeTurnId = undefined;
   drafts.delete(id);
@@ -75,6 +89,7 @@ export async function handleTestSession(request: Request, owner: string, publicD
   if (++rate.count > 60) return json(429, "Too many speech drafts. Pause and try again.");
   rates.set(owner, rate);
   const shadow: Session = { ...parent, busy: false, abort: undefined, finished: undefined,
+    questionAliases: parent.questionAliases ? new Map(parent.questionAliases) : undefined,
     voiceEmotionState: parent.voiceEmotionState ? { ...parent.voiceEmotionState } : undefined,
     messages: parent.messages.map(m => ({ ...m })), turns: new Set(parent.turns), recordingHashes: new Set(parent.recordingHashes) };
   d = { token, parent, shadow, committed: false, cancelled: false, finished: false, timer: setTimeout(() => {}, 0) };
@@ -93,3 +108,4 @@ export async function handleTestSession(request: Request, owner: string, publicD
     return response;
   } catch (error) { tx.finished = true; cancel(id, tx); throw error; }
 }
+

@@ -1,19 +1,19 @@
 'use strict';
+const {isListeningSignal}=require('./conversation-resume.cjs');
+const {explicitlyEndsCall}=require('./customer-conduct.cjs');
 const {handoffWaiting}=require('./handoff-intent.cjs');
 const clarification = 'Please repeat your last question.';
 const isRecovery = text => /lost track|didn.t catch|could you (?:say|tell)|repeat your last question|could you repeat/i.test(text);
+function isCustomerQuestion(value) {
+ const text=String(value || '').trim();
+ if(isListeningSignal(text)||explicitlyEndsCall(text))return false;
+ return /\?$/.test(text) || /^(?:what|why|when|where|who|which|how|can you|could you|would you|do you|did you|are you|is it|have you)\b/i.test(text);
+}
 function recoveryReply(history) {
- if(handoffWaiting(history)||/^(?:bye(?: bye)?|goodbye)[.! ]*$/i.test(history.filter(m=>m.role==='user').at(-1)?.content||''))return '';
- const spoken = history.filter(m => m.role === 'assistant');
- if (!spoken.some(m => isRecovery(m.content))) return clarification;
- const previous = [...spoken].reverse().find(m => !isRecovery(m.content) && !/\b(?:goodbye|end the call|end this call|connect|transfer|please wait)\b/i.test(m.content) && !/^My last point was:/i.test(m.content) && !/\?/.test(m.content) && m.content.trim().split(/\s+/).length > 6);
- if (!previous) return '';
- // Resume verified context only, without inventing an answer or repeating a question.
- const first = (previous.content.match(/[^.!?\n]+[.!?]?/g)||[]).map(s=>s.trim()).find(s=>!s.includes('?')&&s.split(/\s+/).length>6&&!/^(?:got it|okay|ok|thank you|thanks)[.! ]*$/i.test(s));
- if(!first)return '';
- const brief = first; // Keep a complete grounded sentence; never truncate a claim mid-phrase.
- const reply = `My last point was: ${brief}`;
- return spoken.some(m => m.content === reply) ? '' : reply;
+ const customer=history.filter(m=>m.role==='user').at(-1)?.content || '';
+ if(!isCustomerQuestion(customer)||handoffWaiting(history))return '';
+ if(history.some(m=>m.role==='assistant'&&isRecovery(m.content)))return '';
+ return clarification;
 }
 /** A guessed translation must never become a recorded qualification answer. */
 function groundedReplyText(value,customer=''){
@@ -23,4 +23,5 @@ function groundedReplyText(value,customer=''){
  if(customer&&!positive)text=text.replace(/\b(?:that(?:['’]s| is) (?:really |very )?(?:nice|good|great|wonderful) to hear|(?:I(?:['’]m| am) )?(?:so )?glad to hear (?:that|it))[.! ]*/gi,'');
  return text;
 }
-module.exports = { recoveryReply, clarification, groundedReplyText };
+module.exports = { isCustomerQuestion, recoveryReply, clarification, groundedReplyText };
+

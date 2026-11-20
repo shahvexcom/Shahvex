@@ -153,17 +153,8 @@ function audioCheckReply(text, history) {
       return repeatedRecovery;
   }
   if (isAfterIntroduction(spoken) && isGreetingOnly(value)) return;
-  if (isPresenceCheck(text)) {
-    const replies = [
-      "Yes, I'm here and listening.",
-      "I'm with you. Please go ahead.",
-      "Go ahead, I'm listening.",
-    ];
-    return (
-      replies.find((reply) => !spoken.some((turn) => turn.content === reply)) ||
-      ""
-    );
-  }
+  // Greetings are routed by the session's unfinished step, never a stock presence reply.
+  if (isPresenceCheck(text)) return;
   if (spoken.at(-1).content !== check) return;
   if (confirmed) {
     const question = rememberQuestions(history).pendingQuestion;
@@ -301,3 +292,4 @@ module.exports = {
   mainQuestions,
   key,
 };
+

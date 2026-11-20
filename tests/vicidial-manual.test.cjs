@@ -15,11 +15,12 @@ async function signedRequest(port,url,value,key=secret,method='POST'){
  return fetch(`http://127.0.0.1:${port}${url}`,{method,headers:{'x-shahvex-timestamp':stamp,'x-shahvex-signature':signature(key,stamp,method,url,body)},...(method==='POST'?{body}:{})});
 }
 test('manual AudioSocket call uses shared tester PCM and cannot submit Native leads or transfers',{timeout:8000},async()=>{
- const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-manual-')),operations=[];
- const manual=createManualBridge({enabled:true,secret,agent,controlPort:0,audioPort:0,stateDirectory:folder},{logger:()=>{},request:async(action,init,owner)=>{
-  operations.push(action);assert.match(owner,/^manual-audio-/);assert.ok(['start','turn','stop','interrupt'].includes(action));
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-manual-')),operations=[],logs=[];
+ const manual=createManualBridge({enabled:true,secret,agent,controlPort:0,audioPort:0,stateDirectory:folder},{logger:value=>logs.push(value),request:async(action,init,owner)=>{
+  operations.push(action);assert.match(owner,/^manual-audio-/);assert.ok(['start','listen','turn','stop','interrupt'].includes(action));
   if(action==='start'){const body=JSON.parse(init.body);assert.equal(body.deriveFromScript,true);assert.equal(body.config.script,agent.script);return Response.json({id:'test-session',derivedFromScript:true});}
-  if(action==='turn'){assert.equal(init.headers['content-type'],'audio/wav');assert.equal(Buffer.from(init.body).readUInt32LE(24),16000);return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n{"type":"done"}\n');}
+  if(action==='listen'){assert.equal(init.headers['content-type'],'audio/wav');assert.equal(init.headers['x-shahvex-turn-final'],'1');assert.equal(Buffer.from(init.body).readUInt32LE(24),16000);return Response.json({text:'My name is Alex.',completion:'complete'});}
+  if(action==='turn'){assert.equal(init.headers['content-type'],'application/json');if(JSON.parse(init.body).opening)return new Response('{"type":"done"}\n');assert.equal(JSON.parse(init.body).text,'My name is Alex.');return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n{"type":"done"}\n');}
   return Response.json({stopped:true});
  }});let socket;
  try{
@@ -33,7 +34,7 @@ test('manual AudioSocket call uses shared tester PCM and cannot submit Native le
   const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(3000,i);
   socket.write(Buffer.concat([...Array.from({length:12},()=>packet(0x10,voice)),...Array.from({length:22},()=>packet(0x10,Buffer.alloc(320)))]));
   const deadline=Date.now()+4000;while(received.length<2&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
-  assert.ok(received.length>=2);assert.ok(operations.includes('turn'));assert.equal(operations[0],'start');
+  assert.ok(received.length>=2,JSON.stringify({operations,logs}));assert.ok(operations.includes('turn'));assert.equal(operations[0],'start');
   socket.destroy();await new Promise(r=>setTimeout(r,40));await manual.bridge.flushEvents();assert.ok(operations.includes('stop'));
  }finally{socket?.destroy();await manual.close();assert.equal(path.dirname(folder),path.resolve(os.tmpdir()));assert.ok(path.basename(folder).startsWith('shahvex-manual-'));fs.rmSync(folder,{recursive:true,force:true});}
 });
@@ -101,3 +102,4 @@ test('local monitor control requires the bridge secret and refuses production br
   const update=await signedRequest(port,'/local-monitor',{agent:{...agent,script:'Saved initial script for the next customer.'}});assert.equal(update.status,200);
  }finally{await manual.close();fs.rmSync(folder,{recursive:true,force:true});}
 });
+

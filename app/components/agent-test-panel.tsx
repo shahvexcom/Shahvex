@@ -1,4 +1,5 @@
 "use client";
+import { isListeningSignal } from "../../gateway/conversation-resume.cjs";
 import { interruptionKind } from '../../gateway/conversation-flow.cjs';
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -209,6 +210,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
         if (event.type === "timing") metric({ stage: event.stage, elapsedMs: event.elapsedMs, turnId: event.turnId });
         if (event.type === "error") throw Error(event.error);
         if (event.turnId !== turnId) return;
+        if (event.type === "end_call" && event.immediate === true) { stop(); setStatus("Call ended"); return; }
         if (event.type === "end_call" && event.reason === "voicemail") { stop(); setStatus("Call ended — voicemail detected"); return; }
         if (event.type === "end_call" && event.reason === "no_response") endAfterPlayback.current = true;
         if (!hiddenTurns.current.has(turnId) && event.type === "user" && event.final === true && event.source === (audio ? "stt" : "typed")) setLines(old => old.some(v => v.id === turnId && v.role === "Customer") ? old : [...old, { id: turnId, role: "Customer", text: event.text }]);
@@ -275,7 +277,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
           const currentSession=session.current,stamp=generation.current;bargeProbeBusy.current=true;
           void(async()=>{try{const response=await fetch(`${base}?action=listen&id=${currentSession}`,{method:'POST',headers:{'Content-Type':'audio/wav'},body:result.probe!.blob,signal:AbortSignal.timeout(5000)});
             if(!response.ok||!active.current||currentSession!==session.current||generation.current!==stamp)return;
-            const heard=await response.json();if(interruptionKind(heard.text)==='interrupt'&&(working.current||player.current?.hasAudio))interrupt(true);
+            const heard=await response.json();if((interruptionKind(heard.text)==='interrupt'||isListeningSignal(heard.text))&&(working.current||player.current?.hasAudio))interrupt(true);
           }catch{/* Final recognition still receives the complete utterance. */}finally{bargeProbeBusy.current=false;}})();
         }
         if (result.draftInvalidated && speechDraft.current) interrupt(true);
@@ -302,9 +304,8 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
               const response=await fetch(`${base}?action=listen&id=${currentSession}`,{method:"POST",headers:{"Content-Type":"audio/wav"},body:recording.blob,signal:AbortSignal.timeout(15000)});
               if(!response.ok||!active.current||session.current!==currentSession||generation.current!==stamp)return;
               const heard=await response.json();heard.kind=interruptionKind(heard.text);
-              if(!heard.text||["ignore","filler"].includes(heard.kind))return;
+              if(!heard.text||(heard.kind==="ignore"||heard.kind==="filler"&&!isListeningSignal(heard.text)))return;
               const speaking=working.current||player.current?.hasAudio;
-              if(heard.kind==="acknowledgment"&&speaking)return;
               if(speaking)interrupt(true);
               await turnRef.current(undefined,heard.text,false,recording.id,recording.speechEndedAtMs);
             }catch{/* Keep existing playback when the speech probe is unavailable. */}})();
@@ -318,7 +319,7 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
         if (!active.current || context.current !== ctx) return;
         const blocked = working.current || Boolean(player.current?.hasAudio) || capture.current.isSpeaking || mute.current || ctx.state !== "running";
         const step = silence.current.tick(performance.now(), blocked);
-        if(step===4){if(endAfterPlayback.current){stop();setStatus("Call ended — no response");}else silence.current.reset();return;}
+        if(step===5){if(endAfterPlayback.current){stop();setStatus("Call ended — no response");}else silence.current.reset();return;}
         if (step) void turn(undefined, undefined, false, undefined, undefined, undefined, step);
       }, 100);
     } catch (e) { if (startup.signal.aborted) return; stop(); setAudioError(e instanceof Error ? e.message : "Unable to start microphone"); setStatus("Microphone Error"); }
@@ -380,3 +381,4 @@ export function AgentTestPanel({ agentId: initialAgentId, agentName: initialName
     <footer className="sv-test-footer">{running?<button className="sv-voice-stop" onClick={stop}><FiSquare/>End Session</button>:<button className="sv-voice-start" disabled={(Boolean(demoToken) && !consent) || !config || !voices.some(v=>v.id===config?.voice) || !extractionReady || !voiceServiceReady || previewing || recordFinalizing} onClick={()=>void start()}><FiMic/>Start Test</button>}<span>Private test session | Use headphones | Speak, then pause</span><details hidden={Boolean(demoToken)}><summary>Timing logs</summary><div>{timings.length ? timings.map((t, i) => <p key={i}>{t.stage}: {t.elapsedMs ?? 0} ms</p>) : <p>Timings appear when a response starts.</p>}</div></details></footer>
   </div></div>, document.body)}{!open&&recordURL&&<a className="sv-record-card-download" href={recordURL} download={`shahvex-${(recordedAgentName||agentName).replace(/[^a-z0-9_-]/gi,"-")}.${recordExtension}`}><FiDownload/>Download last recording</a>}</>;
 }
+

@@ -1,3 +1,5 @@
+import { canonicalQuestion } from "../gateway/question-memory.cjs";
+import { isTransferOffer } from "../gateway/handoff-intent.cjs";
 import * as openingPcmCache from "../gateway/opening-pcm-cache.cjs";
 import { recoveryReply, groundedReplyText } from "../gateway/conversation-recovery.cjs";
 import { createReplayGuard } from "../gateway/reply-integrity.cjs";
@@ -6,7 +8,7 @@ import { createSpeechRenderer } from "../gateway/speech-text.cjs";
 import { speechBoundary } from "../gateway/speech-boundary.cjs";
 import { createEmotionSelector, expressionCapabilityReply, identityVoiceReply } from "../gateway/voice-emotion.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
-type Options = { openingAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
+type Options = { answerOnly?: boolean; requirePurpose?: boolean; responsePrefix?: string; allowRephrase?: boolean; openingAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
 
 function sentenceBoundary(text: string) {
   for (const match of text.matchAll(/[.!?](?:["')\]]*)(?=\s|$)/g)) {
@@ -31,8 +33,17 @@ function isTimePermission(text: string) {
   return /\b(?:(?:is|would|will)\s+(?:it|this|that|now|right now|this time|the time)\b[^.!?]{0,100}\b(?:good|okay|ok|convenient|right|bad)\b[^.!?]{0,40}\btime|(?:is|would)\s+(?:now|this|that|it)\b[^.!?]{0,60}\b(?:okay|ok|convenient)\b|(?:do|would|can|could|may|have|are)\s+(?:you|I|we)\b[^.!?]{0,60}\b(?:minute|moment|time to (?:talk|chat|speak)|time for (?:a|this)|time right now|time now|have (?:the |some |any |a little )?time|free to (?:talk|chat)|available to (?:talk|chat))|(?:can|may|could)\s+(?:I|we)\s+(?:talk|speak|chat)|is\s+(?:the\s+)?time\s+(?:good|okay|ok|convenient))\b/i.test(text);
 }
 
+function isIdleReply(text: string) {
+  return /\b(?:my last point was|can you hear me|are you (?:still )?there)\b/i.test(text) || /^(?:yes[, ]+)?I(?:'m| am) (?:here(?: and listening)?|with you)[.! ]*$|^please go ahead[.! ]*$|^let me know if you have (?:any )?(?:other |more )?questions[.! ]*$/i.test(text.trim());
+}
+
+function purposeStatement(text: string) {
+  const value=text.trim();
+  return !value.includes("?") && !/^(?:got it|okay|ok|thanks|thank you|I(?:'m| am) (?:doing|feeling|fine|good|well))/i.test(value) && (/\b(?:call|calling|contacting|reaching out|reviewing|following up)\b/i.test(value) || value.split(/\s+/).length>=7);
+}
+
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
-export async function streamAgentReply({ messages, voice, signal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
+export async function streamAgentReply({ answerOnly = false, requirePurpose = false, responsePrefix, allowRephrase = false, messages, voice, signal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
   const audioCache = openingAudio ? openingPcmCache : pcmCache;
   if (openingAudio) cacheAudio = true;
   // Inspect complete questions before either transcript or audio is emitted.
@@ -43,8 +54,9 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
   const repeatedIntroduction=(text:string)=>Boolean(introduced&&new RegExp("\\b(?:this is|my name is|I(?:'m| am))\\s+"+introduced+"\\b",'i').test(text));
   const wellbeingQuestion=/\bhow (?:are you(?: doing| feeling)?|(?:is|was) your day)(?: today)?\s*\?/i;
   const wellbeingAsked=(messages as {role:string;content:string}[]).some(m=>m.role==='assistant'&&wellbeingQuestion.test(m.content));
-  const alreadyAnswered=(text:string)=>text.includes('?')&&(completed.has(questionKey(text))||(wellbeingAsked&&wellbeingQuestion.test(text)));
+  const alreadyAnswered=(text:string)=>text.includes('?')&&(completed.has(questionKey(text))||Boolean(canonicalQuestion(text,completedQuestions))||(wellbeingAsked&&wellbeingQuestion.test(text)));
 
+  const firstTransferWording=(text:string)=>!(messages as {role:string;content:string}[]).some(isTransferOffer)?text.replace(/Would you like me to connect you([^?]*)\?/gi,"Let me connect you$1."):text;
   const replayGuard=createReplayGuard(messages as {role:string;content:string}[],customerText);
   let statementSentences=0,statementWords=0;
   const overStatementBudget=(text:string)=>{if(text.includes("?")||maxStatementSentences===undefined)return false;statementWords+=text.trim().split(/\s+/).length;return ++statementSentences>maxStatementSentences||statementWords>60;};
@@ -111,7 +123,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       spoken = spoken.slice(at).trim();
     }
   };
-  let answer = "", phrase = "", pending = "", fillerPrefix = "", firstToken = true, done = false;
+  let answer = "", phrase = "", pending = "", fillerPrefix = "", firstToken = true, done = false, handoffSpokenInTurn=false;
   try {
     // Trusted server-selected presence checks use the same ordered, cancellable
     // voice path, without inventing a customer utterance or invoking the LLM.
@@ -128,7 +140,7 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       await timing("total-synthesis-completed");
       return;
     }
-    const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.SHAHVEX_TEST_OLLAMA_MODEL || "qwen3:4b-instruct", messages, stream: true, think: false, keep_alive: "30m", options: { num_predict: -1, temperature: 0 } }) });
+    const response = await engine(11434, "/api/chat", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: process.env.SHAHVEX_TEST_OLLAMA_MODEL || "qwen3:4b-instruct", messages:(messages as {role:string;content:string}[]).map(({role,content})=>({role,content})), stream: true, think: false, keep_alive: "30m", options: { num_predict: -1, temperature: 0 } }) });
     if (!response.ok || !response.body) throw Error("Ollama response unavailable");
     const decoder = new TextDecoder();
     const consume = async (line: string) => {
@@ -145,11 +157,16 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
         // Hold questions until complete so split tokens cannot leak into text or audio.
         const phraseAllowed = () => maxStatementSentences===undefined && !(messages as {role:string}[]).some(m=>m.role==='assistant') && !completedQuestions.length && !repeatedIntroduction(phrase) && phraseStreaming && !/^\s*(?:got it\b|thank(?:s| you)\b)/i.test(phrase) && !/^\s*(?:is|are|do|would|will|can|could|may|have)\b/i.test(phrase);
         while ((boundary = phraseAllowed() ? speechBoundary(phrase, true) : sentenceBoundary(phrase))) {
-          let part = groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase.slice(0, boundary))),customerText);
+          let part = firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase.slice(0, boundary))),customerText));
           phrase = phrase.slice(boundary);
-          if (!part.trim() || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !replayGuard.allow(part) || !allowTimePermission && isTimePermission(part)) continue;
+          if(answerOnly&&part.includes("?"))continue;
+          if (isTransferOffer({role:"assistant",content:part}) && handoffSpokenInTurn) continue;
+          if (requirePurpose && !answer.trim() && !purposeStatement(part)) continue;
+          if (!part.trim() || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part)) continue;
           if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(part.trim())){fillerPrefix=part;continue;}
           if(fillerPrefix){part=fillerPrefix+' '+part.trimStart();fillerPrefix='';}
+          if (!answer && responsePrefix) part = responsePrefix + part.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
+          if(isTransferOffer({role:"assistant",content:part}))handoffSpokenInTurn=true;
           answer += part; onText(answer);
           await send({ type: "delta", text: part });
           await enqueue(part);
@@ -165,10 +182,11 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
       let at; while ((at = pending.indexOf("\n")) >= 0) { const line = pending.slice(0, at); pending = pending.slice(at + 1); await consume(line); }
     }
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
-    phrase = groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText);
+    phrase = firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText));
     if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(phrase.trim())){fillerPrefix=phrase;phrase='';}
-    if (phrase && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && replayGuard.allow(phrase) && (allowTimePermission || !isTimePermission(phrase))) {
+    if (phrase && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase))) {
       if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}
+      if (!answer && responsePrefix) phrase = responsePrefix + phrase.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
       answer += phrase; onText(answer);
       await send({ type: "delta", text: phrase });
       await enqueue(phrase);
@@ -178,10 +196,11 @@ export async function streamAgentReply({ messages, voice, signal, engine, send, 
     await timing("total-synthesis-completed");
     if (!answer.trim() && !repetitionRetry) {
       const retryMessages=(messages as {role:string;content:string}[]).map((m,i)=>i===0&&m.role==='system'?{...m,content:m.content+"\nYour previous response replayed conversation history or contained only an acknowledgment and was not spoken. Answer ONLY the latest customer message. Do not copy earlier assistant statements or customer dialogue. Give a substantive response to the customer and continue the unresolved script step. Continue from the next applicable unanswered script step, respecting branches and refusals. If no questions remain, close or follow the supported consented handoff. Never re-ask these answered questions: "+JSON.stringify(completedQuestions)}:m);
-      await streamAgentReply({messages:retryMessages,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
+      await streamAgentReply({answerOnly,requirePurpose,messages:retryMessages,allowRephrase,responsePrefix,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
     } else if (!answer.trim() && repetitionRetry) {
-      const recovery = recoveryReply(messages);
+      const recovery = answerOnly ? "" : recoveryReply(messages);
       if (recovery) await streamAgentReply({messages:[],fixedSpeech:recovery,voice,signal,engine,send,timing,onText,customerText,emotionState,phraseStreaming,cacheAudio});
     }
   } finally { finished = true; queue.length = 0; notify(); await worker; signal.removeEventListener("abort", abort); }
 }
+

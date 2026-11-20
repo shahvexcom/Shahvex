@@ -1240,7 +1240,7 @@ import { vicidialRequest, requireVicidialSuccess } from "./vicidial";
 import { setRuntimeState } from "./agent-runtime";
 import { requestBridge } from "./vicidial-bridge";
 import { vicidialLiveConfig } from "./vicidial-config";
-type Turn = { role: string; content: string };
+type Turn = { role: string; content: string; conversationOnly?: boolean };
 const handoffStepSchema = z
   .object({
     id: z.string().min(1).max(60),
@@ -1368,7 +1368,7 @@ function answerToQuestion(history: Turn[], question: string) {
           break;
         continue;
       }
-      if (turn.role !== "user") continue;
+      if (turn.role !== "user" || turn.conversationOnly === true) continue;
       if (
         /^(?:(?:hello|hi|hey)[?!., ]*)+(?:(?:are you (?:still )?there|can you hear me)[?!., ]*)?$|^(?:are you (?:still )?there|can you hear me)[?!., ]*$/i.test(
           turn.content.trim(),
@@ -1468,7 +1468,7 @@ export function groundedHandoff(
     const userEvidence =
       check.customerEvidence.length > 0 &&
       check.customerEvidence.every((e) => {
-        if (!history.some((t) => t.role === "user" && t.content.includes(e)))
+        if (!history.some((t) => t.role === "user" && t.conversationOnly !== true && t.content.includes(e)))
           return false;
         // One bare yes/no cannot complete several unrelated requirements.
         const generic =
@@ -1608,7 +1608,7 @@ export function groundedCallFields(
   value: z.infer<typeof resultSchema>,
   history: Turn[],
 ) {
-  const users = history.filter((t) => t.role === "user").map((t) => t.content);
+  const users = history.filter((t) => t.role === "user" && t.conversationOnly !== true).map((t) => t.content);
   return Object.fromEntries(
     value.fields
       .filter(
@@ -1634,7 +1634,7 @@ export function verifiedQuestionFields(
     )
       continue;
     const quotes = check.customerEvidence.filter((e) =>
-      history.some((t) => t.role === "user" && t.content.includes(e)),
+      history.some((t) => t.role === "user" && t.conversationOnly !== true && t.content.includes(e)),
     );
     if (quotes.length !== check.customerEvidence.length) continue;
     const q = step.requirement;
@@ -1667,7 +1667,7 @@ export function hasRequestedHumanHandoff(history: Turn[]) {
   for (const turn of history) {
     const preceding = prefix.at(-1);
     prefix.push(turn);
-    if (turn.role !== "user") continue;
+    if (turn.role !== "user" || turn.conversationOnly === true) continue;
     if (withdrawsHumanRequest(turn.content)) {
       requested = false;
       continue;
@@ -1702,7 +1702,7 @@ export function partialHandoffFields(history: Turn[]) {
       }
       continue;
     }
-    if (turn.role !== "user") continue;
+    if (turn.role !== "user" || turn.conversationOnly === true) continue;
     if (courtesyReply) {
       courtesyReply = false;
       continue;
@@ -2416,3 +2416,4 @@ export async function transferVicidialCall(callId: string) {
     throw error;
   }
 }
+

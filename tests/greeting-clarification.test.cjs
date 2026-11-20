@@ -96,7 +96,7 @@ test('okay to an age question advances without inventing an age, then missing ag
 });
 
 test('wait a second is a meaningful request and gets a brief acknowledgment without repeating questions',async()=>{const id=service.newTest('admin','agent',cfg);service.sessions.get(id).messages.push({role:'assistant',content:'What is your age?'});const api=route(async(port)=>{assert.notEqual(port,11434);return new Response(new Uint8Array(4800).fill(16),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});});const result=await(await api.POST(request(id,'please-wait',JSON.stringify({text:'Wait a second.'}),'application/json'))).text();assert.match(result,/Of course, take your time/);assert.doesNotMatch(result,/didn.t catch|end_call/);assert.equal(service.sessions.get(id).messages.at(-1).content,'Of course, take your time.');});
-test('speech recognition retries a suspicious short filler result and preserves a full wait request',async()=>{const bytes=new Uint8Array(await audio.speechWav(Array.from({length:40},speech)).arrayBuffer());let attempts=0;const result=await audio.recognizeSpeechWav(bytes,async wav=>{attempts++;if(attempts===1)return 'Um.';assert.ok(wav.size>bytes.length);return 'Wait a second.';});assert.equal(result,'Wait a second.');assert.equal(attempts,2);assert.equal(await audio.recognizeSpeechWav(bytes,async()=> 'Yeah.'),'Yeah.');});
+test('speech recognition preserves usable short replies instead of replacing them with a longer second decode',async()=>{const bytes=new Uint8Array(await audio.speechWav(Array.from({length:40},speech)).arrayBuffer());let attempts=0;const result=await audio.recognizeSpeechWav(bytes,async()=>{attempts++;return attempts===1?'Um.':'Wait a second.';});assert.equal(result,'Um.');assert.equal(attempts,1);assert.equal(await audio.recognizeSpeechWav(bytes,async()=> 'Yeah.'),'Yeah.');});
 
 test('script intro, reciprocal greeting, purpose and permission precede the first lead question',async()=>{
  const id=service.newTest('admin','agent',{...cfg,name:'Sofia',first:'ai',script:"Hello, this is Sofia from Shahvex. I'm calling about your service appointment.\nWhich day works for you?"});
@@ -110,3 +110,4 @@ test('script intro, reciprocal greeting, purpose and permission precede the firs
   assert.equal(await turn({text:'Yes'},4),first);
  }finally{service.sessions.delete(id);}
 });
+

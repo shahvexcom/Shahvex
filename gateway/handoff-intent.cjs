@@ -54,8 +54,8 @@ function affirmativeTransferConsent(value) {
     .replace(/[,!.]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .replace(/^(?:(?:hmm|um|uh)\s+)+/, '');
-  const yes = /^(?:yes|yeah|yep|yup|uh[- ]?huh|mm[- ]?hmm|mhm|okay|ok|sure|sure thing|alright|all right|absolutely|certainly|of course|sounds good|that's fine|please do|go ahead)(?: (?:please|go ahead|yes|sure|okay|ok))*$/;
+    .replace(/^(?:(?:um|uh)\s+)+/, '');
+  const yes = /^(?:hmm|hm|mm|yes|yeah|yep|yup|uh[- ]?huh|mm[- ]?hmm|mhm|okay|ok|sure|sure thing|alright|all right|absolutely|certainly|of course|sounds good|that's fine|please do|go ahead)(?: (?:please|go ahead|yes|sure|okay|ok))*$/;
   return yes.test(text);
 }
 function customerRequestsHuman(value, history = []) {
@@ -113,7 +113,7 @@ function customerRequestsHuman(value, history = []) {
 function waitingAcknowledgment(value) {
   const text = textOf(value);
   return (
-    /^(?:yes|yeah|yep|sure|absolutely|certainly|of course|okay|ok|all right|alright|please do|go ahead)(?:[,.! ]+(?:please|go ahead|yes|sure|okay|ok))*[.! ]*$/i.test(
+    /^(?:hmm|hm|mm|mm[- ]?hmm|mhm|yes|yeah|yep|sure|absolutely|certainly|of course|okay|ok|all right|alright|please do|go ahead)(?:[,.! ]+(?:please|go ahead|yes|sure|okay|ok))*[.! ]*$/i.test(
       text,
     ) ||
     /^(?:(?:okay|ok|yes|yeah|sure|all right|alright|fine)[,.! ]*)?(?:I(?:'m| am) (?:still )?(?:here[, ]+I(?:'m| am) )?waiting|waiting|I(?:'m| am) (?:here|there))[.!?, ]*$/i.test(
@@ -240,7 +240,7 @@ function routineHandoffOffer(script, memory, customer) {
     /\b(?:connect|transfer) you (?:with|to) (?:a|an|the) ((?:licensed |human |live )?(?:specialist|agent|representative|advisor|adviser|person))\b(?: who can ([^.!?\n]{3,200}))?/i,
   );
   if (!target) return;
-  return `${target[2] ? `The ${target[1]} can ${target[2]}. ` : ""}Would you like me to connect you${target[2] ? "" : ` with a ${target[1]}`}?`;
+  return `Let me connect you with a ${target[1]}${target[2] ? ` who can ${target[2]}` : ""}.`;
 }
 /** Explain an offered handoff using its configured purpose, then ask for agreement. */
 function handoffExplanationReply(value, history, script = "") {
@@ -293,3 +293,4 @@ module.exports = {
   isTransferOffer,
   handoffDeclineReply,
 };
+

@@ -11,7 +11,7 @@ export async function pcAiEngine(port: number, path: string, init: RequestInit =
 }
 
 export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: string) {
-  if (!/^\/internal\/capacity$/.test(path) && !/^\/engine\/(?:11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.test(path) && !/^\/tester\/(?:start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping)$/.test(path)) throw Error("Unsupported PC AI operation");
+  if (!/^\/internal\/capacity$/.test(path) && !/^\/engine\/(?:11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.test(path) && !/^\/tester\/(?:start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.test(path)) throw Error("Unsupported PC AI operation");
   const base = new URL(process.env.SHAHVEX_PC_AI_URL || "");
   const key = process.env.SHAHVEX_PC_AI_SECRET;
   const clientId = process.env.SHAHVEX_CF_CLIENT_ID;
@@ -26,7 +26,7 @@ export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: 
   headers.set("CF-Access-Client-Secret", clientSecret);
   if (owner) headers.set("x-shahvex-owner", owner);
   // Session handles and turn IDs are separate, validated gateway headers.
-  for (const name of ["x-shahvex-session", "x-shahvex-turn"]) {
+  for (const name of ["x-shahvex-session", "x-shahvex-turn", "x-shahvex-turn-final"]) {
     const value = new Headers(init.headers).get(name);
     if (value && /^[a-zA-Z0-9_-]{1,80}$/.test(value)) headers.set(name, value);
   }
@@ -37,9 +37,10 @@ export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: 
   // fetch decodes Cloudflare gzip/br bodies but retains wire-format headers.
   // Reusing those headers makes the browser decode the already decoded body again.
   const responseHeaders = new Headers({ "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
-  for (const name of ["content-type", "x-audio-format", "x-sample-rate", "x-channels"]) {
+  for (const name of ["content-type", "x-audio-format", "x-sample-rate", "x-channels", "x-shahvex-flow-revision"]) {
     const value = upstream.headers.get(name);
     if (value) responseHeaders.set(name, value);
   }
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 }
+
