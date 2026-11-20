@@ -412,6 +412,10 @@ type Session = {
   requirePlaybackAck?: boolean;
   introPlaybackComplete?: boolean;
   lastCompletedTurnId?: string;
+  pendingPlayback?: { turnId: string; phase: Session["speechPhase"]; message: Message; question?: string };
+  questionLedger?: Map<string, { status: "pending" | "interrupted" | "delivered" | "answered"; response?: string }>;
+  purposeReplyTo?: string;
+  purposePermissionAnswered?: boolean;
   speechPhase?: "introduction" | "purpose" | "conversation";
   introRestartPending?: boolean;
   purposeDelivered?: boolean;

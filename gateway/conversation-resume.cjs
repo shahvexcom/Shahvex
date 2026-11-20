@@ -1,11 +1,18 @@
 'use strict';
 const { rememberQuestions } = require('./question-memory.cjs');
-const FLOW_REVISION = 'REC402-403-404-v8';
+const FLOW_REVISION = 'REC414-playback-v13';
 const { mainQuestions } = require('./conversation-flow.cjs');
 
 // A short listening signal is not an answer to an interrupted business question.
 function isListeningSignal(value) {
   return /^(?:(?:hello again|hello|hi|hey|absolutely|certainly|of course|please do|sounds good|that's fine|sure thing|carry on|proceed|yes|yeah|yep|yup|okay|ok|well|hmm|hm|mm|mhm|mm[- ]?hmm|uh[- ]?huh|sure|right|alright|all right|go ahead|please continue|continue|I'm listening|I am listening|I'm here|I am here|tell me more|fine|good|great|not bad|I'm fine|I am fine|I'm good|I am good|I'm well|I am well)[\s,.!?-]*)+$/i.test(String(value || '').trim());
+}
+// A social answer to the intro is not a screening answer or a missing-question request.
+function isWellbeingReply(value) {
+  const text=String(value||'').replace(/[’]/g,"'").replace(/[,.!?]+/g,' ').replace(/\s+/g,' ').trim().replace(/^(?:(?:u+h+|u+m+|erm|ah|well|oh|hey|hello|hi|okay|ok)\s+)+/i,'');
+  const answer="(?:(?:I(?:'m| am)(?: doing)?|doing|feeling) )?(?:(?:pretty|very|really) )?(?:fine|good|great|well|okay|ok|not bad|alright|all right)(?: today)?(?: (?:thanks|thank you)(?: for asking)?)?";
+  const reciprocal="(?:(?:and|but) )?(?:you|yourself|how about (?:you|yourself)|what about you|how are you(?: doing)?(?: today)?)";
+  return new RegExp("^(?:"+answer+"(?: "+reciprocal+")?|"+reciprocal+")$",'i').test(text);
 }
 function introductionOnly(turn) {
   const text = String(turn?.content || '');
@@ -33,8 +40,7 @@ function openingPhase(history) {
   return spoken.length > 0 && spoken.every(introductionOnly);
 }
 function repairTurn(text, history, script = '', purposeDelivered = false) {
-  const wellbeing = /^(?:(?:I(?:'m| am) |doing )?(?:fine|good|great|well|not bad)[,.! ]*)?(?:(?:and |but )?(?:how are you(?: today| doing)?|how about you|what about you)[?!., ]*)?$/i.test(String(text || '').trim());
-  if (!isListeningSignal(text) && !(wellbeing && openingPhase(history))) return;
+  if (!isListeningSignal(text) && !(isWellbeingReply(text) && openingPhase(history))) return;
   const last = history.findLast(turn => turn.role === 'assistant');
   if (openingPhase(history) && !purposeDelivered) {
     return last.content.includes('[interrupted]')
@@ -67,4 +73,4 @@ function knownSalutation(history) {
   const stated = history.filter(turn => turn.role === 'user').findLast(turn => /\bI(?:'m| am) (?:a )?(?:male|female|man|woman)\b/i.test(turn.content));
   return stated && /\b(?:female|woman)\b/i.test(stated.content) ? "Ma'am, " : 'Sir, ';
 }
-module.exports = { FLOW_REVISION, isListeningSignal, introductionOnly, openingPhase, pendingQuestion, repairTurn, repairInstruction, knownSalutation };
+module.exports = { FLOW_REVISION, isListeningSignal, isWellbeingReply, introductionOnly, openingPhase, pendingQuestion, repairTurn, repairInstruction, knownSalutation };

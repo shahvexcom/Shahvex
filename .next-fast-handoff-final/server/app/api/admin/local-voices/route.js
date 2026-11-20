@@ -1,6 +1,6 @@
 var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/admin/local-voices/route.js")
-R.c("server/chunks/_0t7ty53._.js")
-R.c("server/chunks/[root-of-the-server]__00sqn0-._.js")
+R.c("server/chunks/_21b-lda._.js")
+R.c("server/chunks/[root-of-the-server]__1dzlh66._.js")
 R.c("server/chunks/lib_20-rzby._.js")
 R.c("server/chunks/_1qdqhw4._.js")
 R.c("server/chunks/node_modules_jose_dist_webapi_1kzfagc._.js")

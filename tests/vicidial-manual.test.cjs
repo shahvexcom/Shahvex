@@ -19,7 +19,7 @@ test('manual AudioSocket call uses shared tester PCM and cannot submit Native le
  const manual=createManualBridge({enabled:true,secret,agent,controlPort:0,audioPort:0,stateDirectory:folder},{logger:value=>logs.push(value),request:async(action,init,owner)=>{
   operations.push(action);assert.match(owner,/^manual-audio-/);assert.ok(['start','listen','turn','stop','interrupt'].includes(action));
   if(action==='start'){const body=JSON.parse(init.body);assert.equal(body.deriveFromScript,true);assert.equal(body.config.script,agent.script);return Response.json({id:'test-session',derivedFromScript:true});}
-  if(action==='listen'){assert.equal(init.headers['content-type'],'audio/wav');assert.equal(init.headers['x-shahvex-turn-final'],'1');assert.equal(Buffer.from(init.body).readUInt32LE(24),16000);return Response.json({text:'My name is Alex.',completion:'complete'});}
+  if(action==='listen'){assert.equal(init.headers['content-type'],'audio/wav');assert.equal(init.headers['x-shahvex-turn-final'],undefined);assert.equal(Buffer.from(init.body).readUInt32LE(24),16000);return Response.json({text:'My name is Alex.',completion:'complete'});}
   if(action==='turn'){assert.equal(init.headers['content-type'],'application/json');if(JSON.parse(init.body).opening)return new Response('{"type":"done"}\n');assert.equal(JSON.parse(init.body).text,'My name is Alex.');return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n{"type":"done"}\n');}
   return Response.json({stopped:true});
  }});let socket;

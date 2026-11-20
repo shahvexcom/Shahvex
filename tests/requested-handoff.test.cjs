@@ -1,6 +1,6 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto'),ts=require('typescript'),{createRequire}=require('node:module');
 const intent=require('../gateway/handoff-intent.cjs');
-function load(file,deps={}){const filename=path.resolve(file),req=createRequire(filename),m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(n=>Object.hasOwn(deps,n)?deps[n]:n==='server-only'?{}:n.startsWith('./')&&fs.existsSync(path.resolve(path.dirname(filename),n+'.ts'))?load(path.resolve(path.dirname(filename),n+'.ts'),deps):req(n),m,m.exports);return m.exports;}
+function load(file,deps={}){const filename=path.resolve(file),req=createRequire(filename),m={exports:{}};new Function('require','module','exports',ts.transpileModule(fs.readFileSync(filename,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022,esModuleInterop:true}}).outputText)(raw=>{const n=raw.replace(/\.ts$/,'');return Object.hasOwn(deps,n)?deps[n]:n==='server-only'?{}:n.startsWith('./')&&fs.existsSync(path.resolve(path.dirname(filename),n+'.ts'))?load(path.resolve(path.dirname(filename),n+'.ts'),deps):req(n)},m,m.exports);return m.exports;}
 const A=content=>({role:'assistant',content}),U=content=>({role:'user',content});
 function results(query=async()=>({rowCount:1,rows:[]})){return load('lib/vicidial-results.ts',{'./agent-test':{},'./database':{db:async()=>({query})},'./credential-crypto':{},'./vicidial':{},'./agent-runtime':{},'./vicidial-bridge':{},'./vicidial-config':{}});}
 test('direct requests, including giving details to the licensed member, are recognized without treating hypotheticals or refusals as consent',()=>{
@@ -153,3 +153,4 @@ test('a specialist definition uses the assigned role rather than invented sales 
  const reply=intent.handoffExplanationReply('What is a licensed specialist?',[],'Let me connect you with a licensed specialist who can review your plan.');
  assert.match(reply,/professional license/);assert.match(reply,/role here is to review your plan/);assert.doesNotMatch(reply,/don.t sell|certified|refund|eligible/);
 });
+

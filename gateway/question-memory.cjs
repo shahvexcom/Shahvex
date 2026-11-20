@@ -6,10 +6,10 @@ const kind=q=>/\b(?:age|how old|years old|between \d+ and \d+)\b/i.test(q)?'age'
 function usable(question,text){
  const qkind=kind(question),t=text.replace(/[’]/g,"'").trim();
  if(/\b(?:rather not|prefer not|don't want to|do not want to|not sharing|not saying|that's private|I refuse)\b/i.test(t))return false;
- if(/^(?:(?:yes|yeah|yep|okay|ok)[,.! ]*)?(?:I(?:'m| am) (?:still )?(?:here|listening)|I can hear you|I hear you|go ahead|please continue|hmm|hm|mm[- ]?hmm)[.!? ]*$/i.test(t))return false;
+ if(/^(?:(?:yes|yeah|yep|okay|ok)[,.! ]*)?(?:I(?:'m| am) (?:still )?(?:here|listening)|I can hear you|I hear you|go ahead|please continue)[.!? ]*$/i.test(t))return false;
  if(!t||/\?|^(?:what|where|why|who|when|how|are you|do you|can you|could you|hello|hi|hey)\b|\b(?:say again|repeat|didn't catch|don't know|not sure)\b/i.test(t))return false;
  if(/^(?:I(?:'m| am) (?:still )?here|I(?:'m| am) (?:fine|good|well|great|okay|ok|doing well)|my day|thank(?:s| you))/i.test(t))return false;
- if(/^(?:okay|ok|sure|absolutely)[.! ]*$/i.test(t))return qkind==='permission';
+ if(/^(?:okay|ok|sure|absolutely|yup|hmm|hm|mm|mhm|mm[- ]?hmm)[.! ]*$/i.test(t))return /^(?:are|is|do|does|have|has|can|could|would|will|may)\b/i.test(question) || qkind==='permission';
  const bare=/^(?:yes|no|yeah|nope|yep|correct)[.! ]*$/i.test(t);
  if(bare)return !/^(?:what|which|how (?:old|many|much)|may I know)/i.test(question);
  if(qkind==='age')return /^(?:(?:um|uh|actually|no|sorry)[, ]+)*(?:(?:I(?:'m| am)|my age is|it(?:'s| is))\s+)?(?:\d{1,3}|(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|and)[ -]*)+)(?:\s+years? old)?[.! ]*$/i.test(t);

@@ -23,6 +23,6 @@ test('native intro uses playback acknowledgment, rejects stale acknowledgment, t
  const restart=await turn({text:'Hello hello'});assert.match(restart.text,/Alex.*Repairs/);assert.notEqual(restart.text,opening.text);assert.equal(models,0);
  await service.dispatch(request('playback-complete',{completedTurnId:opening.id}));assert.equal(service.sessionStore.get(id).introPlaybackComplete,false);
  await service.dispatch(request('playback-complete',{completedTurnId:restart.id}));assert.equal(service.sessionStore.get(id).introPlaybackComplete,true);
- const purpose=await turn({text:'Hmm'});assert.match(purpose.text,/calling about your home repair/);assert.equal(models,1);
+ const purpose=await turn({text:'Hmm'});assert.match(purpose.text,/calling to discuss home repairs/);assert.equal(models,0);
  }finally{if(id)await service.dispatch(request('stop',{}));global.fetch=original;}
 });

@@ -97,26 +97,26 @@ test('native playback completion is reported after the PCM queue drains, once fo
  const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'playback-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},fetchImpl:async(_url,init)=>{
  const e=JSON.parse(init.body);events.push(e);
  if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true});
- if(e.action==='turn')return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(9600,7).toString('base64')})+'\n'+JSON.stringify({type:'done',turnId:'playback-test-turn'})+'\n');
+ if(e.action==='turn')return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(9600,7).toString('base64')})+'\n'+JSON.stringify({type:'done',turnId:e.eventId})+'\n');
  return Response.json({saved:true});
  }});
- try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>bytes+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await until(()=>events.some(e=>e.action==='playback-complete'));assert(bytes>=3200);assert.equal(events.find(e=>e.action==='playback-complete').completedTurnId,'playback-test-turn');await wait(100);assert.equal(events.filter(e=>e.action==='playback-complete').length,1);
+ try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>bytes+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await until(()=>events.some(e=>e.action==='playback-complete'));assert(bytes>=3200);assert.equal(events.find(e=>e.action==='playback-complete').completedTurnId,events.find(e=>e.action==='turn').eventId);await wait(100);assert.equal(events.filter(e=>e.action==='playback-complete').length,1);
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
-test('semantic incomplete speech survives a 1500ms pause and commits only one combined customer turn',async()=>{
+test('a legacy incomplete completion label cannot impose an extra 1500ms hold on a finished speech window',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-semantic-'));let socket;const probes=[],replies=[];
  const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'full-utterance-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},fetchImpl:async(_url,init)=>{
  const e=JSON.parse(init.body);
  if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true});
- if(e.action==='listen'){assert.equal(e.turnFinal,true);probes.push(Buffer.from(e.audio,'base64'));return Response.json({text:probes.length===1?'I have':'I have Medicaid.',completion:probes.length===1?'incomplete':'complete'});}
+ if(e.action==='listen'){assert.equal(e.turnFinal,undefined);probes.push(Buffer.from(e.audio,'base64'));return Response.json({text:probes.length===1?'I have':'I have Medicaid.',completion:probes.length===1?'incomplete':'complete'});}
  if(e.action==='turn'){if(!e.opening)replies.push(e.text);return new Response('{"type":"done","turnId":"fixture-full-utterance"}\n');}
  return Response.json({saved:true});
  }});
  try{
  await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',()=>{});socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(100);
  const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);
- const phrase=Buffer.concat(Array.from({length:15},()=>packet(0x10,voice)));socket.write(phrase);await until(()=>probes.length===1);await wait(1500);assert.equal(replies.length,0,'unfinished thought must not commit or start a question');socket.write(phrase);
- await until(()=>replies.length===1,3000);assert.equal(replies[0],'I have Medicaid.');assert(probes[1].length>=44+30*640,'both original voiced sections reach STT together');
+ const phrase=Buffer.concat(Array.from({length:15},()=>packet(0x10,voice)));socket.write(phrase);await until(()=>replies.length===1);assert.equal(replies[0],'I have');socket.write(phrase);
+ await until(()=>replies.length===2,3000);assert.equal(replies[1],'I have Medicaid.');assert.equal(probes[1].length,probes[0].length,'independent speech windows are not held and retranscribed together');
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('failed or empty final speech probes retry the original audio turn instead of dropping the caller',async()=>{

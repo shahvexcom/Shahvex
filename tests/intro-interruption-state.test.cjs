@@ -22,7 +22,7 @@ test('a completed synthesis with unfinished audible intro is restarted before an
   // Every interrupted intro repeats the complete Hi/name/company/wellbeing wording requested by the operator.
   await service.dispatch(request('interrupt',{}));
   const second=await turn({text:'Hey'});assert.match(second,/Alex.*Repairs/);assert.equal(second,restarted);assert.equal(models,0);
-  const purpose=await turn({text:'Yep'});assert.match(purpose,/calling about the home repairs/);assert.equal(models,1);
+  const purpose=await turn({text:'Yep'});assert.match(purpose,/calling to discuss home repair needs/);assert.equal(models,0);
  }finally{if(id)await service.dispatch(request('stop',{}));global.fetch=original;}
 });
 test('an introduction cancelled while TTS is pending retains the restart state',async()=>{

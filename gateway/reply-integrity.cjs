@@ -26,7 +26,7 @@ function createReplayGuard(messages,customer=''){
 }
 const questionKey=text=>canonical(String(text).match(/\b(?:are you|do you|does your|have you|is your|what (?:is|are)|how (?:old|many|much)|may I know|can you|would you|which\b)[^?\n]*\?/i)?.[0]||text).replace(/\b(?:currently|please)\b/g,'').replace(/\s+/g,' ').trim();
 /** Keep explicit Yes/No branches attached to their preceding question. Unknown is not N/A. */
-function scriptQuestionProgress(script,memory){
+function scriptQuestionProgress(script,memory,{includeBranchQuestions=false}={}){
  const entries=[];let anchor=null,condition=null;
  for(const line of String(script||'').split('\n')){
   if(/^\s*(?:knowledge|FAQs?|restrictions)\s*:?\s*$/i.test(line))break;
@@ -34,7 +34,7 @@ function scriptQuestionProgress(script,memory){
   if(branch)condition=anchor?{question:anchor,answer:(branch[1]||branch[2]).toLowerCase()}:null;
   if(/^\s*(?:whatever|regardless|in (?:either|both) case|always|next step)/i.test(line))condition=null;
   for(const match of line.matchAll(/\b(?:are you|do you|does your|have you|is your|what (?:is|are)|how (?:old|many|much)|may I know|can you|would you|which\b)[^?\n]*\?/gi)){
-   const question=match[0];if(/\b(?:how are you|good time|time to talk|connect|transfer|can you hear|are you (?:still )?there)\b/i.test(question))continue;
+   const question=match[0];if(/^(?:are you today|are you doing|are you feeling)\b/i.test(question))continue;if(/\b(?:how are you|good time|time to talk|connect|transfer|can you hear|are you (?:still )?there)\b/i.test(question))continue;
    if(!entries.some(e=>questionKey(e.question)===questionKey(question)))entries.push({question,condition});
    if(!condition)anchor=question;
   }
@@ -44,10 +44,10 @@ function scriptQuestionProgress(script,memory){
   let applicability='required';
   if(entry.condition){
    const parent=memory.completed.find(a=>questionKey(a.question)===questionKey(entry.condition.question));
-   const yesNo=parent?.response.trim().match(/^(yes|yeah|yep|no|nope)\b/i)?.[1];
-   applicability=!yesNo?'unresolved':(/^(yes|yeah|yep)$/i.test(yesNo)?'yes':'no')===entry.condition.answer?'required':'not_applicable';
+   const yesNo=parent?.response.trim().match(/^(yes|yeah|yep|yup|okay|ok|sure|hmm|hm|mm|mhm|mm-hmm|no|nope)\b/i)?.[1];
+   applicability=!yesNo?'unresolved':(!/^(no|nope)$/i.test(yesNo)?'yes':'no')===entry.condition.answer?'required':'not_applicable';
   }
-  return {...entry,applicability,status:answer?'answered':'pending'};
+  return {...entry,applicability:includeBranchQuestions?'required':applicability,status:answer?'answered':'pending'};
  });
 }
 function supportsSimpleScriptFlow(script){
@@ -72,3 +72,4 @@ function customerFloorReply(text,history=[]){
  if(/^(?:you (?:don't|do not) understand (?:me|English)|(?:do|don't) you understand (?:me|English))[.!? ]*$/i.test(value))return "I can understand English, but I missed your point. What would you like to ask?";
 }
 module.exports={questionKey,createReplayGuard,scriptQuestionProgress,nextScriptQuestion,customerFloorReply,supportsSimpleScriptFlow};
+

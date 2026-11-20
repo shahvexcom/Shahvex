@@ -13,7 +13,7 @@ const allowed = new Set(['agent-context-answer', 'agent-test', 'agent-test-sessi
 function loader() {
   const cache = new Map();
   function load(name) {
-    const key = name.replace(/^@\/lib\//, '').replace(/^\.\//, '');
+    const key = name.replace(/^@\/lib\//, '').replace(/^\.\//, '').replace(/\.ts$/, '');
     if (name === 'server-only') return {};
     if (!allowed.has(key)) return require(name);
     if (cache.has(key)) return cache.get(key).exports;
@@ -136,7 +136,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id) || !/^[a-zA-Z0-9_-]{1,80}$/.test(turn)) return json(400, { error: 'Invalid session or turn' });
     const target = new URL('http://127.0.0.1/tester');
     target.searchParams.set('action', match[1]); target.searchParams.set('id', id); target.searchParams.set('turnId', turn);
-    return handleTestSession(new Request(target, { method: 'POST', headers: { 'content-type': request.headers.get('content-type') || 'application/json', 'x-shahvex-turn-final':request.headers.get('x-shahvex-turn-final')||'0' }, body, signal: request.signal }), owner, true);
+    return handleTestSession(new Request(target, { method: 'POST', headers: { 'content-type': request.headers.get('content-type') || 'application/json', 'x-shahvex-completed-turn':request.headers.get('x-shahvex-completed-turn')||'', 'x-shahvex-turn-final':request.headers.get('x-shahvex-turn-final')||'0' }, body, signal: request.signal }), owner, true);
   }
   const server = http.createServer(async (req, res) => {
     const abort = new AbortController();

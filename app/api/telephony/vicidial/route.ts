@@ -1,4 +1,5 @@
-import { vicidialCallback } from "@/lib/vicidial-callback";
+// @ts-ignore -- Pin this route to the updated TS source, bypassing extensionless/alias shadowing.
+import { vicidialCallback } from "../../../../lib/vicidial-callback.ts";
 export const runtime="nodejs";
 export const maxDuration=300;
 export async function POST(request:Request) {

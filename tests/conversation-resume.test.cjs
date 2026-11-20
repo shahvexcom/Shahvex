@@ -48,11 +48,11 @@ test('normal tester path rephrases intro, explains purpose, resumes question, ha
   const session=service.sessionStore.get(id);session.messages.push(A('Hello, this is Alex from Repairs.'));
   await call('interrupt',{});assert.match(session.messages.at(-1).content,/interrupted/);
   assert.match((await turn({text:'Hello'})).text,/Hi, this is Alex.*How are you doing today/);
-  assert.match((await turn({text:'Well'})).text,/calling about the home repair/);
+  assert.match((await turn({text:'Well'})).text,/calling to discuss requested home repairs/);
   session.messages.push(A('Are you the homeowner? [interrupted]'));
   assert.equal((await turn({text:'Yep'})).text,'Sir, Do you own the home?');
   assert.equal(session.questionAliases.get('Sir, Do you own the home?'),'Are you the homeowner?');
-  const retry=await turn({silenceStep:1});assert.equal(retry.text,'Sir, Do you own the home?');
+  const retry=await turn({silenceStep:1});assert.equal(retry.text,'','no automatic question repetition on silence');
   assert.equal((await turn({silenceStep:2})).text,'Sir, Can you hear me?');
   assert.match((await turn({silenceStep:3})).text,/Are you still there/);
   const final=await turn({silenceStep:4});assert.match(final.text,/Goodbye/);assert(final.ev.some(e=>e.type==='end_call'));

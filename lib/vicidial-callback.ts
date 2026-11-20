@@ -1,3 +1,4 @@
+import { FLOW_REVISION } from "../gateway/conversation-resume.cjs";
 import {
   directPrefixReadSql,
   directAdmissionSql,
@@ -12,9 +13,12 @@ import { decryptCredential } from "./credential-crypto";
 import { verifyBridgeSignature } from "./vicidial-bridge";
 import { vicidialRequest } from "./vicidial";
 import { vicidialLiveConfig } from "./vicidial-config";
-import { newTest, sessions, testConfig, type TestConfig } from "./agent-test";
-import { handleTestSession } from "./agent-test-speculative";
-import { pcAiRequest } from "./pc-ai-engine";
+// @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
+import { newTest, sessions, testConfig, type TestConfig } from "./agent-test.ts";
+// @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
+import { handleTestSession } from "./agent-test-speculative.ts";
+// @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
+import { pcAiRequest } from "./pc-ai-engine.ts";
 import {
   collectVicidialResult,
   syncVicidialComments,
@@ -86,7 +90,7 @@ const message = z
   })
   .strict();
 const json = (value: unknown, status = 200) =>
-  Response.json(value, { status, headers: { "cache-control": "no-store" } });
+  Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION } });
 type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
 const statusHeaders = (line: string) =>
@@ -222,6 +226,7 @@ export async function vicidialCallback(request: Request) {
           "content-type": "audio/wav",
           "x-shahvex-session": call.voice_session_id,
           "x-shahvex-turn": v.eventId,
+          ...(v.completedTurnId?{"x-shahvex-completed-turn":v.completedTurnId}:{}),
           ...(v.turnFinal?{"x-shahvex-turn-final":"1"}:{}),
         },
         body,
@@ -1181,7 +1186,8 @@ export async function vicidialCallback(request: Request) {
         ["PREPARING", "UNCERTAIN", "SUBMITTED", "ANSWERED"].includes(
           call.transfer_status,
         )
-      )
+      ) {
+        if (v.action === "playback-complete") return json({ ignored: true });
         return json(
           {
             error: "Call is no longer handled by AI",
@@ -1194,6 +1200,7 @@ export async function vicidialCallback(request: Request) {
           },
           409,
         );
+      }
       if (!sessionId) {
         if (admittedCall)
           await pool.query(

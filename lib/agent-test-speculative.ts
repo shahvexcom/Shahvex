@@ -1,5 +1,7 @@
-import { sessions } from "./agent-test";
-import { handleTestSession as run } from "./agent-test-session";
+// @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
+import { sessions } from "./agent-test.ts";
+// @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
+import { handleTestSession as run } from "./agent-test-session.ts";
 
 type Session = NonNullable<ReturnType<typeof sessions.get>>;
 type Draft = { token: string; parent: Session; shadow: Session; committed: boolean; cancelled: boolean; finished: boolean; timer: ReturnType<typeof setTimeout> };

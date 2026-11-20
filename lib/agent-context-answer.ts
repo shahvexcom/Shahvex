@@ -398,7 +398,7 @@ export function briefAgentOpening(
     !/^(?:the|your|an?|assistant|agent|from|with)$/i.test(candidate)
       ? candidate
       : config.name;
-  return `Hello, this is ${name}${company ? ` from ${company}` : ""}. How are you today?`;
+  return `Hello, this is ${name}${company ? ` from ${company}` : ""}. How are you doing today?`;
 }
 
 export function voiceIdentity(

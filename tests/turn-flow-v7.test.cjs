@@ -37,7 +37,7 @@ test('normal tester restarts complete intro, joins identity to pending question,
  const accepted=await turn({text:'hmm'});assert.equal(accepted.text,'');assert(!accepted.events.some(e=>e.type==='pcm'));
  }finally{if(id)await service.dispatch(request('stop',{}));global.fetch=original;}
 });
-test('final speech probe carries semantic state through the actual tester HTTP dispatch without committing partial words',async()=>{
+test('final speech probe returns recognized words without an extra semantic hold or committing history',async()=>{
  const original=global.fetch,secret='v7-probe-fixture-'.repeat(4);let id;
  global.fetch=async url=>String(url).includes('8766')?Response.json({text:'I have'}):new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
  const service=createTesterService({secret,testHooks:true}),owner='v7-probe-owner';
@@ -45,7 +45,7 @@ test('final speech probe carries semantic state through the actual tester HTTP d
  try{
  id=(await(await service.dispatch(new Request('http://fixture/tester/start',{method:'POST',headers,body:JSON.stringify({agentId:'v7-probe',config:{name:'Alex',voice:'v7-probe',first:'customer',goal:'Ask coverage',task:'Ask coverage',instructions:'',script:q2,knowledge:'',style:'Natural'}})}))).json()).id;
  const wav=Buffer.alloc(32044);wav.write('RIFF');wav.writeUInt32LE(32036,4);wav.write('WAVEfmt ',8);wav.writeUInt32LE(16,16);wav.writeUInt16LE(1,20);wav.writeUInt16LE(1,22);wav.writeUInt32LE(16000,24);wav.writeUInt32LE(32000,28);wav.writeUInt16LE(2,32);wav.writeUInt16LE(16,34);wav.write('data',36);wav.writeUInt32LE(32000,40);for(let n=44;n<wav.length;n+=2)wav.writeInt16LE(1800,n);
- const response=await service.dispatch(new Request('http://fixture/tester/listen',{method:'POST',headers:{...headers,'content-type':'audio/wav','x-shahvex-session':id,'x-shahvex-turn':crypto.randomUUID(),'x-shahvex-turn-final':'1'},body:wav}));assert.equal(response.status,200);const data=await response.json();assert.equal(data.completion,'incomplete');assert.equal(data.text,'I have');assert.equal(service.sessionStore.get(id).messages.filter(m=>m.role==='user').length,0);
+ const response=await service.dispatch(new Request('http://fixture/tester/listen',{method:'POST',headers:{...headers,'content-type':'audio/wav','x-shahvex-session':id,'x-shahvex-turn':crypto.randomUUID(),'x-shahvex-turn-final':'1'},body:wav}));assert.equal(response.status,200);const data=await response.json();assert.equal(data.completion,'complete');assert.equal(data.text,'I have');assert.equal(service.sessionStore.get(id).messages.filter(m=>m.role==='user').length,0);
  }finally{if(id)await service.dispatch(new Request('http://fixture/tester/stop',{method:'POST',headers:{...headers,'x-shahvex-session':id},body:'{}'}));global.fetch=original;}
 });
 

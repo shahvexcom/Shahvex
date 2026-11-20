@@ -25,6 +25,8 @@ function upsample(pcm){const out=Buffer.alloc(pcm.length*2);for(let i=0;i<pcm.le
 function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logger=console.error,maxCalls=10,testOnly=false,allowUnregisteredManualAudio=false,localMonitor,resolveRegistration,playbackBufferMs=120,endOfSpeechMs=350,onCapacityChange}={}){
   if(!Number.isInteger(playbackBufferMs)||playbackBufferMs<0||playbackBufferMs>500)throw Error('Configure playback buffering between 0 and 500 ms');
   if(!Number.isInteger(endOfSpeechMs)||endOfSpeechMs<200||endOfSpeechMs>1500)throw Error('Configure end-of-speech silence between 200 and 1500 ms');
+  // Retire the old 1-second candidate setting: one fixed speech boundary, no semantic hold.
+  endOfSpeechMs=350;
   const bufferFrames=Math.ceil(playbackBufferMs/20);
   if(!Number.isInteger(maxCalls)||maxCalls<1||maxCalls>10000)throw Error('Configure a valid bridge concurrent-call capacity');
   const site=new URL(siteUrl);if(site.protocol!=='https:'||site.username||site.password||site.pathname!=='/'||!secret||secret.length<32)throw Error('Configure HTTPS site URL, connection UUID and a secret of at least 32 characters');
@@ -56,7 +58,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       }
       if(result.humanConnected||value.action==='customer-ended'||result.transferSubmitted)releaseAiMedia(value.externalCallId);
       if(!result.syncPending){fs.rmSync(file,{force:true});if(pendingSync.get(value.externalCallId)?.eventId===value.eventId)pendingSync.delete(value.externalCallId);}
-    }else{if(response.status===429||response.status>=500)backgroundRetryAt=Date.now()+30000;deferEvent(value);await response.body?.cancel();}}catch{backgroundRetryAt=Date.now()+30000;deferEvent(value);logger('VICIdial event retry deferred; saved event retained');}finally{delivering.delete(value.eventId);if(!urgent(value.action))deliveringCalls.delete(value.externalCallId);}
+    }else{if(value.action==='playback-complete'&&[404,409].includes(response.status)){fs.rmSync(file,{force:true});retryStates.delete(value.eventId);}else{if(response.status===429||response.status>=500)backgroundRetryAt=Date.now()+30000;deferEvent(value);}await response.body?.cancel();}}catch{backgroundRetryAt=Date.now()+30000;deferEvent(value);logger('VICIdial event retry deferred; saved event retained');}finally{delivering.delete(value.eventId);if(!urgent(value.action))deliveringCalls.delete(value.externalCallId);}
   }
   async function flushEvents(){if(flushing)return;flushing=true;try{
     const entries=fs.readdirSync(spoolDir).filter(n=>/^[a-f0-9-]+\.event\.json$/.test(n)).flatMap(name=>{try{const file=path.join(spoolDir,name);return [{file,value:JSON.parse(fs.readFileSync(file,'utf8'))}]}catch{return []}}).sort((a,b)=>Number(urgent(b.value.action))-Number(urgent(a.value.action)));
@@ -87,7 +89,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     try{
       let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>32000)return reply(413,{error:'Too large'});chunks.push(chunk);}const raw=Buffer.concat(chunks);
       if(!signed(secret,req,raw))return reply(401,{error:'Unauthorized'});
-      if(req.method==='GET'&&req.url==='/health')return reply(200,{protocol:'shahvex-vicidial-v1',flowRevision:FLOW_REVISION,semanticTurnCompletion:true,candidatePauseMs:endOfSpeechMs,audioSocket:audio.listening,sharedTester:true,aiOnlyRecording:true,humanAnswerEvents:true,maxCalls,activeCalls:calls.size,audioConnections:audioSockets.size,startingCalls:startingCalls.size,testOnly,recentSpeech:recentSpeech.slice(-5),streams:[...calls.values()].map(c=>({callId:c.callId,prefix:c.uuid.slice(0,4),voiceFlowRevision:c.voiceFlowRevision||"missing",speechProbeFailures:c.speechProbeFailures||0,speechFallbacks:c.speechFallbacks||0,lastSpeechIssue:c.lastSpeechIssue||null,inputPcmBytes:c.inputPcmBytes||0,outputPcmBytes:c.outputPcmBytes||0,inputVoicedMs:c.inputVoicedMs||0,underruns:c.underruns||0,backpressureTicks:c.backpressureTicks||0,lateTicks:c.lateTicks||0,interruptions:c.interruptions||0,admissionMs:c.admissionMs,firstOutputMs:c.firstOutputMs}))});
+      if(req.method==='GET'&&req.url==='/health')return reply(200,{protocol:'shahvex-vicidial-v1',flowRevision:FLOW_REVISION,semanticTurnCompletion:false,candidatePauseMs:endOfSpeechMs,audioSocket:audio.listening,sharedTester:true,aiOnlyRecording:true,humanAnswerEvents:true,maxCalls,activeCalls:calls.size,audioConnections:audioSockets.size,startingCalls:startingCalls.size,testOnly,recentSpeech:recentSpeech.slice(-5),streams:[...calls.values()].map(c=>({callId:c.callId,prefix:c.uuid.slice(0,4),voiceFlowRevision:c.voiceFlowRevision||"missing",speechProbeFailures:c.speechProbeFailures||0,speechFallbacks:c.speechFallbacks||0,lastSpeechIssue:c.lastSpeechIssue||null,inputPcmBytes:c.inputPcmBytes||0,outputPcmBytes:c.outputPcmBytes||0,inputVoicedMs:c.inputVoicedMs||0,underruns:c.underruns||0,backpressureTicks:c.backpressureTicks||0,lateTicks:c.lateTicks||0,interruptions:c.interruptions||0,admissionMs:c.admissionMs,firstOutputMs:c.firstOutputMs}))});
       if(req.method==='POST'&&req.url==='/capacity'){
         let limit;try{limit=JSON.parse(raw.toString()).limit;}catch{return reply(400,{error:'Invalid capacity'});}
         if(!Number.isInteger(limit)||limit<1||limit>300)return reply(400,{error:'Choose 1-300 concurrent calls'});
@@ -187,24 +189,38 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       if(!frame.length){
         if(c.renderedThisTurn&&c.synthesisDone&&!c.processing&&!c.queue.length&&!writing&&!c.playbackReported&&!c.closed&&!c.ending&&!c.transferred&&!c.handoffPending&&c.lastVoiceTurnId){
           c.playbackReported=true;
+          c.completedTurnId=c.lastVoiceTurnId;
+          logger(`Playback complete call ${c.callId} turn ${c.lastVoiceTurnId} epoch ${c.epoch}: ${c.turnWrittenBytes} PCM bytes`);
           event(c,'playback-complete',{completedTurnId:c.lastVoiceTurnId});
         }
         return;
       }
-      c.renderedThisTurn=true;
       if(c.firstOutputMs===undefined){c.firstOutputMs=Date.now()-acceptedAt;logger(`Audio startup prefix ${c.uuid.slice(0,4)}: admission ${c.admissionMs}ms, first PCM ${c.firstOutputMs}ms`);}
       if(c.openingTurn)c.openingResponse.output(Date.now());
-      c.outputPcmBytes=(c.outputPcmBytes||0)+frame.length;writing=true;c.writing=true;socket.write(packet(0x10,frame),()=>{writing=false;if(c){c.writing=false;c.lastSpeech=Date.now();}});
+      const epoch=c.epoch;
+      writing=true;c.writing=true;
+      socket.write(packet(0x10,frame),error=>{
+        writing=false;c.writing=false;
+        if(error){c.playbackReported=true;socket.destroy();return;}
+        c.outputPcmBytes=(c.outputPcmBytes||0)+frame.length;
+        if(c.epoch===epoch){c.turnWrittenBytes+=frame.length;c.renderedThisTurn=true;}
+        c.lastSpeech=Date.now();
+      });
     },20);timer.unref();
     async function turn(payload,preserveOnError=false){
       if(!c||c.ending||c.voicemailDetected||c.hold||c.handoffPending||c.prepareRequested||closing)return;
+      // A new turn must not inherit the previous epoch's partial frame.
+      const completedTurnId=c.completedTurnId;c.completedTurnId=undefined;
+      c.outputCarry=Buffer.alloc(0);c.turnWrittenBytes=0;
       const epoch=++c.epoch;c.controller?.abort();const abort=new AbortController();c.controller=abort;c.processing=true;c.playbackReady=false;c.synthesisDone=false;c.playbackReported=false;c.renderedThisTurn=false;c.lastVoiceTurnId=undefined;c.turnText='';c.openingTurn=payload.opening===true;
       if(payload.text?.trim())c.openingResponse.response();
+      let requestedTurnId,sourceBytes=0,doneTurnId;
       try{
         let response;
         for(let attempt=0;;attempt++){
           if(abort.signal.aborted||closing||c.epoch!==epoch||c.ending||c.hold||c.transferred||c.handoffPending||c.prepareRequested)return;
-          response=await callback({action:'turn',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,...payload},abort.signal);
+          requestedTurnId=crypto.randomUUID();
+          response=await callback({action:'turn',eventId:requestedTurnId,externalCallId:c.externalCallId,callId:c.callId,completedTurnId,...payload},abort.signal);
           if(response.status!==409)break;
           const state=await response.json().catch(()=>({}));
           // Rejected admissions have their own event records. Retry with a
@@ -219,26 +235,41 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
           break;
         }
         if(!response.ok||!response.body)throw Error('Voice turn failed');
+        const workerRevision=response.headers.get('x-shahvex-flow-revision');if(workerRevision&&workerRevision!=='missing'){c.voiceFlowRevision=workerRevision;logger('Active call voice flow revision: '+workerRevision);}
         let text='';const downsampler=createTelephoneDownsampler(),decoder=new TextDecoder();
         const consume=line=>{if(!line.trim()||c.ending||c.closed||c.epoch!==epoch)return;const e=JSON.parse(line);if(e.type==='error')throw Error('Shared voice engine error');if(e.type==='timing'&&e.stage==='flow-ready'){if(c.voiceFlowRevision!==e.revision)logger('Active call voice flow revision: '+String(e.revision||'missing'));c.voiceFlowRevision=e.revision;}
           if(e.type==='pcm'){
             if(e.sampleRate!==24000)throw Error('Unexpected voice sample rate');
-            const down=downsampler.push(Buffer.from(e.data,'base64'));c.outputCarry=Buffer.concat([c.outputCarry,down]);
+            const pcm=Buffer.from(e.data,'base64');sourceBytes+=pcm.length;
+            const down=downsampler.push(pcm);c.outputCarry=Buffer.concat([c.outputCarry,down]);
             while(c.outputCarry.length>=320){c.queue.push(c.outputCarry.subarray(0,320));c.outputCarry=c.outputCarry.subarray(320);}
             if(c.queue.length>3000)throw Error('Voice playback queue exceeded limit');
           }
           if(e.type==='user'&&typeof e.text==='string'&&e.text.trim()){if(machineHeard(e.text)){stopForVoicemail();return;}c.openingResponse.response();}
           if(e.type==='delta'&&typeof e.text==='string')c.turnText+=e.text;
-          if(e.type==='done'){c.synthesisDone=true;c.lastVoiceTurnId=e.turnId;}
+          if(e.type==='done')doneTurnId=e.turnId===requestedTurnId?e.turnId:undefined;
           if(e.type==='end_call'){if(e.immediate===true){void endCustomerCall(true,'customer_request');return;}if(e.reason==='voicemail'){stopForVoicemail();return;}c.endAfterPlayback=true;c.noResponseEnding=e.reason==='no_response';if(c.noResponseEnding)c.silenceClock.finish();}
         };
         for await(const chunk of response.body){if(c.epoch!==epoch||closing)throw Error('Cancelled');text+=decoder.decode(chunk,{stream:true});let at;while((at=text.indexOf('\n'))>=0){consume(text.slice(0,at));text=text.slice(at+1);}}
+        if(c.epoch!==epoch||abort.signal.aborted||closing)return;
         text+=decoder.decode();if(text.trim())consume(text);
+        if(c.epoch!==epoch||abort.signal.aborted||closing)return;
+        if(c.turnText&&!sourceBytes)throw Error('Voice output contained no PCM');
+        c.lastVoiceTurnId=doneTurnId;
         c.synthesisDone=true;
         if(c.outputCarry.length){const tail=Buffer.alloc(320);c.outputCarry.copy(tail);c.queue.push(tail);c.outputCarry=Buffer.alloc(0);}
         if(!c.endAfterPlayback&&(payload.audio||payload.text))event(c,'retry-sync');
-      }catch(error){if(!abort.signal.aborted&&!closing){if(preserveOnError){c.lastSpeechIssue='audio_turn_failed';logger('Original speech fallback failed; customer call preserved for recovery');}else{logger('VICIdial voice turn failed; requesting customer hangup');void endCustomerCall();}}}
-      finally{if(c?.epoch===epoch){c.synthesisDone=true;c.processing=false;c.lastSpeech=Date.now();}}
+      }catch(error){
+        if(c.epoch===epoch&&!closing&&!abort.signal.aborted){
+          c.lastSpeechIssue='audio_turn_failed';
+          c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);
+          logger(`Voice output failed call ${c.callId} turn ${requestedTurnId} epoch ${epoch}: ${sourceBytes} source PCM bytes, ${c.turnWrittenBytes} written`);
+          if(!preserveOnError&&!c.turnText&&!sourceBytes)void endCustomerCall();
+        }
+      }finally{
+        if(abort.signal.aborted&&requestedTurnId)logger(`Voice output cancelled call ${c.callId} turn ${requestedTurnId} epoch ${epoch}: ${sourceBytes} source PCM bytes`);
+        if(c?.epoch===epoch){c.synthesisDone=true;c.processing=false;c.lastSpeech=Date.now();}
+      }
     }
     async function initialize(uuid){
       let metadata=registered.get(uuid);registered.delete(uuid);
@@ -280,7 +311,8 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       c.limit=data.maxCallDurationSeconds||0;
       if(data.mediaReady!==true){const ready=await callback({action:'media-ready',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});if(!ready.ok)throw Error('Media reservation was not activated');await ready.arrayBuffer();}
       if(!testOnly)event(c,'retry-sync'); // Link customer metadata in parallel with the opening audio.
-      void turn({opening:true}); // Begin the introduction immediately in either configured mode.
+      c.waitingCustomer=data.first==='customer';
+      if(!c.waitingCustomer)void turn({opening:true}); // Honor the assigned first-speaker setting.
       } finally { startingCalls.delete(metadata.externalCallId); }
     }
     let input=Promise.resolve();
@@ -302,22 +334,10 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
           let sum=0;for(let i=0;i<payload.length;i+=2)sum+=payload.readInt16LE(i)**2;
           const voiced=Math.sqrt(sum/Math.max(1,payload.length/2))>=(c.queue.length?800:350);
           const ms=payload.length/16;
-          if(voiced){c.lastVoicedAt=Date.now();c.openingResponse.voice(c.lastVoicedAt);c.inputVoicedMs=(c.inputVoicedMs||0)+ms;c.voiceFrames+=ms;c.silent=0;c.lastSpeech=c.lastVoicedAt;}else c.silent+=ms;
+          if(voiced){c.waitingCustomer=false;c.lastVoicedAt=Date.now();c.openingResponse.voice(c.lastVoicedAt);c.inputVoicedMs=(c.inputVoicedMs||0)+ms;c.voiceFrames+=ms;c.silent=0;c.lastSpeech=c.lastVoicedAt;}else c.silent+=ms;
           c.pre.push(payload);while(c.pre.reduce((n,b)=>n+b.length,0)>9600)c.pre.shift();
           if(c.voiceFrames>=120&&!c.frames.length){c.frames=c.pre.slice();c.silenceStep=0;c.silenceClock.speech();if(c.noResponseEnding){c.endAfterPlayback=false;c.noResponseEnding=false;}c.speechOverlap=Boolean(c.processing||c.queue.length||c.writing);c.bargeProbeCount=0;c.bargeConfirmed=false;}
           else if(c.frames.length)c.frames.push(payload);
-          if(c.frames.length&&voiced&&c.speechOverlap&&!c.bargeConfirmed&&!c.bargeProbeBusy&&(c.bargeProbeCount||0)<2&&c.voiceFrames>=[320,640][c.bargeProbeCount||0]&&(c.processing||c.queue.length||c.writing)){
-            c.bargeProbeCount=(c.bargeProbeCount||0)+1;c.bargeProbeBusy=true;
-            const epoch=c.epoch,audio=wav(upsample(Buffer.concat(c.frames))).toString('base64');
-            c.bargeProbe=(async()=>{try{
-              const response=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},AbortSignal.timeout(5000));
-              if(!response.ok||c.closed||c.ending||c.handoffPending||c.transferred||c.epoch!==epoch)return;
-              const heard=await response.json();if(machineHeard(heard.text)){stopForVoicemail();return;}if(affirmativeTransferConsent(heard.text)&&isTransferOffer({role:'assistant',content:c.turnText||''}))return;if((interruptionKind(heard.text)!=='interrupt'&&!isListeningSignal(heard.text))||!(c.processing||c.queue.length||c.writing))return;
-              c.bargeConfirmed=true;c.interruptions=(c.interruptions||0)+1;c.playbackReady=false;c.epoch++;c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);c.processing=false;
-              const cancelled=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});
-              if(!cancelled.ok)logger('Early speech cancellation pending; full recording retained');
-            }catch{logger('Early speech classification unavailable; full recording retained');}finally{c.bargeProbeBusy=false;}})();
-          }
           if(c.frames.length&&(c.silent>=endOfSpeechMs||c.frames.reduce((n,b)=>n+b.length,0)>=320000))finishUtterance();
           else if(!voiced&&!c.frames.length&&c.silent>200)c.voiceFrames=0;
         }).catch(()=>{if(c)void endCustomerCall();else socket.destroy();});
@@ -327,42 +347,46 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
     // Finalize from wall-clock inactivity as well as received silent PCM frames.
     async function speechFallback(source,issue){
       if(!c||closing||c.closed||c.ending||c.transferred||c.handoffPending)return;
-      c.speechProbeFailures=(c.speechProbeFailures||0)+1;c.speechFallbacks=(c.speechFallbacks||0)+1;c.lastSpeechIssue=issue;
+      c.speechProbeFailures=(c.speechProbeFailures||0)+1;c.lastSpeechIssue=issue;
+      // A failed probe cannot establish an interruption. In particular, echo
+      // and line noise must not cancel a queued or synthesizing response.
+      if(c.processing||c.queue.length||c.writing){
+        logger('Speech probe '+issue+' during agent audio; preserving current playback');
+        return;
+      }
+      c.speechFallbacks=(c.speechFallbacks||0)+1;
       logger('Speech probe '+issue+'; retrying the same waveform through the original audio turn');
-      if(c.processing||c.queue.length||c.writing){c.controller?.abort();c.epoch++;c.processing=false;c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);const response=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});if(!response.ok){c.turnCarry=source;c.turnCarryUncertain=true;c.turnHoldUntil=Date.now()+1500;return;}}
-      await turn({audio:wav(upsample(source)).toString('base64')},true);
+
+      void turn({audio:wav(upsample(source)).toString('base64')},true);
     }
     function finishUtterance(inputGap=false){
       if(!c||!c.frames.length||closing||c.closed||c.hold||c.voicemailDetected||c.ending||c.handoffPending||c.transferred)return;
       if(inputGap)c.inputGapFlushes=(c.inputGapFlushes||0)+1;
-      const raw=Buffer.concat(c.frames),earlyProbe=c.bargeProbe,endedVoiceAt=c.lastVoicedAt;
+      const raw=Buffer.concat(c.frames),endedVoiceAt=c.lastVoicedAt;
       c.frames=[];c.voiceFrames=0;c.silent=0;c.pre=[];
       c.recognizing=(c.recognizing||0)+1;
+      let released=false;const releaseRecognition=()=>{if(!released){released=true;c.recognizing=Math.max(0,(c.recognizing||1)-1);}};
       c.speechDecisions=(c.speechDecisions||Promise.resolve()).then(async()=>{
-        await earlyProbe;const epoch=c.epoch;
+        const epoch=c.epoch;
         if(c.closed||c.ending||c.transferred||c.handoffPending||c.epoch!==epoch)return;
-        const source=Buffer.concat([...(c.turnCarry?[c.turnCarry]:[]),raw]).subarray(-320000),audio=wav(upsample(source)).toString('base64');c.turnCarry=undefined;c.turnHoldUntil=undefined;c.turnCarryText=undefined;c.turnCarryUncertain=false;
-        if(c.recognizing>1){c.turnCarry=source;c.turnHoldUntil=Date.now()+30000;return;}
-        let probe;try{probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio,turnFinal:true},AbortSignal.timeout(8000));}catch{await speechFallback(source,'transport_error');return;}
-        if(!probe.ok){await speechFallback(source,'http_'+probe.status);return;}
-        let heard;try{heard=await probe.json();}catch{await speechFallback(source,'invalid_response');return;}if(!String(heard.text||'').trim()){await speechFallback(source,'empty_transcript');return;}if(heard.text)c.openingResponse.response();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
+        const source=Buffer.concat([...(c.turnCarry?[c.turnCarry]:[]),raw]).subarray(-320000),audio=wav(upsample(source)).toString('base64');c.turnCarry=undefined;c.turnHoldUntil=undefined;
+        if(c.recognizing>1){c.turnCarry=source;c.turnHoldUntil=Date.now()+350;return;}
+        let probe;try{probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},AbortSignal.timeout(3000));}catch{releaseRecognition();await speechFallback(source,'transport_error');return;}
+        if(!probe.ok){releaseRecognition();await speechFallback(source,'http_'+probe.status);return;}
+        let heard;try{heard=await probe.json();}catch{releaseRecognition();await speechFallback(source,'invalid_response');return;}if(!String(heard.text||'').trim()){releaseRecognition();await speechFallback(source,'empty_transcript');return;}if(heard.text)c.openingResponse.response();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
         if(c.closed||c.epoch!==epoch||!heard.text||heard.kind==='ignore'||heard.kind==='filler'&&!isListeningSignal(heard.text))return;
         // Keep the caller's original waveform; probes never commit fragments to conversation history.
-        if(c.frames.length||c.recognizing>1||c.lastVoicedAt>endedVoiceAt&&c.voiceFrames>=60){c.turnCarry=source;c.turnHoldUntil=Date.now()+30000;c.turnCarryUncertain=false;return;}
-        if(['incomplete','wait','uncertain'].includes(heard.completion)){
-          c.turnCarry=source;c.turnHoldUntil=Date.now()+(heard.completion==='uncertain'?1500:30000);c.turnCarryText=heard.text;c.turnCarryUncertain=heard.completion==='uncertain';
-          if(c.processing||c.queue.length){c.controller?.abort();c.epoch++;c.processing=false;c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});}
-          return;
-        }
+        if(c.frames.length||c.recognizing>1||c.lastVoicedAt>endedVoiceAt&&c.voiceFrames>=60){c.turnCarry=source;c.turnHoldUntil=Date.now()+350;return;}
+        releaseRecognition(); // Playback may begin while the reply is still synthesizing.
         const speaking=c.processing||c.queue.length||c.writing;
-        if(speaking&&affirmativeTransferConsent(heard.text)&&isTransferOffer({role:'assistant',content:c.turnText||''})&&!c.processing){c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);await turn({text:heard.text});return;}
+        if(speaking&&affirmativeTransferConsent(heard.text)&&isTransferOffer({role:'assistant',content:c.turnText||''})&&!c.processing){c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);void turn({text:heard.text},true);return;}
         if(speaking){
-          c.interruptions=(c.interruptions||0)+1;c.playbackReady=false;c.epoch++;c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);
+          c.interruptions=(c.interruptions||0)+1;c.playbackReady=false;c.epoch++;c.controller?.abort();c.processing=false;c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);
           const interrupted=await callback({action:'interrupt',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId});
-          if(!interrupted.ok){logger('Voice cancellation pending; preserving customer call');return;}c.processing=false;
+          if(!interrupted.ok)logger('Voice cancellation callback declined; retrying caller turn through normal admission');
         }
-        await turn({text:heard.text});
-      }).catch(()=>logger('Speech decision unavailable; preserving current playback')).finally(()=>{c.recognizing=Math.max(0,(c.recognizing||1)-1);});
+        void turn({text:heard.text},true);
+      }).catch(()=>logger('Speech decision unavailable; preserving current playback')).finally(releaseRecognition);
     }
     function machineHeard(text){
       const recent=c.machineHeardTexts||[];
@@ -402,12 +426,12 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       if(!c||c.ending||c.voicemailDetected||closing)return;
       // Give the full recovery sequence time to run, while retaining a hard
       // escape for an opening stream that never releases its worker.
-      if(c.openingResponse.tick(Date.now(),Boolean(c.hold||c.transferred||c.handoffPending||c.prepareRequested))){void endCustomerCall(true);return;}
+      if(c.openingResponse.tick(Date.now(),Boolean(c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.frames.length||c.recognizing||c.turnCarry))){void endCustomerCall(true);return;}
       if(c.turnCarry&&!c.frames.length&&!c.recognizing&&Date.now()>=c.turnHoldUntil){
-        const text=c.turnCarryText,uncertain=c.turnCarryUncertain,source=c.turnCarry;c.turnCarry=undefined;c.turnHoldUntil=undefined;c.turnCarryText=undefined;
-        if(uncertain&&text){void turn({text});}else if(uncertain&&source){void turn({audio:wav(upsample(source)).toString('base64')},true);}else{c.silenceClock.checks=3;void turn({silenceStep:3});}return;
+        c.frames=[c.turnCarry];c.turnCarry=undefined;c.turnHoldUntil=undefined;
+        finishUtterance();return;
       }
-      const blocked=(c.lastVoicedAt!==undefined&&Date.now()-c.lastVoicedAt<1000)||c.turnCarry||c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.syncHandoffPending||c.processing||c.queue.length||c.frames.length||c.writing||c.recognizing;
+      const blocked=c.waitingCustomer||(c.lastVoicedAt!==undefined&&Date.now()-c.lastVoicedAt<350)||c.turnCarry||c.hold||c.transferred||c.handoffPending||c.prepareRequested||c.syncHandoffPending||c.processing||c.queue.length||c.frames.length||c.writing||c.recognizing;
       const step=c.silenceClock.tick(Date.now(),Boolean(blocked));
       if(blocked)return;
       if((c.limit&&Date.now()-c.started>=c.limit*1000)||(c.endAfterPlayback&&!c.noResponseEnding)||(step===5&&c.endAfterPlayback&&c.noResponseEnding)){void endCustomerCall(Boolean(c.noResponseEnding));return;}

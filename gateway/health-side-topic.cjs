@@ -3,7 +3,7 @@
 function healthSideTopic(value) {
   const text = String(value || "").trim();
   if (
-    /\b(?:are you (?:a drunk | drunk |intoxicated)|have you been drinking|do you drink(?: alcohol)?|did you drink(?: alcohol)?)\b/i.test(
+    /\b(?:are you (?:(?:a )?drunk|intoxicated)|have you been drinking|do you drink(?: alcohol)?|did you drink(?: alcohol)?)\b/i.test(
       text,
     )
   )

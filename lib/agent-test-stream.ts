@@ -76,38 +76,54 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
         const index = sentenceIndex++;
         const emotion = selectEmotion(text);
         await timing("tts-request-started", { sentenceIndex: index, characters: text.length, ...(emotion !== "neutral" ? { emotion } : {}) });
-        const cacheKey=audioCache.key({text,voice,emotion});
-        const cached=cacheAudio?audioCache.get(cacheKey):undefined;
-        const response = cached ? new Response(cached,{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}}) : await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice, ...(emotion !== "neutral" ? { emotion } : {}) }) });
-        const captured:Uint8Array[]=[];let captureBytes=0;
-        await timing(cached?'tts-cache-hit':'tts-cache-miss',{sentenceIndex:index});
-        if (!response.ok || !response.body) throw Error("CosyVoice streaming synthesis failed");
-        const rate = Number(response.headers.get("x-sample-rate"));
-        if (response.headers.get("x-audio-format") !== "pcm_s16le" || rate !== 24000 || response.headers.get("x-channels") !== "1") { await response.body.cancel(); throw Error("Unexpected CosyVoice PCM format"); }
-        let carry = Buffer.alloc(0), bytes = 0, audible = false;
-        for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-          signal.throwIfAborted(); bytes += chunk.length;
-          if(cacheAudio&&!cached){captureBytes+=chunk.length;if(captureBytes<=audioCache.maxEntryBytes)captured.push(Buffer.from(chunk));else captured.length=0;}
-          if (bytes > 8_000_000) throw Error("Synthesis exceeds audio safety limit");
-          carry = Buffer.concat([carry, chunk]);
-          // Forward 40 ms frames instead of waiting for 100 ms of PCM.
-          while (carry.length >= 1920) {
-            signal.throwIfAborted();
-            for (let i = 0; i < 1920 && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
-            if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
-            await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 1920).toString("base64") }); carry = carry.subarray(1920);
+        // Lissa occasionally returns a valid PCM header followed by only a few
+        // milliseconds of a multiword sentence. Wait for a small playable
+        // prefix before forwarding, including when reading existing caches.
+        const wordCount = (text.match(/[\p{L}\p{N}]+/gu) || []).length;
+        const minimumBytes = voice === "lissa" && wordCount > 1
+          ? Math.min(700, wordCount * 70) * 48
+          : /^how are you doing today[?!.]*$/i.test(text.trim()) ? 3840 : 2;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const cacheKey=audioCache.key({text,voice,emotion});
+          const cachedPcm=cacheAudio?audioCache.get(cacheKey):undefined;
+          const cached=attempt===0 && cachedPcm && cachedPcm.length>=minimumBytes ? cachedPcm : undefined;
+          const response = cached ? new Response(cached,{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}}) : await engine(8767, "/stream", { method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text, voice_id: voice, ...(emotion !== "neutral" ? { emotion } : {}) }) });
+          const captured:Uint8Array[]=[];let captureBytes=0;
+          await timing(cached?'tts-cache-hit':'tts-cache-miss',{sentenceIndex:index});
+          if (!response.ok || !response.body) throw Error("CosyVoice streaming synthesis failed");
+          const rate = Number(response.headers.get("x-sample-rate"));
+          if (response.headers.get("x-audio-format") !== "pcm_s16le" || rate !== 24000 || response.headers.get("x-channels") !== "1") { await response.body.cancel(); throw Error("Unexpected CosyVoice PCM format"); }
+          let carry = Buffer.alloc(0), bytes = 0, audible = false;
+          for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+            signal.throwIfAborted(); bytes += chunk.length;
+            if(cacheAudio&&!cached){captureBytes+=chunk.length;if(captureBytes<=audioCache.maxEntryBytes)captured.push(Buffer.from(chunk));else captured.length=0;}
+            if (bytes > 8_000_000) throw Error("Synthesis exceeds audio safety limit");
+            carry = Buffer.concat([carry, chunk]);
+            // Forward 40 ms frames instead of waiting for 100 ms of PCM.
+            while (carry.length >= 1920 && bytes >= minimumBytes) {
+              signal.throwIfAborted();
+              for (let i = 0; i < 1920 && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
+              if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
+              await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 1920).toString("base64") }); carry = carry.subarray(1920);
+            }
           }
+          if (bytes > 0 && bytes < minimumBytes && attempt < 2) {
+            await timing("tts-truncated-retry", { sentenceIndex: index, audioBytes: bytes, attempt: attempt + 1 });
+            continue;
+          }
+          if (bytes < minimumBytes) throw Error("CosyVoice returned empty or truncated audio");
+          if (carry.length % 2) throw Error("Malformed PCM stream");
+          if (carry.length) {
+            signal.throwIfAborted();
+            for (let i = 0; i < carry.length && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
+            if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
+            await send({ type: "pcm", sampleRate: rate, data: carry.toString("base64") });
+          }
+          if (!bytes || !audible) throw Error("CosyVoice returned empty or silent audio");
+          if(cacheAudio&&!cached&&captureBytes<=audioCache.maxEntryBytes){signal.throwIfAborted();audioCache.put(cacheKey,Buffer.concat(captured));}
+          await timing("sentence-synthesis-completed", { sentenceIndex: index, audioBytes: bytes });
+          break;
         }
-        if (carry.length % 2) throw Error("Malformed PCM stream");
-        if (carry.length) {
-          signal.throwIfAborted();
-          for (let i = 0; i < carry.length && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
-          if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
-          await send({ type: "pcm", sampleRate: rate, data: carry.toString("base64") });
-        }
-        if (!bytes || !audible) throw Error("CosyVoice returned empty or silent audio");
-        if(cacheAudio&&!cached&&captureBytes<=audioCache.maxEntryBytes){signal.throwIfAborted();audioCache.put(cacheKey,Buffer.concat(captured));}
-        await timing("sentence-synthesis-completed", { sentenceIndex: index, audioBytes: bytes });
       }
     } catch (error) { failure = error; notify(); }
   })();

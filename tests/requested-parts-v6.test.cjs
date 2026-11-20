@@ -24,7 +24,7 @@ test('requested live parts preserve greeting, purpose, script answers, company r
  await turn({opening:true});await service.dispatch(request('interrupt',{}));
  const intro=await turn({text:'Hello'});assert.match(intro.text,/^(?:Hi|Hello),/);assert.match(intro.text,/Lauren.*Medicare Wellness Support Team/);assert.match(intro.text,/How (?:are you|is your day)/);
  await service.dispatch(request('playback-complete',{completedTurnId:intro.id}));
- const purpose=await turn({text:'Okay'});assert.match(purpose.text,/calling to discuss/);assert.match(purpose.text,/rebate/);assert.equal(models,2,'question-only first generation must not suppress the purpose');
+ const purpose=await turn({text:'Okay'});assert.match(purpose.text,/calling to discuss/);assert.doesNotMatch(purpose.text,/rebate/);assert.equal(models,0,'purpose is grounded directly in the script; screening starts after permission');
  const session=service.sessionStore.get(id);session.questionAliases=new Map([['Sir, Are you getting any money back on a card each month?',q1]]);
  session.messages=session.messages.slice(0,1).concat([{role:'assistant',content:q1},{role:'assistant',content:'Sir, Are you getting any money back on a card each month? [interrupted]'},{role:'user',content:'No.'},{role:'assistant',content:q2}]);session.purposeDelivered=true;
  const next=await turn({text:'I have Medicaid.'});assert.match(next.text,/between 60 and 80/);assert.doesNotMatch(next.text,/rebate|money back/i);

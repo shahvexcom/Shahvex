@@ -1,7 +1,7 @@
 [
   {
     "route": "/controler",
-    "firstLoadUncompressedJsBytes": 1087784,
+    "firstLoadUncompressedJsBytes": 1096462,
     "firstLoadChunkPaths": [
       ".next-fast-handoff-final/static/chunks/3fntmmi971322.js",
       ".next-fast-handoff-final/static/chunks/3437wjendh_v6.js",
@@ -11,7 +11,7 @@
       ".next-fast-handoff-final/static/chunks/1mf8om17u2nda.js",
       ".next-fast-handoff-final/static/chunks/08azf773t_vvm.js",
       ".next-fast-handoff-final/static/chunks/00qrz-h7-gk2o.js",
-      ".next-fast-handoff-final/static/chunks/02t2pilzq0zfk.js",
+      ".next-fast-handoff-final/static/chunks/2xvq8g-blet3h.js",
       ".next-fast-handoff-final/static/chunks/3yfl9fgvivx3-.js",
       ".next-fast-handoff-final/static/chunks/1ueg45csigqwk.js",
       ".next-fast-handoff-final/static/chunks/13jbb4lom144f.js",
@@ -40,14 +40,14 @@
   },
   {
     "route": "/test/agent/[token]",
-    "firstLoadUncompressedJsBytes": 877744,
+    "firstLoadUncompressedJsBytes": 886422,
     "firstLoadChunkPaths": [
       ".next-fast-handoff-final/static/chunks/3fntmmi971322.js",
       ".next-fast-handoff-final/static/chunks/3437wjendh_v6.js",
       ".next-fast-handoff-final/static/chunks/1z_9o94svbs2e.js",
       ".next-fast-handoff-final/static/chunks/0axdrs6tow-4n.js",
       ".next-fast-handoff-final/static/chunks/0cy_s4h_1rh-1.js",
-      ".next-fast-handoff-final/static/chunks/02t2pilzq0zfk.js",
+      ".next-fast-handoff-final/static/chunks/2xvq8g-blet3h.js",
       ".next-fast-handoff-final/static/chunks/08azf773t_vvm.js",
       ".next-fast-handoff-final/static/chunks/3yfl9fgvivx3-.js",
       ".next-fast-handoff-final/static/chunks/1ueg45csigqwk.js",
@@ -75,13 +75,13 @@
   },
   {
     "route": "/bpo/live-monitor",
-    "firstLoadUncompressedJsBytes": 557461,
+    "firstLoadUncompressedJsBytes": 557489,
     "firstLoadChunkPaths": [
       ".next-fast-handoff-final/static/chunks/3fntmmi971322.js",
       ".next-fast-handoff-final/static/chunks/3437wjendh_v6.js",
       ".next-fast-handoff-final/static/chunks/1z_9o94svbs2e.js",
       ".next-fast-handoff-final/static/chunks/0axdrs6tow-4n.js",
-      ".next-fast-handoff-final/static/chunks/44dtskflpmh01.js",
+      ".next-fast-handoff-final/static/chunks/0350-w87ha7fv.js",
       ".next-fast-handoff-final/static/chunks/3yfl9fgvivx3-.js",
       ".next-fast-handoff-final/static/chunks/1ueg45csigqwk.js",
       ".next-fast-handoff-final/static/chunks/13jbb4lom144f.js",
@@ -91,13 +91,13 @@
   },
   {
     "route": "/controler/live-monitor",
-    "firstLoadUncompressedJsBytes": 557461,
+    "firstLoadUncompressedJsBytes": 557489,
     "firstLoadChunkPaths": [
       ".next-fast-handoff-final/static/chunks/3fntmmi971322.js",
       ".next-fast-handoff-final/static/chunks/3437wjendh_v6.js",
       ".next-fast-handoff-final/static/chunks/1z_9o94svbs2e.js",
       ".next-fast-handoff-final/static/chunks/0axdrs6tow-4n.js",
-      ".next-fast-handoff-final/static/chunks/44dtskflpmh01.js",
+      ".next-fast-handoff-final/static/chunks/0350-w87ha7fv.js",
       ".next-fast-handoff-final/static/chunks/3yfl9fgvivx3-.js",
       ".next-fast-handoff-final/static/chunks/1ueg45csigqwk.js",
       ".next-fast-handoff-final/static/chunks/13jbb4lom144f.js",
