@@ -472,7 +472,7 @@ test('REC418 keeps the answer before a configured location question and rejects 
    assert.match((await f.turn({text})).text,/Phoenix, Arizona, United States/);
   }
   for (const text of ['Are you a representative of Wellness Team?', 'Do you represent Welness Team?', 'Are you from Wellness-Team?']) {
-   assert.equal((await f.turn({text})).text,`Yes, I'm a benefits coordinator with Wellness Team. ${q2}`);
+   assert.equal((await f.turn({text})).text,`Yes, I'm a representative of Wellness Team. ${q2}`);
   }
   for (const text of ['Do you represent Wellness Team USA?', 'Are you a Medicare representative?', 'Are you an official government representative?', 'Are you a licensed specialist?']) {
    assert.match((await f.turn({text})).text,/^I can't confirm/);
@@ -481,4 +481,39 @@ test('REC418 keeps the answer before a configured location question and rejects 
   assert.equal(s.questionLedger.get(questionKey(q1)).response,'No.');
   assert.equal((await f.turn({text:'I have Part B.'})).text,q3);
  }finally{await f.close();}
+});
+
+test('configured-company identity confirmations preserve the pending screening question and compound answers', async () => {
+ const f=fixture();
+ try {
+  const company='Medicare Wellness Support Team';
+  const session=await f.start('ai',{script:config.script.replace('Wellness Team',company)});
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  assert.equal((await f.turn({text:'Yes'})).text,q1);
+  const confirmation="Yes, I'm a representative of "+company+". ";
+  for (const text of [
+   'Are you an uh wellness sport team as representative?',
+   'Uh, I say you are a wellness sport representative.',
+   'Are you a representative of Medicare Wellness Support Team?',
+   'Are you a wellness support representative?',
+  ]) {
+   assert.equal((await f.turn({text})).text,confirmation+q1,text);
+   assert.equal(session.questionLedger.get(questionKey(q1)).status,'delivered',text);
+  }
+  for (const text of [
+   'Do you represent Wellness Support Team USA?',
+   'Are you a government representative of Medicare Wellness Support Team?',
+   'Are you a licensed specialist?',
+  ]) {
+   assert.equal((await f.turn({text})).text,
+    (text.startsWith('Do you')?"I can't confirm that affiliation.":"I can't confirm that affiliation or qualification.")+' '+q1,text);
+  }
+  assert.equal((await f.turn({text:'Are you a representative?'})).text,'Which company do you mean? '+q1);
+  assert.equal((await f.turn({text:'No. Are you a wellness support representative?'})).text,confirmation+q2);
+  assert.equal(session.questionLedger.get(questionKey(q1)).response,'No.');
+  assert.equal((await f.turn({text:'I have Part B. Uh, I say you are a wellness sport representative.'})).text,confirmation+q3);
+  assert.equal(session.questionLedger.get(questionKey(q2)).response,'I have Part B.');
+  assert.equal(f.models,0);
+ } finally {await f.close();}
 });

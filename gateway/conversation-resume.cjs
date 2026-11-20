@@ -1,6 +1,6 @@
 'use strict';
 const { rememberQuestions } = require('./question-memory.cjs');
-const FLOW_REVISION = 'REC418-playback-v13.2-identity';
+const FLOW_REVISION = 'REC421-configured-representative';
 const { mainQuestions } = require('./conversation-flow.cjs');
 
 // A short listening signal is not an answer to an interrupted business question.

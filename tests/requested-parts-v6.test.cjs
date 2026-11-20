@@ -28,7 +28,7 @@ test('requested live parts preserve greeting, purpose, script answers, company r
  const session=service.sessionStore.get(id);session.questionAliases=new Map([['Sir, Are you getting any money back on a card each month?',q1]]);
  session.messages=session.messages.slice(0,1).concat([{role:'assistant',content:q1},{role:'assistant',content:'Sir, Are you getting any money back on a card each month? [interrupted]'},{role:'user',content:'No.'},{role:'assistant',content:q2}]);session.purposeDelivered=true;
  const next=await turn({text:'I have Medicaid.'});assert.match(next.text,/between 60 and 80/);assert.doesNotMatch(next.text,/rebate|money back/i);
- const role=await turn({text:'Are you a representative of Medicare Wellness Support Team?'});assert.match(role.text,/Yes.*sales representative.*Medicare Wellness Support Team/);assert.doesNotMatch(role.text,/government|not a Medicare/i);
+ const role=await turn({text:'Are you a representative of Medicare Wellness Support Team?'});assert.match(role.text,/Yes.*representative of Medicare Wellness Support Team/);assert.doesNotMatch(role.text,/government|not a Medicare/i);
  const offer=await turn({text:'End call please.'});assert.match(offer.text,/Sir.*two minutes.*end the call.*May I go ahead/s);
  const repeat=await turn({text:'Hang up the call please.'});assert.equal(repeat.text,'');assert(repeat.events.some(e=>e.type==='end_call'&&e.immediate===true));assert(!repeat.events.some(e=>e.type==='pcm'));
  }finally{if(id)await service.dispatch(request('stop',{}));global.fetch=original;}

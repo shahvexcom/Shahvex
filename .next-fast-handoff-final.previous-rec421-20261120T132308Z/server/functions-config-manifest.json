@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "functions": {
+    "/_middleware": {
+      "runtime": "nodejs",
+      "matchers": [
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?(?:\\/(\\/?index|\\/?index\\.json|\\/?index(?:\\.rsc|\\.segments\\/.+\\.segment\\.rsc)))?[\\/#\\?]?$",
+          "originalSource": "/"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/login(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/login"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/register(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/register"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/auth(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/auth"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/agent(?:\\/((?:[^\\/#\\?]+?)(?:\\/(?:[^\\/#\\?]+?))*))?(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/agent/:path*"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/bpo(?:\\/((?:[^\\/#\\?]+?)(?:\\/(?:[^\\/#\\?]+?))*))?(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/bpo/:path*"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/controler(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/controler"
+        },
+        {
+          "regexp": "^(?:\\/(_next\\/data\\/[^/]{1,}))?\\/controler(?:\\/((?:[^\\/#\\?]+?)(?:\\/(?:[^\\/#\\?]+?))*))?(\\.json|\\.rsc|\\.segments\\/.+\\.segment\\.rsc)?[\\/#\\?]?$",
+          "originalSource": "/controler/:path*"
+        }
+      ]
+    },
+    "/api/admin/agent-demo-links": {},
+    "/api/admin/agent-test": {
+      "maxDuration": 300
+    },
+    "/api/admin/agents/gateway-export": {},
+    "/api/admin/call-capacity": {},
+    "/api/admin/calls": {
+      "maxDuration": 300
+    },
+    "/api/admin/calls/[id]/recording": {},
+    "/api/admin/campaigns": {
+      "maxDuration": 300
+    },
+    "/api/admin/live-monitor": {},
+    "/api/admin/live-monitor/listen": {},
+    "/api/admin/live-monitor/local": {},
+    "/api/admin/live-monitor/local/control": {},
+    "/api/admin/live-monitor/local/listen": {},
+    "/api/admin/live-monitor/settings": {},
+    "/api/admin/local-voice": {},
+    "/api/admin/local-voices": {},
+    "/api/admin/quick-dial": {},
+    "/api/admin/recordings": {},
+    "/api/admin/reports": {},
+    "/api/admin/reports/pdf": {},
+    "/api/admin/scripts": {},
+    "/api/admin/voip": {},
+    "/api/bpo/calls/[id]/recording": {},
+    "/api/bpo/campaigns": {
+      "maxDuration": 300
+    },
+    "/api/bpo/live-monitor": {},
+    "/api/bpo/live-monitor/listen": {},
+    "/api/bpo/live-monitor/local": {},
+    "/api/bpo/live-monitor/local/control": {},
+    "/api/bpo/live-monitor/local/listen": {},
+    "/api/bpo/live-monitor/settings": {},
+    "/api/bpo/quick-dial": {},
+    "/api/bpo/recordings": {},
+    "/api/bpo/scripts": {},
+    "/api/bpo/voice-preview": {},
+    "/api/bpo/voip": {},
+    "/api/demo/agent/[token]": {
+      "maxDuration": 300
+    },
+    "/api/public/overview": {},
+    "/api/shahvex/conversation": {
+      "maxDuration": 300
+    },
+    "/api/shahvex/conversation/stream": {
+      "maxDuration": 300
+    },
+    "/api/shahvex/health": {},
+    "/api/shahvex/sessions/[id]": {},
+    "/api/telephony/vicidial": {
+      "maxDuration": 300
+    },
+    "/api/telnyx/webhook": {}
+  }
+}

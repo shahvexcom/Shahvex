@@ -322,9 +322,9 @@ test('three direct prefixes receive isolated audio and duplicate active call leg
  }finally{sockets.forEach(s=>s.destroy());await new Promise(r=>setTimeout(r,40));await b.flushEvents();b.close();fs.rmSync(folder,{recursive:true,force:true});}
 });
 
-test('opt-in direct audio starts the exact script/voice without native identity, rejects busy agents, and cleans up independently',async()=>{
+test('opt-in direct audio starts the exact script/voice without native identity, rejects busy agents, and waits for native teardown',async()=>{
  const connectionId=crypto.randomUUID(),secret='fixture-direct-mode-secret-at-least-32-characters',uuid='3531'+crypto.randomUUID().slice(4),external='direct-'+uuid.replaceAll('-','');
- const shared=load('lib/agent-test.ts',{'server-only':{}});let current,ready=true,created=0,native=0;
+ const shared=load('lib/agent-test.ts',{'server-only':{}});let current,ready=true,created=0,native=0,nativeState='INCALL';
  const live={...liveConfig,directAudioMode:true,directAudioLines:[{prefix:'3531',remoteUser:'9001',agentId:'agent-a'}]};
  const row=x=>({rows:x?[x]:[],rowCount:x?1:0});
  const query=async(sql,p=[])=>{
@@ -333,14 +333,14 @@ test('opt-in direct audio starts the exact script/voice without native identity,
   if(sql.startsWith('INSERT INTO vicidial_events')||sql.startsWith('UPDATE vicidial_events'))return row({event_id:'event'});
   if(sql.startsWith('SELECT * FROM agent_calls'))return row(current?.direct_audio_uuid===p[1]?current:null);
   if(sql.startsWith('SELECT a.id,a.name,a.local_voice_id,q.config'))return row(ready?{id:'agent-a',name:'Assigned Zulekha',local_voice_id:'olivia',campaign_id:'campaign',external_campaign_id:'TEST',script:'Use the exact campaign script.',config:{name:'old',voice:'lissa',first:'ai',goal:'Ask name',task:'Ask name',instructions:'',script:'old',knowledge:'',style:'Friendly'}}:null);
-  if(sql.startsWith('INSERT INTO agent_calls')){assert.match(sql,/'AUDIOSOCKET'/);assert.doesNotMatch(sql,/vicidial_call_id|vicidial_lead_id/);created++;current={id:p[0],agent_id:p[1],direct_audio_uuid:p[3],telephony_provider:'AUDIOSOCKET',status:'INITIATED',script_snapshot:JSON.parse(p[7]),vicidial_call_id:null,vicidial_lead_id:null,conversation_history:[]};return row(current);}
+  if(sql.startsWith('INSERT INTO agent_calls')){assert.match(sql,/'AUDIOSOCKET'/);assert.doesNotMatch(sql,/vicidial_call_id|vicidial_lead_id/);created++;current={id:p[0],agent_id:p[1],direct_audio_uuid:p[3],direct_audio_line:p[4],external_campaign_id:p[6],telephony_provider:'AUDIOSOCKET',status:'INITIATED',script_snapshot:JSON.parse(p[7]),vicidial_call_id:null,vicidial_lead_id:null,conversation_history:[]};return row(current);}
   if(sql.startsWith('UPDATE agent_calls SET voice_session_id')){current.voice_session_id=p[0];return row(current);}
-  if(sql.startsWith('UPDATE agent_calls SET ai_leg_released')){current.ai_leg_released=true;current.customer_ended=true;return row(current);}
+  if(sql.startsWith('UPDATE agent_calls SET ai_leg_released')){current.ai_leg_released=true;current.customer_ended=p[2];return row(current);}
   if(['BEGIN','COMMIT','ROLLBACK'].includes(sql)||sql.startsWith('SELECT pg_advisory'))return row(null);
   throw Error('Unexpected direct fixture SQL: '+sql);
  };
  const pool={query,connect:async()=>({query,release(){}})};
- const callback=load('lib/vicidial-callback.ts',{'server-only':{},'./database':{db:async()=>pool},'./credential-crypto':{decryptCredential:v=>v},'./vicidial-bridge':signing,'./vicidial':{vicidialRequest:async()=>{native++;throw Error('Native API must not run for direct calls')}},'./vicidial-config':config,'./agent-test':shared,'./agent-runtime':{reserveAgent:async()=>{if(!ready)return false;ready=false;return true},mediaReady:async()=>{current.status='ANSWERED';return true},releaseConfirmedAgent:async()=>{current.status='COMPLETED';ready=true;return true},setRuntimeState:async()=>{}},'./agent-test-speculative':{},'./pc-ai-engine':{},'./vicidial-results':{},'./bpo-entitlements':{},'./vicidial-recording':{},'./vicidial-queue':{queueAgentAllowed:async()=>true},'./vicidial-handoff':{}}).vicidialCallback;
+ const callback=load('lib/vicidial-callback.ts',{'server-only':{},'./database':{db:async()=>pool},'./credential-crypto':{decryptCredential:v=>v},'./vicidial-bridge':signing,'./vicidial':{vicidialRequest:async()=>{native++;return 'status|campaign_id\n'+nativeState+'|TEST'}},'./vicidial-config':config,'./agent-test.ts':shared,'./agent-runtime':{reserveAgent:async()=>{if(!ready)return false;ready=false;return true},mediaReady:async()=>{current.status='ANSWERED';return true},releaseConfirmedAgent:async()=>{current.status='COMPLETED';ready=true;return true},setRuntimeState:async()=>{}},'./agent-test-speculative.ts':{},'./pc-ai-engine.ts':{},'./vicidial-results':{},'./bpo-entitlements':{},'./vicidial-recording':{},'./vicidial-queue':{queueAgentAllowed:async()=>true},'./vicidial-handoff':{}}).vicidialCallback;
  async function post(value){const body=Buffer.from(JSON.stringify({eventId:crypto.randomUUID(),externalCallId:external,...value})),t=String(Date.now());return callback(new Request('https://site.example.test/api/telephony/vicidial',{method:'POST',headers:{'x-shahvex-connection':connectionId,'x-shahvex-timestamp':t,'x-shahvex-signature':signing.bridgeSignature(secret,t,'POST','/api/telephony/vicidial',body)},body}));}
  const resolved=await post({action:'resolve-prefix',audioUuid:uuid});assert.equal(resolved.status,200);assert.equal((await resolved.json()).externalCallId,external);
  assert.equal((await post({action:'connected',audioUuid:uuid,agentUser:'9001'})).status,200);assert.equal(created,1);assert.equal(current.script_snapshot.name,'Assigned Zulekha');assert.equal(current.script_snapshot.voice,'olivia');assert.equal(current.script_snapshot.script,'Use the exact campaign script.');assert.equal(current.vicidial_call_id,null);assert.equal(current.vicidial_lead_id,null);
@@ -348,7 +348,14 @@ test('opt-in direct audio starts the exact script/voice without native identity,
  const other='3531'+crypto.randomUUID().slice(4);assert.equal((await post({action:'connected',externalCallId:'direct-'+other.replaceAll('-',''),audioUuid:other,agentUser:'9001'})).status,409);
  const id=current.id;assert.equal((await post({action:'media-ready',callId:id})).status,200);assert.equal(current.status,'ANSWERED');
  assert.equal((await post({action:'retry-sync',callId:id})).status,200);assert.equal((await post({action:'human-answered',callId:id,humanUser:'human1'})).status,409);
- const session=current.voice_session_id;assert.ok(shared.sessions.has(session));assert.equal((await post({action:'ended',callId:id,durationSeconds:4})).status,200);assert.equal(current.status,'COMPLETED');assert.equal(ready,true);assert.equal(shared.sessions.has(session),false);assert.equal(native,0);
+ const session=current.voice_session_id;assert.ok(shared.sessions.has(session));const pending=await post({action:'ended',callId:id,durationSeconds:4});assert.equal(pending.status,200);assert.equal((await pending.json()).cleanupPending,true);
+ assert.equal(current.status,'ANSWERED');assert.equal(ready,false);assert.equal(shared.sessions.has(session),false);
+ nativeState='READY';assert.equal((await post({action:'ended',callId:id,durationSeconds:4})).status,200);
+ assert.equal(current.status,'COMPLETED');assert.equal(ready,true);assert.equal(native,2);
+ nativeState='INCALL';
+ const stale=await post({action:'retry-sync',callId:id});
+ assert.equal((await stale.json()).nativeSync,'NOT_APPLICABLE');
+ assert.equal(native,2);assert.equal(current.vicidial_call_id,null);
 });
 
 test('direct audio controls close only the bridge and refuse native transfer and sync',async()=>{

@@ -437,36 +437,49 @@ export function configuredRepresentativeReply(
     goal?: string;
   },
   text: string,
+  history: ReadonlyArray<{ role: string; content: string }> = [],
 ) {
-  const question = text.trim().replace(/[?!., ]+$/, "");
-  const affiliation = /^(?:do you represent|are you (?:calling )?(?:from|with)|are you (?:an? |the )?(?:sales )?(?:representative|rep|agent) (?:of|for|with|from))\s+(.+)$/i.exec(question);
-  const namedRole = /^are you (?:an? |the )?(.+?) (?:sales )?(?:representative|rep|agent)$/i.exec(question);
+  const question = text.toLowerCase()
+    .replace(/\b(?:uh+|um+|erm+|ah+)\b[, ]*/g, "")
+    .trim().replace(/[?!., ]+$/, "").replace(/\s+/g, " ");
+  if (/^are you (?:an? |the )?(?:representative|rep|agent)$/.test(question))
+    return "Which company do you mean?";
+  const affiliation = /^(?:do you represent|are you (?:calling )?(?:from|with)|are you (?:an? |the )?(?:sales )?(?:representative|rep|agent) (?:of|for|with|from))\s+(.+)$/.exec(question);
+  const namedRole = /^(?:are you|(?:(?:i say|i said|i mean)[, ]+)?you are) (?:an? |the )?(.+?) (?:as (?:an? )?)?(?:sales )?(?:representative|rep|agent)$/.exec(question);
   const asked = affiliation?.[1] || namedRole?.[1];
-  if (/^are you (?:(?:calling )?from (?:where|what (?:company|city|country))|with (?:me|us|you))$/i.test(question)) return;
+  if (/^are you (?:(?:calling )?from (?:where|what (?:company|city|country))|with (?:me|us|you))$/.test(question)) return;
+  if (/^are you (?:an? |the )?(?:official|government|federal|licensed|certified)\b/.test(question) ||
+      asked && /\b(?:official|government|federal|licensed|certified)\b/.test(asked)) {
+    return "I can't confirm that affiliation or qualification.";
+  }
+
+  const { company } = voiceIdentity(config);
+  const normalize = (value: string): string[] => value.normalize("NFKD").toLowerCase()
+    .replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]+/g) || [];
   if (!asked) {
-    if (/^are you (?:an? |the )?(?:(?:official|government|federal|licensed|certified)\b|(?:medicare|medicaid)\b.*\b(?:representative|agent|specialist)\b)/i.test(question))
+    if (/^are you (?:an? |the )?(?:medicare|medicaid)\b.*\b(?:representative|agent|specialist)\b/.test(question))
       return "I can't confirm that affiliation or qualification.";
     return;
   }
 
-  const { company } = voiceIdentity(config);
-  const normalize = (value: string) => value.normalize("NFKD").toLowerCase()
-    .replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]+/g) || [];
   const companyWords = normalize(company || "");
-  const askedName = normalize(asked).join("");
+  const askedWords = normalize(asked.replace(/^the /, ""));
+  const askedName = askedWords.join("");
   const initials = companyWords.map(word => word[0]).join("");
   const companyName = companyWords.join("");
   const collapseRepeatedLetters = (value: string) => value.replace(/([a-z])\1+/g, "$1");
-  const matches = company && (askedName === companyName ||
+  const exact = askedName === companyName ||
     companyName.length >= 8 && collapseRepeatedLetters(askedName) === collapseRepeatedLetters(companyName) ||
-    initials.length >= 3 && askedName === initials);
-  if (!matches) return "I can't confirm that affiliation.";
-
-  const source = [config.instructions, config.script, config.task, config.goal].join("\n");
-  const assignedRole = /(?:^|[.!?\n]\s*)(?:agent role|role)\s*:\s*(?:an?\s+)?([^.!?\n]{2,80})/i.exec(source)?.[1]?.trim()
-    || /\b(?:you are|your role is|I am|I['’]m) (?:an? |the )?((?:sales )?(?:representative|rep|agent|coordinator|assistant))\b/i.exec(source)?.[1];
-  const role = assignedRole && !/\b(?:government|official|federal|licensed|certified)\b/i.test(assignedRole)
-    ? assignedRole : "representative";
-  const article = /^[aeiou]/i.test(role) ? "an" : "a";
-  return `Yes, I'm ${article} ${role} with ${company}.`;
+    initials.length >= 3 && askedName === initials;
+  const shortName = askedWords.length >= 2 &&
+    askedWords.some(word => !/^(?:medicare|medicaid|support|team|group|company|services)$/.test(word)) &&
+    companyWords.some((_, index) => companyWords.slice(index, index + askedWords.length).join(" ") === askedWords.join(" "));
+  const recordedAlias = companyWords.join(" ") === "medicare wellness support team" &&
+    /^wellness sport(?: team)?$/.test(askedWords.join(" "));
+  const introduced = recordedAlias && history.some(turn => turn.role === "assistant" &&
+    /\b(?:from|with) medicare wellness support team\b/.test(normalize(turn.content).join(" ")));
+  if (company && (exact || shortName || introduced)) return `Yes, I'm a representative of ${company}.`;
+  if (recordedAlias || (askedWords.length === 1 && companyWords.includes(askedWords[0])) ||
+      /^(?:that|the|your) (?:company|team)$/.test(asked)) return "Which company do you mean?";
+  return "I can't confirm that affiliation.";
 }

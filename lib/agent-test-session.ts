@@ -477,6 +477,8 @@ export async function handleTestSession(
               if (!ledger.has(key)) ledger.set(key, {status:"pending"});
             }
             const firstUnanswered = () => questions.find(({question}) => ledger.get(questionKey(question))?.status !== "answered");
+            const representativeReply = (input: string) => configuredRepresentativeReply(session.config, input, flowHistory);
+            let representative = representativeReply(text);
             let answered = false;
             if (session.purposeAcknowledged && !confirmingPresence && !acknowledgesExplanation) {
               const current = firstUnanswered()?.question;
@@ -486,14 +488,19 @@ export async function handleTestSession(
                   !lastAssistant.content.includes("[interrupted]") && canonicalQuestion(lastAssistant.content, [current])) {
                 const identityAfterAnswer = text.match(/^((?:yes|no|yeah|nope|yep)[,.!]?)\s+(.+)$/i);
                 const parts = text.match(/^([\s\S]+?[.!])\s+([\s\S]+)$/) || text.match(/^((?:yes|no|yeah|nope|yep)),\s*(.+)$/i) ||
-                  (identityAfterAnswer && (asksCompanyLocation(identityAfterAnswer[2]) || configuredRepresentativeReply(session.config,identityAfterAnswer[2])) ? identityAfterAnswer : null);
-                const sideQuestion = parts && isCustomerQuestion(parts[2]) ? parts[2] : undefined;
-                const response = sideQuestion && parts ? (questionReason.test(sideQuestion) ? parts[1].replace(/[.!]$/, "") : parts[1]) : text;
+                  (identityAfterAnswer && (asksCompanyLocation(identityAfterAnswer[2]) || representativeReply(identityAfterAnswer[2])) ? identityAfterAnswer : null);
+                const sideRepresentative = parts && representativeReply(parts[2]);
+                const sideQuestion = parts && (sideRepresentative || isCustomerQuestion(parts[2])) ? parts[2] : undefined;
+                const trailingAnswer = /^(.+?[?.!])\s+((?:yes|no|yeah|nope|yep)[.!]?)$/i.exec(text);
+                const leadingRepresentative = trailingAnswer && representativeReply(trailingAnswer[1]);
+                representative = sideRepresentative || leadingRepresentative || representative;
+                const response = leadingRepresentative && trailingAnswer ? trailingAnswer[2] :
+                  sideQuestion && parts ? (questionReason.test(sideQuestion) ? parts[1].replace(/[.!]$/, "") : parts[1]) : text;
                 const coverageQuestion = /\b(?:Part A|Part B|Medicaid)\b/i.test(current);
                 const passive = /^(?:okay|ok|sure|right|hmm|hm|mm|mhm|mm[- ]?hmm)[.!? ]*$/i.test(response);
                 const recognizedCoverage = /\b(?:medicare|medicaid|part [ab])\b|^(?:yes|no|yeah|yep|nope|correct|that['’]s right)\b/i.test(response) ||
                   answersAffirmatively(current, response);
-                answered = !passive && (!coverageQuestion || recognizedCoverage) &&
+                answered = (!representative || Boolean(sideRepresentative || leadingRepresentative)) && !passive && (!coverageQuestion || recognizedCoverage) &&
                   questionMemory([{role:"assistant",content:current},{role:"user",content:response}]).completed.length > 0;
                 if (!answered && (!sideQuestion && passive || coverageQuestion && !recognizedCoverage && !isCustomerQuestion(text))) {
                   const customerTurn = session.messages.at(-1);
@@ -504,11 +511,11 @@ export async function handleTestSession(
                   entry.status = "answered";
                   entry.response = response;
                   const customerTurn = session.messages.at(-1);
-                  if (sideQuestion && customerTurn?.role === "user") {
+                  if ((sideQuestion || leadingRepresentative) && customerTurn?.role === "user") {
                     customerTurn.businessResponse = response;
                     customerTurn.conversationOnly = false;
                     await send({type:"business-answer",response});
-                    text = sideQuestion;
+                    text = leadingRepresentative && trailingAnswer ? trailingAnswer[1] : sideQuestion ?? text;
                   }
                 }
               }
@@ -524,7 +531,6 @@ export async function handleTestSession(
               session.introRestartPending=false;
               await speakRepair({kind:"purpose"},text);await send({type:"done"});return;
             }
-            const representative=configuredRepresentativeReply(session.config,text);
             const locationQuestion=asksCompanyLocation(text);
             const awaitingPurposeAcknowledgment = Boolean(spokenPurpose && !session.purposeAcknowledged);
             const openingQuestion = awaitingPurposeAcknowledgment && !isListeningSignal(text) &&
@@ -534,7 +540,7 @@ export async function handleTestSession(
               await speakRepair({kind:"introduction"},text);await send({type:'done'});return;
             }
             const identityQuestion=/\b(?:who (?:are you|you are|is this)|who am I (?:talking|speaking) (?:to|with)|your name|what company|which company)\b/i.test(text);
-            if(identityQuestion && !openingQuestion){
+            if(identityQuestion && !representative && !openingQuestion){
               const identity=voiceIdentity(session.config),memory=questionMemory(flowHistory);
               const next=session.purposeDelivered?businessResume(flowHistory):undefined;
               const offered=flowHistory.some(isTransferOffer);
@@ -545,7 +551,7 @@ export async function handleTestSession(
               await send({type:'done'});return;
             }
             const side=healthSideTopic(text),healthQuestion=isGeneralHealthQuestion(text);
-            if(side||healthQuestion){
+            if(!representative && (side||healthQuestion)){
               const interruptedIntro=session.introRestartPending || previousSpeechPhase==="introduction" && session.requirePlaybackAck && !session.introPlaybackComplete;
               const next=interruptedIntro||awaitingPurposeAcknowledgment?undefined:businessResume(flowHistory);
               if(side){
@@ -563,10 +569,10 @@ export async function handleTestSession(
               if(!interruptedIntro&&!next&&!session.purposeDelivered){const sideAnswer=answer;await speakRepair({kind:"purpose"},text);answer=sideAnswer+" "+answer;}
               await send({type:'done'});return;
             }
-            if (openingQuestion && spokenPurpose && !customerRequestsHuman(text,flowHistory)) {
+            if (!representative && openingQuestion && spokenPurpose && !customerRequestsHuman(text,flowHistory)) {
               session.introRestartPending = false;
               const reciprocal = /\b(?:how about|what about) yourself(?: today)?[.!? ]*$/i.test(text);
-              const knownReply = representative || (reciprocal ? "I'm doing well, thank you for asking." :
+              const knownReply = (reciprocal ? "I'm doing well, thank you for asking." :
                 await contextualQuestionReply(session.config,text,session.messages.slice(1,-1),{signal:abort.signal}));
               const deliverPurpose = !session.purposeDelivered;
               if (deliverPurpose) session.speechPhase = "purpose";
@@ -589,8 +595,9 @@ export async function handleTestSession(
               const reply = representative || await contextualQuestionReply(session.config,text,flowHistory,{signal:abort.signal});
               if (reply) {
                 if (currentTurn?.role === "user" && !currentTurn.businessResponse) currentTurn.conversationOnly = true;
-                const next = session.purposeDelivered && !awaitingPurposeAcknowledgment
+                const next = session.purposeDelivered && (representative || !awaitingPurposeAcknowledgment)
                   ? businessResume(session.messages.slice(1)) : undefined;
+                if (representative && next) repairSource = next;
                 const offer = !next && answered && !session.handoffDeclined
                   ? routineHandoffOffer(session.config.script,flowMemory,flowMemory.latestAnswer?.response || "") : undefined;
                 await streamAgentReply({messages:[],fixedSpeech:[reply,next || offer].filter(Boolean).join(" "),voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
