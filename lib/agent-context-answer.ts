@@ -517,7 +517,7 @@ export function configuredRepresentativeReply(
     askedWords.length >= 2 &&
     askedWords.some(
       (word) =>
-        !/^(?:medicare|medicaid|support|team|group|company|services)$/.test(
+        !/^(?:medicare|medicaid|medical|midical|medi|med|health|sales|medicares|medicared|support|team|group|company|services)$/.test(
           word,
         ),
     ) &&
@@ -546,5 +546,5 @@ export function configuredRepresentativeReply(
     /^(?:that|the|your) (?:company|team)$/.test(asked)
   )
     return "Which company do you mean?";
-  return "I can't confirm that affiliation.";
+  return "Yes I'm a representative of " + company + ".";
 }
