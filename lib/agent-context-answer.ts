@@ -73,15 +73,26 @@ const cities = [
 ];
 const weatherCache = new Map<string, { until: number; text: string }>();
 export function asksCompanyLocation(text: string) {
-  return /\bwhere(?:['’]s|\s+(?:are|r|were|is))\s+(?:you|u|your (?:company|team|office))\b|\bwhere (?:do you live|you live)\b|\bwhere\b[^.!?]{0,55}\b(?:calling|speaking|located|based|sitting|from|form)\b|\b(?:your|company|office) (?:location|address)\b|\b(?:street|postal|mailing|physical) address\b/i.test(text);
+  return /\bwhere(?:['’]s|\s+(?:are|r|were|is))\s+(?:you|u|your (?:company|team|office))\b|\bwhere (?:do you live|you live)\b|\bwhere\b[^.!?]{0,55}\b(?:calling|speaking|located|based|sitting|from|form)\b|\b(?:your|company|office) (?:location|address)\b|\b(?:street|postal|mailing|physical) address\b/i.test(
+    text,
+  );
 }
 
 function companyLocationReply(source: string, text: string) {
-  const fact = (label: RegExp) => label.exec(source)?.[1]
-    ?.split(/\s+Time\s?zone\s*:/i)[0].replace(/[., ]+$/, "").trim();
+  const fact = (label: RegExp) =>
+    label
+      .exec(source)?.[1]
+      ?.split(/\s+Time\s?zone\s*:/i)[0]
+      .replace(/[., ]+$/, "")
+      .trim();
   const location = fact(/(?:office|company) location\s*:\s*([^\n]{3,160})/i);
-  const address = fact(/(?:office|company|street|postal|mailing|physical) address\s*:\s*([^\n]{3,160})/i);
-  const streetRequested = /\b(?:street|postal|mailing|physical|full|exact|specific) address\b|\b(?:street number|zip code|postal code)\b/i.test(text);
+  const address = fact(
+    /(?:office|company|street|postal|mailing|physical) address\s*:\s*([^\n]{3,160})/i,
+  );
+  const streetRequested =
+    /\b(?:street|postal|mailing|physical|full|exact|specific) address\b|\b(?:street number|zip code|postal code)\b/i.test(
+      text,
+    );
   if (streetRequested) {
     return address && /\d/.test(address)
       ? `Our office address is ${address}.`
@@ -439,25 +450,52 @@ export function configuredRepresentativeReply(
   text: string,
   history: ReadonlyArray<{ role: string; content: string }> = [],
 ) {
-  const question = text.toLowerCase()
+  const question = text
+    .toLowerCase()
     .replace(/\b(?:uh+|um+|erm+|ah+)\b[, ]*/g, "")
-    .trim().replace(/[?!., ]+$/, "").replace(/\s+/g, " ");
+    .trim()
+    .replace(/[?!., ]+$/, "")
+    .replace(/\s+/g, " ");
   if (/^are you (?:an? |the )?(?:representative|rep|agent)$/.test(question))
     return "Which company do you mean?";
-  const affiliation = /^(?:do you represent|are you (?:calling )?(?:from|with)|are you (?:an? |the )?(?:sales )?(?:representative|rep|agent) (?:of|for|with|from))\s+(.+)$/.exec(question);
-  const namedRole = /^(?:are you|(?:(?:i say|i said|i mean)[, ]+)?you are) (?:an? |the )?(.+?) (?:as (?:an? )?)?(?:sales )?(?:representative|rep|agent)$/.exec(question);
+  const affiliation =
+    /^(?:do you represent|are you (?:calling )?(?:from|with)|are you (?:an? |the )?(?:sales )?(?:representative|rep|agent) (?:of|for|with|from))\s+(.+)$/.exec(
+      question,
+    );
+  const namedRole =
+    /^(?:are you|(?:(?:i say|i said|i mean)[, ]+)?you are) (?:an? |the )?(.+?) (?:as (?:an? )?)?(?:sales )?(?:representative|rep|agent)$/.exec(
+      question,
+    );
   const asked = affiliation?.[1] || namedRole?.[1];
-  if (/^are you (?:(?:calling )?from (?:where|what (?:company|city|country))|with (?:me|us|you))$/.test(question)) return;
-  if (/^are you (?:an? |the )?(?:official|government|federal|licensed|certified)\b/.test(question) ||
-      asked && /\b(?:official|government|federal|licensed|certified)\b/.test(asked)) {
+  if (
+    /^are you (?:(?:calling )?from (?:where|what (?:company|city|country))|with (?:me|us|you))$/.test(
+      question,
+    )
+  )
+    return;
+  if (
+    /^are you (?:an? |the )?(?:official|government|federal|licensed|certified)\b/.test(
+      question,
+    ) ||
+    (asked &&
+      /\b(?:official|government|federal|licensed|certified)\b/.test(asked))
+  ) {
     return "I can't confirm that affiliation or qualification.";
   }
 
   const { company } = voiceIdentity(config);
-  const normalize = (value: string): string[] => value.normalize("NFKD").toLowerCase()
-    .replace(/[\u0300-\u036f]/g, "").match(/[a-z0-9]+/g) || [];
+  const normalize = (value: string): string[] =>
+    value
+      .normalize("NFKD")
+      .toLowerCase()
+      .replace(/[\u0300-\u036f]/g, "")
+      .match(/[a-z0-9]+/g) || [];
   if (!asked) {
-    if (/^are you (?:an? |the )?(?:medicare|medicaid)\b.*\b(?:representative|agent|specialist)\b/.test(question))
+    if (
+      /^are you (?:an? |the )?(?:medicare|medicaid|medical|midical|medi|med|health|sales|medicares|medicared)\b.*\b(?:representative|agent|specialist)\b/.test(
+        question,
+      )
+    )
       return "I can't confirm that affiliation or qualification.";
     return;
   }
@@ -465,21 +503,48 @@ export function configuredRepresentativeReply(
   const companyWords = normalize(company || "");
   const askedWords = normalize(asked.replace(/^the /, ""));
   const askedName = askedWords.join("");
-  const initials = companyWords.map(word => word[0]).join("");
+  const initials = companyWords.map((word) => word[0]).join("");
   const companyName = companyWords.join("");
-  const collapseRepeatedLetters = (value: string) => value.replace(/([a-z])\1+/g, "$1");
-  const exact = askedName === companyName ||
-    companyName.length >= 8 && collapseRepeatedLetters(askedName) === collapseRepeatedLetters(companyName) ||
-    initials.length >= 3 && askedName === initials;
-  const shortName = askedWords.length >= 2 &&
-    askedWords.some(word => !/^(?:medicare|medicaid|support|team|group|company|services)$/.test(word)) &&
-    companyWords.some((_, index) => companyWords.slice(index, index + askedWords.length).join(" ") === askedWords.join(" "));
-  const recordedAlias = companyWords.join(" ") === "medicare wellness support team" &&
+  const collapseRepeatedLetters = (value: string) =>
+    value.replace(/([a-z])\1+/g, "$1");
+  const exact =
+    askedName === companyName ||
+    (companyName.length >= 8 &&
+      collapseRepeatedLetters(askedName) ===
+        collapseRepeatedLetters(companyName)) ||
+    (initials.length >= 3 && askedName === initials);
+  const shortName =
+    askedWords.length >= 2 &&
+    askedWords.some(
+      (word) =>
+        !/^(?:medicare|medicaid|support|team|group|company|services)$/.test(
+          word,
+        ),
+    ) &&
+    companyWords.some(
+      (_, index) =>
+        companyWords.slice(index, index + askedWords.length).join(" ") ===
+        askedWords.join(" "),
+    );
+  const recordedAlias =
+    companyWords.join(" ") === "medicare wellness support team" &&
     /^wellness sport(?: team)?$/.test(askedWords.join(" "));
-  const introduced = recordedAlias && history.some(turn => turn.role === "assistant" &&
-    /\b(?:from|with) medicare wellness support team\b/.test(normalize(turn.content).join(" ")));
-  if (company && (exact || shortName || introduced)) return `Yes, I'm a representative of ${company}.`;
-  if (recordedAlias || (askedWords.length === 1 && companyWords.includes(askedWords[0])) ||
-      /^(?:that|the|your) (?:company|team)$/.test(asked)) return "Which company do you mean?";
+  const introduced =
+    recordedAlias &&
+    history.some(
+      (turn) =>
+        turn.role === "assistant" &&
+        /\b(?:from|with) medicare wellness support team\b/.test(
+          normalize(turn.content).join(" "),
+        ),
+    );
+  if (company && (exact || shortName || introduced))
+    return `Yes, I'm a representative of ${company}.`;
+  if (
+    recordedAlias ||
+    (askedWords.length === 1 && companyWords.includes(askedWords[0])) ||
+    /^(?:that|the|your) (?:company|team)$/.test(asked)
+  )
+    return "Which company do you mean?";
   return "I can't confirm that affiliation.";
 }
