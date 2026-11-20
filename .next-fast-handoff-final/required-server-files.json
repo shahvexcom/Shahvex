@@ -105,7 +105,7 @@
         "transform": "lodash/{{member}}"
       }
     },
-    "outputFileTracingRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
+    "outputFileTracingRoot": "/tmp/shahvex-voicemail-source.kNnsHw",
     "enablePrerenderSourceMaps": true,
     "cacheComponents": false,
     "cacheLife": {
@@ -327,13 +327,13 @@
       "playwright-core",
       "@sparticuz/chromium"
     ],
-    "repoRoot": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
+    "repoRoot": "/tmp/shahvex-voicemail-source.kNnsHw",
     "turbopack": {
-      "root": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex"
+      "root": "/tmp/shahvex-voicemail-source.kNnsHw"
     },
     "distDirRoot": ".next-fast-handoff-final"
   },
-  "appDir": "/home/syed-nazeer-ahmad/shahvex/restore/website/Shahvex",
+  "appDir": "/tmp/shahvex-voicemail-source.kNnsHw",
   "relativeAppDir": "",
   "files": [
     ".next-fast-handoff-final/package.json",

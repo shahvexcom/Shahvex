@@ -1,5 +1,31 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {isVoicemailGreeting}=require('../gateway/voicemail-detection.cjs');
+
+test('consecutive recognition chunks can complete a machine prompt',()=>{
+ for(const chunks of [
+  ['If you know their extension', 'enter it now.'],
+  ['For billing, dial two.', 'For technical support, dial three.'],
+  ['You have reached Morgan.', 'Please leave a message.'],
+  ['Please leave me a voice', 'message once you hear the beep.'],
+  ['Your call has been', 'forwarded to an automated', 'messaging system.'],
+  ['Leave me a message.', 'Oh, send me a text message.'],
+ ]){
+  const results=chunks.map((chunk,index)=>isVoicemailGreeting(chunk,chunks.slice(0,index)));
+  assert.deepEqual(results,[...chunks.slice(1).map(()=>false),true],chunks.join(' / '));
+ }
+});
+
+test('human greetings and discussion do not supply machine evidence',()=>{
+ for(const chunks of [
+  ['Hello.', 'Please hold.', 'My voicemail is full.'],
+  ['Hello, I use a speech device.', 'Please hold while I check.'],
+  ['Hello, English is my second language.', 'I can check my voicemail later.'],
+  ['I heard someone say please leave a message.', 'After the tone.'],
+  ['Please leave your contact details.', 'Or send me a text.'],
+ ]){
+  assert.ok(chunks.every((chunk,index)=>!isVoicemailGreeting(chunk,chunks.slice(0,index))),chunks.join(' / '));
+ }
+});
 test('recognizes machine greetings including the reported transcript',()=>{
  for(const text of ['All has been forwarded to an automatic voice message system. 12282279143 is not available.','Your call has been forwarded to an automated voice messaging system.','Please leave your message after the tone.','At the beep, record your message.','The subscriber is unavailable. Please leave a message.',"You've reached the voicemail of Sarah.",'Welcome to voicemail.','The mailbox is full.','Please record your message at the beep.',"You've reached Sarah. Leave me a message.","I cannot take your call. Please leave a message."])assert.equal(isVoicemailGreeting(text),true,text);
 });

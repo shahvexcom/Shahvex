@@ -406,7 +406,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
         const probeDeadline=AbortSignal.timeout(3000);
         let probe;try{probe=await callback({action:'listen',eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,audio},probeDeadline);}catch{releaseRecognition();await speechFallback(source,'transport_error');return;}
         if(!probe.ok){releaseRecognition();await speechFallback(source,'http_'+probe.status);return;}
-        let heard;try{heard=await probe.json();}catch{releaseRecognition();await speechFallback(source,'invalid_response');return;}if(!String(heard.text||'').trim()){releaseRecognition();await speechFallback(source,'empty_transcript');return;}if(heard.text)c.openingResponse.response();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
+        let heard;try{heard=await probe.json();}catch{releaseRecognition();await speechFallback(source,'invalid_response');return;}if(c.voicemailDetected)return;if(!String(heard.text||'').trim()){releaseRecognition();await speechFallback(source,'empty_transcript');return;}if(heard.text)c.openingResponse.response();if(machineHeard(heard.text)){stopForVoicemail();return;}heard.kind=interruptionKind(heard.text);
         if(c.closed||c.ending||c.hold||c.transferred||c.handoffPending||!heard.text||heard.kind==='ignore'||heard.kind==='filler'&&!isListeningSignal(heard.text))return;
         // Keep the caller's original waveform; probes never commit fragments to conversation history.
         if(c.frames.length||c.recognizing>1||c.lastVoicedAt>endedVoiceAt&&c.voiceFrames>=60){c.turnCarry=source;c.turnHoldUntil=Date.now()+350;return;}
@@ -439,6 +439,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       if(!c||c.ending||c.closed||closing)return;
       c.voicemailDetected=true;c.epoch++;c.controller?.abort();c.playbackReported=true;c.queue.length=0;c.outputCarry=Buffer.alloc(0);
       c.playbackReady=false;c.processing=false;c.frames=[];c.pre=[];
+      c.turnCarry=undefined;c.turnHoldUntil=undefined;c.deferredAcknowledgment=undefined;
       c.endAfterPlayback=false;c.noResponseEnding=false;
       void endCustomerCall(true);
     }

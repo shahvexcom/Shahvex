@@ -1,10 +1,20 @@
 'use strict';
 // Recognized voicemail/call-screening prompts only; a person discussing them is not a machine.
+const normalize = value => String(value || '').normalize('NFKC').replace(/’/g, "'").trim();
+const discussingGreeting = /^(?:my|our) (?:voice[ -]?mail|mailbox) (?:is|was|has)\b|^(?:what|how|why|can (?:I|you)|could (?:I|you)|do you|is this|are you)\b|\b(?:I (?:said|heard|got|received|left)|you (?:said|mentioned)|(?:it|he|she|they) (?:said|says)|(?:my|your|the) (?:voice[ -]?mail|mailbox) (?:said|says)|why (?:did|was|is)|can you|could you)\b|\bI (?:want|need|would like|plan|tried|try|will) (?:to )?(?:leave|record|send)\b|\bI(?:'d| would) like to (?:leave|record|send)\b/i;
+
+function answeringPrompt(text) {
+ return /\bif you know (?:your party'?s|the|their) extension\b.{0,90}\b(?:dial|enter|key in) (?:it|the extension)\b/i.test(text)
+  || /\b(?:choose|select) (?:from )?(?:one of )?(?:the following |these )?options\b.{0,120}\b(?:press|dial|enter) (?:\d|zero|one|two|three|four|five|six|seven|eight|nine)\b/i.test(text)
+  || /\bfor [\w' -]{2,45} (?:press|dial) (?:\d|zero|one|two|three|four|five|six|seven|eight|nine)\b.{0,60}\bfor [\w' -]{2,45} (?:press|dial) (?:\d|zero|one|two|three|four|five|six|seven|eight|nine)\b/i.test(text)
+  || /^(?:(?:hi|hello|hey) )?(?:please )?(?:leave|record) (?:me |us )?(?:a |your )?(?:voice[ -]?)?message (?:(?:or|alternatively|oh|uh) )?(?:please )?(?:(?:send|drop) (?:me |us )?(?:a |your )?(?:text(?: message)?|sms)|text (?:me|us))\b/i.test(text)
+  || /\b(?:sorry (?:I|we) missed (?:your|the) call|(?:I|we)(?:'m|'re| am| are) (?:away from (?:my|our|the) (?:desk|phone)|(?:currently )?unavailable|on (?:another|the) (?:line|call)))\b.{0,100}\b(?:leave|record) (?:me |us )?(?:a |your )?message\b/i.test(text)
+  || /\b(?:leave|record) (?:me |us )?(?:a |your )?(?:voice[ -]?)?message\b.{0,100}\b(?:once|when|following) (?:you hear )?(?:the|a) (?:beep|tone)\b/i.test(text);
+}
+
 function isVoicemailGreeting(value, recent=[]){
- const text=String(value||'').normalize('NFKC').replace(/[’]/g,"'").trim();
- if(/^(?:my|our) (?:voicemail|mailbox) (?:is|was|has)\b/i.test(text))return false;
- if(/^(?:what|how|why|can (?:I|you)|could (?:I|you)|do you|is this|are you)\b/i.test(text)||/\bI (?:want|need|would like|plan|tried|try|will) (?:to )?(?:leave|record|send)\b|\bI(?:'d| would) like to (?:leave|record|send)\b/i.test(text))return false;
- if(!text||/\b(?:I (?:said|heard|got|received|left)|you (?:said|mentioned)|(?:it|he|she|they) (?:said|says)|(?:my|your|the) voicemail (?:said|says)|why (?:did|was|is)|can you|could you)\b/i.test(text))return false;
+ const text=normalize(value);
+ if(!text||discussingGreeting.test(text))return false;
  // Carrier announcements and connection challenges are machines too. Never
  // infer this from "thank you for calling", a number or unavailability alone.
  if(/(?:\b(?:your|this) call |^)(?:has been|is being|was) forwarded (?:to )?(?:a |the )?voice[ -]?mail\b/i.test(text)
@@ -14,7 +24,8 @@ function isVoicemailGreeting(value, recent=[]){
   || /\b(?:to )?(?:connect|complete) (?:your |the |this )?call[, ]+(?:please )?press (?:one|1|a key|any key)\b/i.test(text))return true;
  // STT may split the connection challenge into "One" / "To connect your
  // call". Require the greeting, digit and connection clause in nearby turns.
- const context=[...recent.slice(-3).map(String),text].join(' ');
+ const fragments=[...recent.slice(-3).map(normalize),text];
+ const context=fragments.slice(fragments.findLastIndex(fragment=>discussingGreeting.test(fragment))+1).join(' ');
  // Carrier and mailbox recordings observed in live calls often arrive in
  // separate recognition fragments. Require distinctive recorded prompts.
  if(/^welcome to verizon wireless[.! ,]*$/i.test(text)
@@ -32,7 +43,10 @@ function isVoicemailGreeting(value, recent=[]){
   || /\brecord (?:your )?name\b[\s\S]{0,100}\b(?:after|at) (?:the )?(?:tone|beep)\b/i.test(text)
   || /\b(?:this call|your call) (?:is being|has been) screened\b[\s\S]{0,100}\b(?:name|reason|record)\b/i.test(text);
  if(screening)return true;
- return /\b(?:welcome to|you(?:'ve| have) reached|this is) (?:the |my |a )?(?:voice[ -]?mail|mailbox)\b/i.test(text)
+ const clean = value => value.replace(/[.!?,:;]+/g,' ').replace(/\s+/g,' ').trim();
+ const prompt=clean(context);
+ return answeringPrompt(clean(text)) || answeringPrompt(prompt)
+  || /\b(?:welcome to|you(?:'ve| have) reached|this is) (?:the |my |a )?(?:voice[ -]?mail|mailbox)\b/i.test(prompt)
   || /\b(?:voice[ -]?mail|mailbox) (?:is )?(?:full|not (?:yet )?set up|has not been set up|cannot accept messages)\b/i.test(text)
   || /\b(?:please )?record (?:a |your )?message\b[\s\S]{0,100}\b(?:after|at) (?:the )?(?:tone|beep)\b/i.test(text)
   || /\byou(?:'ve| have) reached\b[\s\S]{0,120}\b(?:leave|record) (?:me |us )?(?:a |your )?message\b/i.test(text)
@@ -41,6 +55,9 @@ function isVoicemailGreeting(value, recent=[]){
   || /\b(?:please )?leave (?:me |us )?(?:a |your )?(?:voice[ -]?)?message\b[\s\S]{0,160}\b(?:after|at) (?:the )?(?:tone|beep)\b/i.test(text)
   || /\b(?:at|after) the (?:tone|beep)\b[\s\S]{0,120}\b(?:record|leave) (?:a |your )?message\b/i.test(text)
   || /\bplease (?:record|reply|speak)(?: (?:your|a|an additional) (?:message|reply))? (?:after|at) (?:the )?(?:tone|beep)\b/i.test(text)
-  || /\b(?:the|this) (?:person|subscriber|number|mailbox)\b[\s\S]{0,100}\b(?:not available|unavailable|cannot accept|can't accept)\b[\s\S]{0,100}\b(?:message|voicemail|mailbox)\b/i.test(text);
+  || /\b(?:the|this) (?:person|subscriber|number|mailbox)\b[\s\S]{0,100}\b(?:not available|unavailable|cannot accept|can't accept)\b[\s\S]{0,100}\b(?:message|voicemail|mailbox)\b/i.test(text)
+  || /\b(?:leave|record) (?:me |us )?(?:a |your )?(?:voice[ -]?)?message\b.{0,120}\b(?:after|at) the (?:tone|beep)\b/i.test(prompt)
+  || /\b(?:you(?:'ve| have) reached|(?:cannot|can't|unable to) (?:take|answer) your call)\b.{0,120}\b(?:leave|record) (?:me |us )?(?:a |your )?message\b/i.test(prompt)
+  || /\b(?:your|this) call (?:has been|is being|was) forwarded (?:to )?(?:an? |the )?(?:(?:automatic|automated) (?:voice[ -]?)?messaging system|voice[ -]?mail)\b/i.test(prompt);
 }
 module.exports={isVoicemailGreeting};

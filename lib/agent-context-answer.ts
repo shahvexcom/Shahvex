@@ -517,7 +517,7 @@ export function configuredRepresentativeReply(
     askedWords.length >= 2 &&
     askedWords.some(
       (word) =>
-        !/^(?:medicare|medicaid|medical|midical|medi|med|health|sales|medicares|medicared|support|team|group|company|services)$/.test(
+        !/^(?:medicare|medicaid|medical|midical|medi|med|health|sales|medicares|medicared|support|sport|spot|team|group|company|services)$/.test(
           word,
         ),
     ) &&
