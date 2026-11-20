@@ -1,6 +1,6 @@
 var R=require("../../../../chunks/[turbopack]_runtime.js")("server/app/api/telephony/vicidial/route.js")
-R.c("server/chunks/_1bprf2p._.js")
-R.c("server/chunks/_1qejdbw._.js")
+R.c("server/chunks/_1-f_5-q._.js")
+R.c("server/chunks/_0892oej._.js")
 R.c("server/chunks/lib_1wovbpy._.js")
 R.c("server/chunks/[root-of-the-server]__0gjt_i5._.js")
 R.c("server/chunks/lib_20-rzby._.js")

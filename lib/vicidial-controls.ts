@@ -42,7 +42,7 @@ export async function vicidialCallCommand(
         message: "Human transfer submitted; waiting for dialer confirmation.",
       });
     }
-    if (!["ANSWERED", "RINGING", "INITIATED"].includes(a.status) && !(action === "hangup" && nativeOnly && a.vicidial_call_id))
+    if (!["ANSWERED", "RINGING", "INITIATED"].includes(a.status))
       throw Error("This call has ended");
     if (action === "hangup" && a.telephony_provider === "AUDIOSOCKET" && !a.vicidial_call_id) {
       if (nativeOnly) return Response.json({ message:"Native call identity is pending", nativeHangupPending:true },{status:409});
@@ -62,6 +62,8 @@ export async function vicidialCallCommand(
       return Response.json({ message: "Closing direct audio call." });
     }
     if (action === "hangup") {
+      if (a.customer_ended || ["PREPARING", "UNCERTAIN", "SUBMITTED", "ANSWERED"].includes(a.transfer_status))
+        throw Error("This AI call is no longer eligible for native hangup");
       const response = await vicidialRequest(
           a.server_url,
           a.username,
@@ -105,7 +107,7 @@ export async function vicidialCallCommand(
       )
         throw Error("Recording control was not confirmed");
       await pool.query(
-        `UPDATE agent_calls SET recording_active=$1,ai_recording_id=COALESCE($2,ai_recording_id),recording_size_bytes=COALESCE($3,recording_size_bytes),updated_at=NOW() WHERE id=$4`,
+        `UPDATE agent_calls SET recording_active=$1,ai_recording_id=COALESCE($2,ai_recording_id),recording_size_bytes=COALESCE($3,recording_size_bytes),updated_at=NOW() WHERE id=$4 AND status='ANSWERED' AND NOT ai_leg_released`,
         [
           result.recordingActive,
           result.aiRecordingId || null,
@@ -132,7 +134,7 @@ export async function vicidialCallCommand(
       if (result.accepted !== true)
         throw Error("Audio bridge did not accept the hold command");
       await pool.query(
-        "UPDATE agent_calls SET on_hold=$1,conversation_state=$2,updated_at=NOW() WHERE id=$3",
+        "UPDATE agent_calls SET on_hold=$1,conversation_state=$2,updated_at=NOW() WHERE id=$3 AND status='ANSWERED' AND NOT ai_leg_released",
         [action === "hold", action === "hold" ? "ON_HOLD" : "LISTENING", id],
       );
       return Response.json({

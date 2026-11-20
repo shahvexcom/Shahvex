@@ -4,6 +4,18 @@ const isPresenceCheck = (text) =>
   /^(?:(?:hello|hi|hey)[?!., ]*)+(?:(?:are you (?:still )?there|can you hear me)[?!., ]*)?$|^(?:are you (?:still )?there|(?:is )?(?:anyone|anybody|someone|somebody) there|can you hear me)[?!., ]*$/i.test(
     String(text || "").trim(),
   );
+function hearingRecoveryIntent(text, awaitingConfirmation = false) {
+  const value = String(text || "").trim().replace(/[’]/g, "'")
+    .replace(/[,!.?]+/g, " ").replace(/\s+/g, " ").trim();
+  if (/^(?:(?:sorry|hello|uh|um|no|but|don't disappear on me) )*(?:I )?(?:can ?not|can't|cant|could not|couldn't|did not|didn't|do not|don't|am not|I'm not) (?:really )?(?:hear|hearing|here) you(?: clearly| very well| at all)?(?: what did you say| can you repeat that)?$/i.test(value) ||
+      /\b(?:your|the) (?:voice|audio|sound|line)(?: is| keeps| sounds| seems)? (?:breaking(?: up)?|cutting(?: out)?|crackling|choppy|distorted|unclear|not clear|too (?:low|quiet))\b|\byou(?:'re| are) (?:breaking up|cutting out)\b/i.test(value))
+    return "complaint";
+  if (/^(?:(?:hello|hi|hey|uh|um|are you there) )*(?:can|could|do) you (?:hear|here) me(?: clearly| now| okay)?(?: good)?$/i.test(value))
+    return "check";
+  if (/^(?:(?:yes|yeah|yep|yup|okay|ok|sure) )?(?:I(?:'m| am) (?:still )?here|I (?:can )?hear you)(?: now| clearly)?(?: (?:and )?I (?:can )?hear you(?: now| clearly)?)?$/i.test(value) ||
+      awaitingConfirmation && /^(?:yes|yeah|yep|yup|okay|ok|sure|I am|I can)$/i.test(value))
+    return "confirmation";
+}
 const isGreetingOnly = (text) =>
   /^(?:(?:hello|hi|hey)[?!., ]*)+$/i.test(String(text || "").trim());
 const isAfterIntroduction = (spoken) =>
@@ -282,6 +294,7 @@ const asksToWait = (text) =>
   );
 module.exports = {
   isPresenceCheck,
+  hearingRecoveryIntent,
   asksCallingPurpose,
   scriptPurpose,
   audioCheckReply,

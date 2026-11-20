@@ -412,7 +412,9 @@ type Session = {
   requirePlaybackAck?: boolean;
   introPlaybackComplete?: boolean;
   lastCompletedTurnId?: string;
-  pendingPlayback?: { turnId: string; phase: Session["speechPhase"]; message: Message; question?: string };
+  pendingPlayback?: { turnId: string; phase: Session["speechPhase"]; message: Message; question?: string; retry?: Session["failedSpeech"] };
+  hearingResume?: { speech: string; phase: Session["speechPhase"]; question?: string };
+  failedSpeech?: NonNullable<Session["hearingResume"]>;
   questionLedger?: Map<string, { status: "pending" | "interrupted" | "delivered" | "answered"; response?: string }>;
   purposeReplyTo?: string;
   purposeAcknowledged?: boolean;

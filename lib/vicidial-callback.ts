@@ -90,9 +90,25 @@ const message = z
   })
   .strict();
 const json = (value: unknown, status = 200) =>
-  Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION } });
+  Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION, "x-shahvex-call-cleanup-revision": "REC444-1" } });
 type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
+async function stopCallVoice(call: { id: string; voice_session_id?: string }) {
+  const sessionId = call.voice_session_id;
+  if (!sessionId) return;
+  if (process.env.SHAHVEX_PC_AI_URL) {
+    const response = await pcAiRequest(
+      "/tester/stop",
+      { method: "POST", headers: { "x-shahvex-session": sessionId }, body: "{}" },
+      `vici-${call.id}`,
+    );
+    if (!response.ok && response.status !== 404) throw Error("Voice worker cleanup pending");
+  } else {
+    sessions.get(sessionId)?.abort?.abort();
+    sessions.delete(sessionId);
+  }
+}
+
 const statusHeaders = (line: string) =>
   line
     .split("|")
@@ -195,7 +211,7 @@ export async function vicidialCallback(request: Request) {
     if (!v.callId) return json({ error: "Call ID required" }, 400);
     const call = (
       await pool.query(
-        "SELECT id,status,transfer_status,voice_session_id,vicidial_call_id,direct_audio_uuid FROM agent_calls WHERE id=$1 AND voip_connection_id=$2",
+        "SELECT id,status,transfer_status,voice_session_id,vicidial_call_id,direct_audio_uuid,ai_leg_released FROM agent_calls WHERE id=$1 AND voip_connection_id=$2",
         [v.callId, c.id],
       )
     ).rows[0];
@@ -209,7 +225,7 @@ export async function vicidialCallback(request: Request) {
     )
       return json({ error: "Call identity mismatch" }, 409);
     if (
-      call.status !== "ANSWERED" ||
+      call.status !== "ANSWERED" || call.ai_leg_released ||
       ["PREPARING", "UNCERTAIN", "SUBMITTED", "ANSWERED"].includes(
         call.transfer_status,
       )
@@ -367,6 +383,14 @@ export async function vicidialCallback(request: Request) {
         [v.activeCallIds, c.id],
       );
     }
+    if (v.activeCallIds) {
+      try {
+        const { reconcileMissingVicidialCalls } = await import("./vicidial-call-reconciliation");
+        await reconcileMissingVicidialCalls(c, key, v.activeCallIds, stopCallVoice);
+      } catch {
+        // A failed status probe leaves the call pending for the next maintenance pass.
+      }
+    }
     await retryVicidialSyncJobs(c.id);
     return json(await reconcileVicidialQueues(c.id));
   }
@@ -438,21 +462,22 @@ export async function vicidialCallback(request: Request) {
             { error: "Assigned direct audio agent is busy or unavailable" },
             409,
           );
+        if (!result.admitted_call && (call.ai_leg_released || call.customer_ended))
+          return finish({ error: "Call media has ended" }, 409);
         if (!result.admitted_call)
           return call.voice_session_id
             ? finish({
                 callId: call.id,
                 first: call.script_snapshot.first,
-                status: call.status,
+                status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
                 mediaReady: call.status === "ANSWERED",
               })
             : finish(
                 {
-                  error: "Direct voice startup incomplete; cleanup required",
-                  callId: call.id,
-                  recover: true,
+                  error: "Assignment is awaiting voice readiness",
+                  retryable: true,
                 },
-                503,
+                409,
               );
         try {
           const config = testConfig.parse(call.script_snapshot),
@@ -626,16 +651,15 @@ export async function vicidialCallback(request: Request) {
           ? json({
               callId: call.id,
               first: call.script_snapshot.first,
-              status: call.status,
+              status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
               mediaReady: call.status === "ANSWERED",
             })
           : json(
               {
-                error: "Direct voice session unavailable; cleanup required",
-                callId: call.id,
-                recover: true,
+                error: "Assignment is awaiting voice readiness",
+                retryable: true,
               },
-              503,
+              409,
             );
       const line = live.directAudioLines.find(
         (line) =>
@@ -667,10 +691,14 @@ export async function vicidialCallback(request: Request) {
         ).rows[0];
         if (prior) {
           await tx.query("COMMIT");
+          const status = prior.ai_leg_released || prior.customer_ended ? "COMPLETED" : prior.status;
+          if (!prior.voice_session_id && !["COMPLETED", "FAILED"].includes(status))
+            return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: prior.id,
             first: prior.script_snapshot.first,
-            status: prior.status,
+            status,
+            mediaReady: status === "ANSWERED",
           });
         }
         const a = (
@@ -732,8 +760,10 @@ export async function vicidialCallback(request: Request) {
             a.max_call_duration_seconds || 0,
           ],
         );
-        if (!(await reserveAgent(tx, a.id, id, a.campaign_id)))
-          throw Error("Direct audio agent reservation changed");
+        if (!(await reserveAgent(tx, a.id, id, a.campaign_id))) {
+          await tx.query("ROLLBACK");
+          return json({ error: "Assigned direct audio agent is busy or unavailable" }, 409);
+        }
         await tx.query("COMMIT");
         tx.release();
         released = true;
@@ -775,7 +805,7 @@ export async function vicidialCallback(request: Request) {
           ? json({
               callId: call.id,
               first: call.script_snapshot.first,
-              status: call.status,
+              status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
             })
           : json(
               {
@@ -870,15 +900,20 @@ export async function vicidialCallback(request: Request) {
         ]);
         const duplicate = (
           await tx.query(
-            "SELECT id,script_snapshot FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",
+            "SELECT id,script_snapshot,status,voice_session_id,ai_leg_released,customer_ended FROM agent_calls WHERE voip_connection_id=$1 AND vicidial_call_id=$2",
             [c.id, v.externalCallId],
           )
         ).rows[0];
         if (duplicate) {
           await tx.query("COMMIT");
+          const status = duplicate.ai_leg_released || duplicate.customer_ended ? "COMPLETED" : duplicate.status;
+          if (!duplicate.voice_session_id && !["COMPLETED", "FAILED"].includes(status))
+            return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: duplicate.id,
             first: duplicate.script_snapshot.first,
+            status,
+            mediaReady: status === "ANSWERED",
           });
         }
         let a;
@@ -966,8 +1001,10 @@ export async function vicidialCallback(request: Request) {
             id,
             route.campaign_definition_id || null,
           ))
-        )
-          throw Error("Agent reservation changed; retry routing");
+        ) {
+          await tx.query("ROLLBACK");
+          return json({ error: "No matching available AI agent" }, 409);
+        }
         await tx.query(
           "UPDATE agent_calls SET campaign_definition_id=$1,external_campaign_id=$2,asterisk_uniqueid=$3,asterisk_linkedid=$4 WHERE id=$5",
           [
@@ -1054,63 +1091,36 @@ export async function vicidialCallback(request: Request) {
           });
       }
       if (v.action === "hangup" && !call.vicidial_call_id) {
-        try { call = await (await import("./vicidial-direct-link")).linkDirectNativeCall(call, c); } catch { /* Preserve the exact native identity requirement. */ }
-        if (!call.vicidial_call_id) return json({error:"Native call identity is not linked. Native hangup remains pending."},503);
+        if (call.customer_ended || ["COMPLETED", "FAILED"].includes(call.status))
+          return json({ ended: true });
+        // A delayed terminal event cannot attach a new customer to this audio UUID.
+        return json({ saved: true, syncPending: true, cleanupPending: true });
       }
       if (
         !call.vicidial_call_id &&
         ["ended", "recover", "customer-ended"].includes(v.action)
       ) {
-        let customerEnded = call.customer_ended === true;
-        if (!customerEnded) {
-          const line = live.directAudioLines.find(
-            line => line.agentId === call.agent_id && line.prefix === call.direct_audio_line,
-          );
-          if (line && live.remoteUsers.includes(line.remoteUser)) {
-            try {
-              const status = await vicidialRequest(c.server_url, c.username, key, {
-                function: "agent_status", agent_user: line.remoteUser, stage: "pipe", header: "YES",
-              }, false, 5000);
-              const [header, row] = status.trim().split(/\r?\n/);
-              const fields = statusHeaders(header);
-              const values = row?.split("|") || [];
-              const campaign = values[fields.indexOf("campaign_id")];
-              customerEnded = /^ERROR: agent_status AGENT NOT (?:LOGGED IN|FOUND)\b/i.test(header) ||
-                (campaign === call.external_campaign_id && values[fields.indexOf("status")] === "READY");
-            } catch {
-              // Keep the reservation until the native remote agent can be verified.
-            }
-          }
-        }
         await pool.query(
-          "UPDATE agent_calls SET ai_leg_released=TRUE,customer_ended=customer_ended OR $3,ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()),recording_active=FALSE,conversation_busy=FALSE,duration_seconds=COALESCE($2,duration_seconds),updated_at=NOW() WHERE id=$1",
-          [call.id, v.durationSeconds ?? null, customerEnded],
+          `UPDATE agent_calls SET ai_leg_released=TRUE,
+           customer_ended=customer_ended OR $3::boolean,
+           ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()),recording_active=FALSE,
+           conversation_busy=FALSE,duration_seconds=COALESCE(NULLIF(duration_seconds,0),$2,duration_seconds)
+           WHERE id=$1`,
+          [call.id, v.durationSeconds ?? null, v.action === "customer-ended"],
         );
-        if (customerEnded) await releaseConfirmedAgent(call.id);
-        else await setRuntimeState(call.id, "ERROR", "AI media ended; native customer state must be reconciled");
-        if (sessionId) {
-          try {
-            if (process.env.SHAHVEX_PC_AI_URL)
-              await pcAiRequest(
-                "/tester/stop",
-                {
-                  method: "POST",
-                  headers: { "x-shahvex-session": sessionId },
-                  body: "{}",
-                },
-                owner,
-              );
-            else {
-              sessions.get(sessionId)?.abort?.abort();
-              sessions.delete(sessionId);
-            }
-          } catch {
-            /* Call ended independently of voice worker cleanup. */
-          }
+        const released = await releaseConfirmedAgent(call.id);
+        if (released) {
+          await stopCallVoice(call);
+          return json({ saved: true, nativeSync: "NOT_APPLICABLE" });
         }
-        return customerEnded
-          ? json({ saved: true, nativeSync: "NOT_APPLICABLE" })
-          : json({ saved: true, syncPending: true, cleanupPending: true });
+        if (v.action === "ended") {
+          const { reconcileMissingVicidialCalls } = await import("./vicidial-call-reconciliation");
+          if (await reconcileMissingVicidialCalls(c, key, [], stopCallVoice, call.id))
+            return json({ saved: true, nativeSync: "NOT_APPLICABLE" });
+        }
+        await setRuntimeState(call.id, "ERROR", "AI media ended; native customer state must be reconciled");
+        await stopCallVoice(call);
+        return json({ saved: true, syncPending: true, cleanupPending: true });
       }
       if (v.action === "recording" && !v.aiRecordingId)
         return json(
@@ -1165,42 +1175,23 @@ export async function vicidialCallback(request: Request) {
       }
       return json({ saved: true, humanConnected: true });
     }
-    if (
-      v.action === "recover" &&
-      ["INITIATED", "RINGING", "ANSWERED"].includes(call.status)
-    ) {
-      if (["SUBMITTED", "UNCERTAIN"].includes(call.transfer_status))
+    if (v.action === "hangup") {
+      if (["SUBMITTED", "ANSWERED"].includes(call.transfer_status)) return json({ ended: true, aiDetached: true });
+      if (["PREPARING", "UNCERTAIN"].includes(call.transfer_status))
         return json({ saved: true, syncPending: true, awaitingHuman: true });
-      const status = await vicidialRequest(c.server_url, c.username, key, {
-        function: "agent_status",
-        agent_user: call.vicidial_agent_user,
-        stage: "pipe",
-        header: "YES",
-      });
-      const rows = status.trim().split(/\r?\n/),
-        heads = statusHeaders(rows[0]),
-        values = rows[1]?.split("|") || [];
-      if (
-        values[heads.indexOf("call_id")] === call.vicidial_call_id &&
-        values[heads.indexOf("status")] === "INCALL"
-      ) {
-        await (
+      if (call.customer_ended || ["COMPLETED", "FAILED"].includes(call.status))
+        return json({ ended: true });
+      const { observeNativeCustomer } = await import("./vicidial-call-state");
+      if (!(await observeNativeCustomer(call, c, key)).customerEnded) {
+        const response = await (
           await import("./vicidial-controls")
         ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
-        return json({ saved: true, syncPending: true });
+        if (!response?.ok) return response || json({ error: "Call not found" }, 404);
+        if (!(await observeNativeCustomer(call, c, key)).customerEnded)
+          return json({ saved: true, syncPending: true, hangupSubmitted: true });
       }
-      if (
-        !heads.includes("call_id") &&
-        !/ERROR: agent_status AGENT NOT (?:LOGGED IN|FOUND)/.test(status)
-      )
-        return json({ saved: true, syncPending: true });
-    }
-    if (v.action === "hangup") {
-      if (["SUBMITTED", "ANSWERED"].includes(call.transfer_status)) return json({ended:true,aiDetached:true});
-      const response = await (
-        await import("./vicidial-controls")
-      ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
-      return response || json({ error: "Call not found" }, 404);
+      await releaseConfirmedAgent(call.id);
+      return json({ ended: true });
     }
     if (
       v.action === "listen" ||
@@ -1258,6 +1249,7 @@ export async function vicidialCallback(request: Request) {
           "content-type": v.audio ? "audio/wav" : "application/json",
           "x-shahvex-session": sessionId,
           "x-shahvex-turn": v.eventId,
+          ...(v.completedTurnId && action === "turn" ? {"x-shahvex-completed-turn": v.completedTurnId} : {}),
           ...(v.turnFinal?{"x-shahvex-turn-final":"1"}:{}),
         },
         body,
@@ -1357,7 +1349,7 @@ export async function vicidialCallback(request: Request) {
         ];
         try {
           await pool.query(
-            "UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN 'COMPLETED' ELSE $3 END,updated_at=NOW() WHERE id=$4 AND conversation_busy=TRUE",
+            "UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_state=$3,updated_at=NOW() WHERE id=$4 AND conversation_busy=TRUE AND status='ANSWERED' AND NOT ai_leg_released AND NOT ending_requested",
             [
               JSON.stringify(progress),
               progress
@@ -1463,75 +1455,24 @@ export async function vicidialCallback(request: Request) {
       );
     }
     let cleanupPending = false;
-    if (
-      v.action === "ended" ||
-      v.action === "recover" ||
-      v.action === "customer-ended"
-    ) {
-      if (v.action === "ended" || v.action === "recover")
-        await pool.query(
-          "UPDATE agent_calls SET ai_leg_released=TRUE,ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()) WHERE id=$1",
-          [call.id],
-        );
-      if (v.action === "customer-ended")
-        await pool.query(
-          "UPDATE agent_calls SET customer_ended=TRUE WHERE id=$1",
-          [call.id],
-        );
-      if (
-        (v.action === "ended" || v.action === "recover") &&
-        !call.customer_ended &&
-        !["SUBMITTED", "UNCERTAIN", "ANSWERED"].includes(call.transfer_status)
-      ) {
-        const native = await vicidialRequest(c.server_url, c.username, key, {
-          function: "agent_status",
-          agent_user: call.vicidial_agent_user,
-          stage: "pipe",
-          header: "YES",
-        });
-        const rows = native.trim().split(/\r?\n/),
-          heads = statusHeaders(rows[0]),
-          values = rows[1]?.split("|") || [];
-        const ended =
-          /ERROR: agent_status AGENT NOT (?:LOGGED IN|FOUND)/.test(native) ||
-          (heads.includes("call_id") &&
-            values[heads.indexOf("call_id")] !== call.vicidial_call_id);
-        if (ended)
-          await pool.query(
-            "UPDATE agent_calls SET customer_ended=TRUE WHERE id=$1",
-            [call.id],
-          );
-        else {
-          cleanupPending = true;
-          await setRuntimeState(
-            call.id,
-            "ERROR",
-            "AI media ended; native customer state must be reconciled",
-          );
-        }
+    if (["ended", "recover", "customer-ended"].includes(v.action)) {
+      await pool.query(
+        `UPDATE agent_calls SET ai_leg_released=TRUE,
+         customer_ended=customer_ended OR $3::boolean,
+         ai_media_ended_at=COALESCE(ai_media_ended_at,NOW()),recording_active=FALSE,
+         conversation_busy=FALSE,duration_seconds=COALESCE(NULLIF(duration_seconds,0),$2,duration_seconds)
+         WHERE id=$1`,
+        [call.id, v.durationSeconds ?? null, v.action === "customer-ended"],
+      );
+      if (v.action !== "customer-ended" && !call.customer_ended &&
+          !["COMPLETED", "FAILED"].includes(call.status)) {
+        const { observeNativeCustomer } = await import("./vicidial-call-state");
+        await observeNativeCustomer(call, c, key);
       }
-
-      await releaseConfirmedAgent(call.id);
-      if (sessionId) {
-        try {
-          if (process.env.SHAHVEX_PC_AI_URL)
-            await pcAiRequest(
-              "/tester/stop",
-              {
-                method: "POST",
-                headers: { "x-shahvex-session": sessionId },
-                body: "{}",
-              },
-              owner,
-            );
-          else {
-            sessions.get(sessionId)?.abort?.abort();
-            sessions.delete(sessionId);
-          }
-        } catch {
-          /* Durable call result remains available for retry. */
-        }
-      }
+      cleanupPending = !(await releaseConfirmedAgent(call.id));
+      await stopCallVoice(call);
+      if (cleanupPending && v.action !== "customer-ended")
+        await setRuntimeState(call.id, "ERROR", "AI media ended; native customer state must be reconciled");
     }
     if (cleanupPending)
       return json({ saved: true, syncPending: true, cleanupPending: true });

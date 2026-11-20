@@ -4,10 +4,18 @@ export function mergeNativeCalls(calls: VisibleCall[], observations: VisibleCall
   const result:VisibleCall[]=calls.map(c=>({...c,native_connected:false,native_only:false})), seen=new Set<string>();
   for(const observed of observations){
     const key=`${observed.voip_connection_id}:${observed.vicidial_call_id}`;if(seen.has(key))continue;seen.add(key);
-    for(let i=0;i<result.length;i++){const old=result[i];if(old.agent_id===observed.agent_id&&old.voip_connection_id===observed.voip_connection_id&&old.vicidial_call_id&&old.vicidial_call_id!==observed.vicidial_call_id&&old.ai_leg_released&&!['PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'].includes(old.transfer_status||''))result[i]={...old,status:'COMPLETED',conversation_state:'COMPLETED'};}
     const index=result.findIndex(c=>c.voip_connection_id===observed.voip_connection_id&&c.vicidial_call_id===observed.vicidial_call_id&&c.agent_id===observed.agent_id);
-    if(index>=0){const original=result[index];result[index]={...original,native_connected:true,native_verified_at:observed.native_verified_at,lead_number:observed.lead_number||original.lead_number,status:'ANSWERED',native_only:!!original.ai_leg_released||!['INITIATED','RINGING','ANSWERED'].includes(original.status),conversation_state:original.ai_leg_released||!['INITIATED','RINGING','ANSWERED'].includes(original.status)?'NATIVE_CONNECTED':original.conversation_state};}
-    else result.unshift(observed);
+    if(index<0){result.unshift(observed);continue;}
+    const original=result[index];
+    if(original.customer_ended)continue;
+    if(!['INITIATED','RINGING','ANSWERED'].includes(original.status)){
+      // A verified human leg has its own monitor identity after AI handoff.
+      if(['SUBMITTED','ANSWERED'].includes(original.transfer_status))result.unshift(observed);
+      continue;
+    }
+    result[index]={...original,native_connected:true,native_verified_at:observed.native_verified_at,
+      lead_number:observed.lead_number||original.lead_number,native_only:!!original.ai_leg_released,
+      conversation_state:original.ai_leg_released?'NATIVE_CONNECTED':original.conversation_state};
   }
   return result.sort((a,b)=>Number(['INITIATED','RINGING','ANSWERED'].includes(b.status))-Number(['INITIATED','RINGING','ANSWERED'].includes(a.status))||Number(!!b.native_connected)-Number(!!a.native_connected));
 }

@@ -20,7 +20,7 @@ export const turnAdmissionSql = `WITH verified_connection AS (
  qualification='{}'::jsonb,updated_at=NOW()
  FROM claimed WHERE a.id=(SELECT id FROM candidate) AND a.status='ANSWERED'
  AND COALESCE(a.transfer_status,'') NOT IN ('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED')
- AND a.conversation_busy=FALSE RETURNING a.id,a.status,a.transfer_status,a.voice_session_id,a.vicidial_call_id,a.conversation_history
+ AND a.ai_leg_released=FALSE AND a.conversation_busy=FALSE RETURNING a.id,a.status,a.transfer_status,a.voice_session_id,a.vicidial_call_id,a.conversation_history
 )
  SELECT (SELECT row_to_json(leased) FROM leased) AS admitted_call,
  EXISTS(SELECT 1 FROM candidate) AS current_call,
@@ -31,7 +31,7 @@ export const turnAdmissionSql = `WITH verified_connection AS (
 /** Persist final transcript and complete the event atomically, with one wait. */
 export const turnCompletionSql = `WITH saved AS (
  UPDATE agent_calls SET conversation_history=$1::jsonb,transcript=$2,conversation_busy=FALSE,
- conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN 'COMPLETED' ELSE $3 END,updated_at=NOW()
+ conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') OR ai_leg_released OR ending_requested THEN conversation_state ELSE $3 END,updated_at=NOW()
  WHERE id=$4 RETURNING id
 ) UPDATE vicidial_events SET processing_state='COMPLETED',processed_at=NOW(),lease_expires_at=NULL,last_error=$5
  WHERE connection_id=$6 AND event_id=$7 AND EXISTS(SELECT 1 FROM saved)`;

@@ -5,7 +5,7 @@ const oldId='V1171729550000008685',newId='V1171730210000013756';
 test('native 2813371476 appears without any AI row, exact matches deduplicate, and native status cannot re-enable ended AI controls',()=>{
  const native={id:'native-observer',agent_id:'mia',voip_connection_id:'conn',vicidial_call_id:newId,lead_number:'2813371476',status:'ANSWERED',native_connected:true,native_only:true};
  assert.deepEqual(merge.mergeNativeCalls([], [native,native]),[native]);const ai={id:'real-uuid',agent_id:'mia',voip_connection_id:'conn',vicidial_call_id:newId,status:'ANSWERED',ai_leg_released:false,transcript:'Actual AI transcript'};const [matched]=merge.mergeNativeCalls([ai],[native]);assert.equal(matched.id,'real-uuid');assert.equal(matched.lead_number,'2813371476');assert.equal(matched.native_only,false);assert.equal(matched.transcript,ai.transcript);
- const ended=merge.mergeNativeCalls([{...ai,status:'COMPLETED',ai_leg_released:true}],[native])[0];assert.equal(ended.status,'ANSWERED');assert.equal(ended.native_only,true);assert.equal(ended.conversation_state,'NATIVE_CONNECTED');const unlinked=merge.mergeNativeCalls([{...ai,vicidial_call_id:oldId}],[native]);assert.equal(unlinked.length,2);assert.equal(unlinked[0].id,'native-observer');assert.equal(merge.mergeNativeCalls([{...ai,native_connected:true,native_only:true}],[])[0].native_connected,false);
+ const [ended]=merge.mergeNativeCalls([{...ai,status:'COMPLETED',ai_leg_released:true,customer_ended:true}],[native]);assert.equal(ended.status,'COMPLETED');assert.equal(ended.native_only,false);const [human,handedOff]=merge.mergeNativeCalls([{...ai,status:'COMPLETED',ai_leg_released:true,transfer_status:'ANSWERED'}],[native]);assert.equal(human.id,'native-observer');assert.equal(handedOff.status,'COMPLETED');const unlinked=merge.mergeNativeCalls([{...ai,vicidial_call_id:oldId}],[native]);assert.equal(unlinked.length,2);assert.equal(unlinked[0].id,'native-observer');assert.equal(merge.mergeNativeCalls([{...ai,native_connected:true,native_only:true}],[])[0].native_connected,false);
  const otherConnection=merge.mergeNativeCalls([{...ai,voip_connection_id:'other'}],[native]);assert.equal(otherConnection.length,2);
 });
 test('native feed is read-only, scoped by owner/mapping, cache-shared and does not expose native credentials',async()=>{
@@ -33,4 +33,31 @@ test('atomic release cannot clear a newer reservation, paused assignment or pend
  assert.equal((await db.query("SELECT relpersistence FROM pg_class WHERE oid='agent_calls'::regclass")).rows[0].relpersistence,'t');const args=['old','mia','conn',oldId];assert.equal((await db.query(api.confirmedOldCallReleaseSql,args)).rowCount,1);assert.deepEqual((await db.query('SELECT state,call_id FROM ai_agent_runtime_states')).rows[0],{state:'READY',call_id:null});assert.equal((await db.query('SELECT status FROM agent_calls')).rows[0].status,'COMPLETED');
  for(const mutation of ["UPDATE campaign_agent_assignments SET enabled=FALSE","UPDATE agent_calls SET transfer_status='UNCERTAIN'","UPDATE ai_agent_runtime_states SET call_id='new-call'","UPDATE agent_calls SET vicidial_call_id='changed-native-id'"]){await db.query('ROLLBACK TO SAVEPOINT baseline');await db.query(mutation);assert.equal((await db.query(api.confirmedOldCallReleaseSql,args)).rowCount,0);assert.equal((await db.query('SELECT status FROM agent_calls')).rows[0].status,'ANSWERED');}
  }finally{await db.query('ROLLBACK');await db.end();}
+});
+test('missing media reconciliation verifies exact sessions twice and preserves uncertain and transferred calls',async()=>{
+ const ready='status|callerid|lead_id|campaign_id\nREADY||0|DIALER';
+ const candidate=(id,agent,remote,nativeId=null)=>({id,agent_id:agent,direct_audio_uuid:id,direct_audio_line:remote,vicidial_call_id:nativeId,vicidial_agent_user:remote,external_campaign_id:'DIALER'});
+ const old=candidate('old','mia','78616',oldId), missed=candidate('missed','other','78618'), silent=candidate('silent','another','78614'), unknown=candidate('unknown','another','78614',newId);
+ const config={bridgeUrl:'bridge',remoteUsers:['78618','78614'],directAudioLines:[{agentId:'other',prefix:'78618',remoteUser:'78618'},{agentId:'another',prefix:'78614',remoteUser:'78614'}]};
+ const stopped=[],released=[],reads=[],queries=[];
+ let healthReads=0,reappears=false;
+ const api=load('lib/vicidial-call-reconciliation.ts',{
+  './database':{db:async()=>({query:async(sql,args)=>{queries.push({sql,args});return sql.startsWith('SELECT a.*')?{rows:[old,missed,silent,unknown]}:{rowCount:1};}})},
+  './agent-runtime':{releaseConfirmedAgent:async(id,identity)=>released.push([id,identity])},
+  './credential-crypto':{decryptCredential:x=>x},
+  './vicidial-config':{vicidialLiveConfig:{parse:()=>config}},
+  './campaign-config':table,
+  './vicidial-bridge':{requestBridge:async()=>{healthReads++;const streams=[{callId:'silent'},...(reappears&&healthReads===2?[{callId:'missed'}]:[])];return {audioSocket:true,testOnly:false,startingCalls:0,activeCalls:streams.length,audioConnections:streams.length,streams};}},
+  './vicidial':{vicidialRequest:async(_s,_u,_k,params)=>{reads.push(params.agent_user);if(params.agent_user==='78614')throw Error('Status unavailable');return params.agent_user==='78616'?'status|callerid|lead_id|campaign_id\nINCALL|'+newId+'|13756|DIALER':ready;}},
+ });
+ const connection={id:'connection',bridge_secret_ciphertext:'secret'};
+ await api.reconcileMissingVicidialCalls(connection,'key',[],async call=>stopped.push(call.id));
+ assert.deepEqual(stopped,['old','missed']);assert.equal(healthReads,2);assert.equal(released[0][1].nativeId,oldId);assert.equal(released[1][1].audioUuid,'missed');
+ assert.equal(reads.filter(user=>user==='78614').length,1);
+ assert.match(queries[0].sql,/NOT IN \('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED'\)/);
+ assert.equal(api.nativeAbsence('ERROR: agent_status AGENT NOT LOGGED IN: 6666|78618','78618','DIALER',null),'offline');
+ assert.equal(api.nativeAbsence('status|callerid|lead_id|campaign_id\nINCALL|'+newId+'|13756|DIALER','78618','DIALER',null),null);
+ healthReads=0;reappears=true;stopped.length=0;
+ await api.reconcileMissingVicidialCalls(connection,'key',[],async call=>stopped.push(call.id));
+ assert.deepEqual(stopped,['old']);
 });

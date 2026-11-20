@@ -87,7 +87,10 @@ export async function setRuntimeState(
   );
 }
 /** A timestamp expiry is never sufficient evidence to release a customer call. */
-export async function releaseConfirmedAgent(callId: string) {
+export async function releaseConfirmedAgent(
+  callId: string,
+  observed?: { connectionId: string; nativeId: string | null; audioUuid: string | null; before: Date },
+) {
   const pool = await db(),
     tx = await pool.connect();
   try {
@@ -97,11 +100,32 @@ export async function releaseConfirmedAgent(callId: string) {
         callId,
       ])
     ).rows[0];
+    if (observed) {
+      // A reconnect, native link, or handoff since the observation invalidates it.
+      const confirmed = await tx.query(
+        `UPDATE agent_calls a SET customer_ended=TRUE,ai_leg_released=TRUE,
+          ai_media_ended_at=COALESCE(ai_media_ended_at,NOW())
+          WHERE a.id=$1 AND a.voip_connection_id=$2
+            AND a.vicidial_call_id IS NOT DISTINCT FROM $3::text
+            AND a.direct_audio_uuid IS NOT DISTINCT FROM $4::text
+            AND a.status IN ('INITIATED','RINGING','ANSWERED')
+            AND COALESCE(a.transfer_status,'') NOT IN ('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED')
+            AND COALESCE(a.last_heartbeat_at,a.created_at)<$5
+            AND ($3::text IS NOT NULL OR EXISTS(
+              SELECT 1 FROM ai_agent_runtime_states r WHERE r.agent_id=a.agent_id AND r.call_id=a.id
+            )) RETURNING a.id`,
+        [callId, observed.connectionId, observed.nativeId, observed.audioUuid, observed.before],
+      );
+      if (!confirmed.rowCount) {
+        await tx.query("COMMIT");
+        return false;
+      }
+    }
     if (
       !call ||
-      !call.ai_leg_released ||
-      (!call.customer_ended &&
-        !["SUBMITTED", "ANSWERED"].includes(call.transfer_status))
+      (!observed &&
+        (!call.ai_leg_released ||
+          (!call.customer_ended && !["SUBMITTED", "ANSWERED"].includes(call.transfer_status))))
     ) {
       await tx.query("COMMIT");
       return false;

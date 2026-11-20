@@ -27,12 +27,18 @@ export async function recoverPreviousCallForAdmission(connection:any,line:{agent
  AND d.connection_id=$2 AND d.owner_id=$3 AND COALESCE(c.transfer_status,'') NOT IN ('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED')`,[line.agentId,connection.id,connection.owner_id,line.remoteUser])).rows[0];
  if(!old)return false;
  try{
-  const health=await requestBridge(bridgeUrl,decryptCredential(connection.bridge_secret_ciphertext),'/health');
-  if(!Array.isArray(health.streams)||health.activeCalls!==health.streams.length||health.streams.some((s:any)=>s.callId===old.id))return false;
+  const bridgeSecret=decryptCredential(connection.bridge_secret_ciphertext);
+  const oldLegAbsent=async()=>{
+   const health=await requestBridge(bridgeUrl,bridgeSecret,'/health');
+   return Array.isArray(health.streams)&&health.activeCalls===health.streams.length
+     &&health.streams.every((stream:any)=>typeof stream?.callId==='string'&&stream.callId!==old.id);
+  };
+  if(!(await oldLegAbsent()))return false;
   const key=decryptCredential(connection.secret_ciphertext);
   const read=async()=>{const raw=await vicidialRequest(connection.server_url,connection.username,key,{function:'agent_status',agent_user:line.remoteUser,stage:'pipe',header:'YES'},false,2000);if(/^\s*ERROR:/.test(raw))return null;const s=parseVicidialTable(raw)[0],id=s?.call_id||s?.callerid||'';return s?.campaign_id===old.campaign_id&&['READY','INCALL'].includes(s.status)&&/^[-\w]{16,40}$/.test(id)?{id,status:s.status}:null;};
   const first=await read();if(!first||first.status==='INCALL'&&first.id===old.vicidial_call_id)return false;
   const second=await read();if(!second||second.id!==first.id||second.status!==first.status)return false;
+  if(!(await oldLegAbsent()))return false;
   // Recheck desired intake under the SQL lock too; a concurrent Pause must win.
   const result=await pool.query(confirmedOldCallReleaseSql,[old.id,line.agentId,connection.id,old.vicidial_call_id]);return result.rowCount===1;
  }catch{return false;}

@@ -517,3 +517,126 @@ test('configured-company identity confirmations preserve the pending screening q
   assert.equal(f.models,0);
  } finally {await f.close();}
 });
+
+test('hearing recovery uses the current step, consumes presence and respects exact playback IDs', async () => {
+  const f = fixture();
+  try {
+    const session = await f.start('ai');
+    const opening = await f.turn({opening:true});
+    const intro = await f.turn({text:'I am not hear you.'});
+    assert.equal(intro.text, 'Let me repeat that. ' + opening.text);
+
+    const purpose = await f.turn({text:'Okay'}, {ack:false});
+    await f.dispatch('playback-complete', {completedTurnId:opening.id});
+    assert.notEqual(session.purposeDelivered, true);
+    const purposeReplay = await f.turn({text:"I can't hear you."});
+    assert.equal(purposeReplay.text, 'Let me repeat that. ' + purpose.text);
+    const heardCheck = await f.turn({text:'Can you hear me?'});
+    assert.equal(heardCheck.text, 'Yes, I can hear you. ' + purpose.text);
+    await f.turn({text:'Go ahead'});
+
+    for (const [question, answer, next] of [
+      [q1, 'No', q2], [q2, 'I have Medicaid.', q3],
+      [q3, 'Yes', 'Let me connect you with a licensed specialist.'],
+    ]) {
+      assert.equal((await f.turn({text:"Sorry, I didn't hear you. What did you say?"})).text, 'Let me repeat that. ' + question);
+      await f.turn({silenceStep:2});
+      assert.equal((await f.turn({text:"Yes, I'm here."})).text, question);
+      assert.equal(session.messages.findLast(m => m.role === 'user').conversationOnly, true);
+      assert.notEqual(session.questionLedger.get(questionKey(question)).status, 'answered');
+      assert.equal((await f.turn({text:answer})).text, next);
+      assert.equal(session.questionLedger.get(questionKey(question)).response, answer);
+    }
+    assert.equal(f.models, 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test('a failed hearing replay retries once without committing its playback or caller speech again', async () => {
+  let fail = false;
+  const f = fixture({tts: () => fail
+    ? new Response('unavailable', {status:503})
+    : new Response(new Uint8Array(4800).fill(12), {headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}})});
+  try {
+    const session = await f.start('ai', {voice:'hearing-failure-fixture'});
+    const opening = await f.turn({opening:true}, {ack:false});
+    const complaint = "I can't hear you.";
+    fail = true;
+    const failure = await f.dispatch('turn', {text:complaint});
+    const events = (await failure.text()).trim().split('\n').map(JSON.parse);
+    assert(events.some(e => e.type === 'error'));
+    assert(!events.some(e => e.type === 'pcm'));
+    assert.notEqual(session.introPlaybackComplete, true);
+    fail = false;
+    const retry = await f.turn({silenceStep:1}, {ack:false});
+    assert.equal(retry.text, 'Let me repeat that. ' + opening.text);
+    assert.notEqual(session.introPlaybackComplete, true);
+    await f.dispatch('playback-complete', {completedTurnId:retry.id});
+    assert.equal(session.introPlaybackComplete, true);
+    assert.equal((await f.turn({silenceStep:1})).text, '');
+    assert.equal(session.messages.filter(m => m.role === 'user' && m.content === complaint).length, 1);
+  } finally {
+    await f.close();
+  }
+});
+
+test('empty recognition preserves a pending hearing replay for one delivery retry', async () => {
+  const f = fixture({stt: () => ''});
+  try {
+    const session = await f.start('ai');
+    const opening = await f.turn({opening:true});
+    const replay = await f.turn({text:"Sorry. I didn't hear you."}, {ack:false});
+    const audio = Buffer.alloc(16044);
+    audio.write('RIFF', 0); audio.writeUInt32LE(audio.length - 8, 4);
+    audio.write('WAVEfmt ', 8); audio.writeUInt32LE(16, 16);
+    audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22);
+    audio.writeUInt32LE(16000, 24); audio.writeUInt32LE(32000, 28);
+    audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34);
+    audio.write('data', 36); audio.writeUInt32LE(audio.length - 44, 40);
+    for (let index = 44; index < audio.length; index += 2) audio.writeInt16LE(2200, index);
+    const empty = await f.dispatch('turn', audio, {'content-type':'audio/wav'});
+    assert(!(await empty.text()).includes('"type":"pcm"'));
+    assert.equal(session.pendingPlayback.turnId, replay.id);
+    const retry = await f.turn({silenceStep:1}, {ack:false});
+    assert.equal(retry.text, 'Let me repeat that. ' + opening.text);
+    await f.dispatch('playback-complete', {completedTurnId:replay.id});
+    assert.equal(session.pendingPlayback.turnId, retry.id);
+    await f.dispatch('playback-complete', {completedTurnId:retry.id});
+    assert.equal((await f.turn({silenceStep:1})).text, '');
+  } finally {
+    await f.close();
+  }
+});
+
+test('a cancelled hearing replay releases the worker and retries once', async () => {
+  let onSynthesisStarted;
+  const f = fixture({tts: (_url, init) => {
+    if (!onSynthesisStarted) {
+      return new Response(new Uint8Array(4800).fill(12), {
+        headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'},
+      });
+    }
+    return new Promise((_, reject) => {
+      init.signal.addEventListener('abort', () => reject(init.signal.reason), {once:true});
+      onSynthesisStarted();
+    });
+  }});
+  try {
+    const session = await f.start('ai', {voice:'hearing-cancellation-fixture'});
+    const opening = await f.turn({opening:true});
+    const started = new Promise(resolve => { onSynthesisStarted = resolve; });
+    const response = await f.dispatch('turn', {text:"I can't hear you."});
+    const output = response.text();
+    await started;
+    const interrupted = await f.dispatch('interrupt', {});
+    assert.equal(interrupted.status, 200);
+    assert(!(await output).includes('"type":"pcm"'));
+    assert.equal(session.busy, false);
+    onSynthesisStarted = undefined;
+    assert.equal((await f.turn({silenceStep:1})).text, 'Let me repeat that. ' + opening.text);
+    assert.equal((await f.turn({silenceStep:1})).text, '');
+  } finally {
+    await f.close();
+  }
+});

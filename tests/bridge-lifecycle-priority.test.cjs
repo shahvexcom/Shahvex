@@ -56,3 +56,25 @@ test('handoff and concurrent-turn conflicts never request customer hangup',async
   for(let n=1;n<=3;n++){const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?1500:-1500,i);socket.write(Buffer.concat([...Array.from({length:12},()=>packet(0x10,voice)),...Array.from({length:38},()=>packet(0x10,Buffer.alloc(320)))]));await waitFor(()=>turns===n);await new Promise(r=>setTimeout(r,30));assert.equal(hangups,0);assert.equal(socket.destroyed,false);}
  }finally{socket?.destroy();b.close();await new Promise(r=>setTimeout(r,60));await b.flushEvents();fs.rmSync(folder,{recursive:true,force:true});}
 });
+
+test('concurrent sockets clean up by exact call ID and an old UUID cannot reconnect',async()=>{
+ const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-exact-close-')),sockets=[],ids=new Map(),ended=[],checks=new Set();
+ const b=createBridge({siteUrl:'https://isolated.example.test/',connectionId:crypto.randomUUID(),secret:'test-exact-secret-'.repeat(4),spoolDir:folder,logger:()=>{},resolveRegistration:async uuid=>({uuid,audioUuid:uuid,agentUser:'78616',externalCallId:'direct-'+uuid.replaceAll('-','')}),fetchImpl:async(_url,init)=>{
+  const v=JSON.parse(init.body);
+  if(v.action==='connected'){const callId=crypto.randomUUID();ids.set(v.audioUuid,callId);return Response.json({callId,first:'customer',mediaReady:true});}
+  if(v.action==='call-state'){checks.add(v.callId);return Response.json({customerEnded:false});}
+  if(v.action==='ended')ended.push(v.callId);
+  return Response.json({saved:true});
+ }});
+ const open=async uuid=>{const socket=net.connect(b.audio.address().port,'127.0.0.1');sockets.push(socket);socket.on('error',()=>{});socket.on('data',()=>{});await new Promise(resolve=>socket.once('connect',resolve));socket.write(packet(1,Buffer.from(uuid.replaceAll('-',''),'hex')));return socket;};
+ try{
+  await new Promise(resolve=>b.audio.listen(0,'127.0.0.1',resolve));
+  const uuids=Array.from({length:3},()=> '3546'+crypto.randomUUID().slice(4));
+  const first=await open(uuids[0]),second=await open(uuids[1]);await waitFor(()=>ids.size===2);
+  second.write(packet(0));await waitFor(()=>ended.length===1);assert.deepEqual(ended,[ids.get(uuids[1])]);assert.equal(first.destroyed,false);
+  const replacement=await open(uuids[2]);await waitFor(()=>ids.size===3);
+  const old=await open(uuids[1]);await waitFor(()=>old.destroyed);assert.equal(ids.size,3);
+  first.destroy();await waitFor(()=>ended.length===2);assert.deepEqual(ended,[ids.get(uuids[1]),ids.get(uuids[0])]);
+  await new Promise(resolve=>setTimeout(resolve,1600));assert(checks.has(ids.get(uuids[2])));assert.equal(replacement.destroyed,false);
+ }finally{sockets.forEach(socket=>socket.destroy());b.close();await new Promise(resolve=>setTimeout(resolve,60));await b.flushEvents();fs.rmSync(folder,{recursive:true,force:true});}
+});
