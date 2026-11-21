@@ -1,3 +1,6 @@
+import { pcAiRequest } from "./pc-ai-engine";
+import { briefAgentOpening, rephrasedAgentOpening } from "./agent-context-answer";
+import { streamAgentReply } from "./agent-test-stream";
 import "server-only";
 import type { PoolClient } from "pg";
 import { randomUUID } from "node:crypto";
@@ -8,7 +11,7 @@ import { vicidialLiveConfig, missingVicidialSetup } from "./vicidial-config";
 import { requestBridge } from "./vicidial-bridge";
 import { scriptHash } from "./vicidial-leads";
 import { extractAgentScript } from "./agent-script-extraction";
-import { localVoices, warmSelectedVoice, type TestConfig } from "./agent-test";
+import { engine, localVoices, warmSelectedVoice, type TestConfig } from "./agent-test";
 import { markAgentReady } from "./agent-runtime";
 import {
   scriptTestConfig,
@@ -207,13 +210,30 @@ export async function startVicidialAgent(
       {
         name: a.name,
         voice: a.local_voice_id,
-        first: a.speaks_first === "ai" ? "ai" : "customer",
+        first: "ai",
         script: a.script_text,
         style: a.conversation_style || "Professional",
       },
       details,
     );
     await warmSelectedVoice(config.voice);
+    const opening = briefAgentOpening(config);
+    if (opening) {
+      const signal = AbortSignal.timeout(45_000);
+      if (process.env.SHAHVEX_PC_AI_URL) {
+        const prepared = await pcAiRequest("/tester/prepare-opening", {
+          method:"POST", signal, headers:{"content-type":"application/json"}, body:JSON.stringify(config),
+        }, c.owner_id);
+        if (!prepared.ok) throw Error("Agent opening audio could not be prepared");
+        await prepared.body?.cancel();
+      } else {
+        for (const text of [opening, rephrasedAgentOpening(config)]) {
+          if (!text) continue;
+          await streamAgentReply({messages:[], fixedSpeech:text, voice:config.voice, openingAudio:true,
+            cacheAudio:true, signal, engine, send:async()=>{}, timing:async()=>{}, onText:()=>{}});
+        }
+      }
+    }
     const key = decryptCredential(c.secret_ciphertext),
       bridgeSecret = decryptCredential(c.bridge_secret_ciphertext);
     const capabilities = await requestBridge(

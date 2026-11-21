@@ -1,19 +1,19 @@
 import { healthSideTopic, isGeneralHealthQuestion, GENERAL_HEALTH_RULES } from "../gateway/health-side-topic.cjs";
 import { canonicalQuestion, answersAffirmatively, suppliedParts, memoryQuestionKey } from "../gateway/question-memory.cjs";
 import { isPresenceConfirmation } from "../gateway/turn-completion.cjs";
-import { FLOW_REVISION, repairTurn, repairInstruction, introductionOnly, knownSalutation, isListeningSignal, isWellbeingReply } from "../gateway/conversation-resume.cjs";
+import { FLOW_REVISION, repairTurn, repairInstruction, introductionOnly, applySalutation, knownSalutation, isListeningSignal, isWellbeingReply } from "../gateway/conversation-resume.cjs";
 import { asksCallingPurpose, scriptPurpose } from "../gateway/conversation-flow.cjs";
 import { isCustomerQuestion, recoveryReply } from "../gateway/conversation-recovery.cjs";
 import { scriptQuestionProgress, configuredQuestionOutcome, questionKey, customerFloorReply } from "../gateway/reply-integrity.cjs";
 import { isVoicemailGreeting } from "../gateway/voicemail-detection.cjs";
-import { audioCheckReply, hearingRecoveryIntent, asksToWait, interruptionKind, isPresenceCheck } from "../gateway/conversation-flow.cjs";
-import { configuredTransferAnnouncement, configuredTransferOffer, requiresTransferAcceptance, withdrawsHumanRequest, handoffWaiting, transferConsent, isTransferOffer, affirmativeTransferConsent, customerRequestsHuman, handoffExplanationReply, routineHandoffOffer, handoffDeclineReply } from "../gateway/handoff-intent.cjs";
+import { audioCheckReply, hearingRecoveryIntent, asksToWait, interruptionKind, isGreetingOnly, isPresenceCheck } from "../gateway/conversation-flow.cjs";
+import { configuredTransferAnnouncement, requestedTransferAnnouncement, configuredTransferOffer, requiresTransferAcceptance, withdrawsHumanRequest, handoffWaiting, transferConsent, isTransferOffer, affirmativeTransferConsent, customerRequestsHuman, handoffExplanationReply, routineHandoffOffer, handoffDeclineReply } from "../gateway/handoff-intent.cjs";
 // @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
-import { contextualQuestionReply, transferAcknowledgment, briefAgentOpening, voiceIdentity, configuredRepresentativeReply, asksCompanyLocation } from './agent-context-answer.ts';
+import { contextualQuestionReply, transferAcknowledgment, briefAgentOpening, rephrasedAgentOpening, voiceIdentity, configuredRepresentativeReply, asksCompanyLocation } from './agent-context-answer.ts';
 import { expressionCapabilityReply } from '../gateway/voice-emotion.cjs';
-import { conductDecision } from "../gateway/customer-conduct.cjs";
+import { conductDecision, declinesHangup } from "../gateway/customer-conduct.cjs";
 // @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
-import { streamAgentReply } from "./agent-test-stream.ts";
+import { streamAgentReply as streamReply } from "./agent-test-stream.ts";
 // @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
 import { inspectSpeechWav, recognizeSpeechWav } from "./agent-test-audio.ts";
 import { createHash } from "node:crypto";
@@ -49,15 +49,33 @@ export async function handleTestSession(
       return json({ error: "Test session expired. Start again." }, 404);
     session.lastSeen = Date.now();
     if (action === "ping") return json({ active: true });
-    if (session.transferAnnouncementTurn && (action === "turn" || action === "listen" || action === "interrupt"))
+    if (session.transferAnnouncementTurn && (action === "listen" || action === "interrupt"))
       return json({error:"Call is no longer handled by AI",handoffPending:true},409);
     if (action === "listen") {
       const bytes=new Uint8Array(await request.arrayBuffer());
       if(bytes.length>2_000_000)return json({error:"Recording too long"},413);
-      if(!inspectSpeechWav(bytes).speech)return json({text:"",kind:"ignore"});
-      const text=await recognizeSpeechWav(bytes,async audio=>{const form=new FormData();form.append('audio',audio,'speech.wav');const response=await engine(8766,'/transcribe',{method:'POST',body:form,signal:AbortSignal.any([request.signal,AbortSignal.timeout(3000)])});if(!response.ok)throw Error('Speech recognition unavailable');return String((await response.json()).text||'');});
-      // Native speech already passed the 350-ms boundary. Do not add a second LLM/pause gate.
-      return json({text,kind:interruptionKind(text),voicemail:isVoicemailGreeting(text),completion:text.trim()?"complete":"empty"});
+      const wav = inspectSpeechWav(bytes);
+      // Authenticated AudioSocket sessions apply their configurable gate at 8 kHz.
+      const telephony = owner.startsWith("vici-") || owner.startsWith("manual-audio-");
+      if (wav.durationMs > 21000 || (!telephony && !wav.speech))
+        return json({text:"",kind:"ignore"});
+      let confidence: number | undefined;
+      const text = await recognizeSpeechWav(bytes, async (audio) => {
+        const form = new FormData();
+        form.append("audio", audio, "speech.wav");
+        const response = await engine(8766, "/transcribe", {
+          method: "POST",
+          body: form,
+          signal: AbortSignal.any([request.signal, AbortSignal.timeout(3000)]),
+        });
+        if (!response.ok) throw Error("Speech recognition unavailable");
+        const result = await response.json();
+        confidence = typeof result.confidence === "number" && Number.isFinite(result.confidence)
+          ? result.confidence
+          : undefined;
+        return String(result.text || "");
+      });
+      return json({text,confidence,kind:interruptionKind(text),voicemail:isVoicemailGreeting(text),completion:text.trim()?"complete":"empty"});
     }
     const acknowledgePlayback = (turnId: unknown) => {
       const pending = session.pendingPlayback;
@@ -67,13 +85,20 @@ export async function handleTestSession(
         session.introPlaybackComplete = true;
         session.introRestartPending = false;
       }
-      if (pending.phase === "purpose") session.purposeDelivered = true;
+      if (pending.phase === "purpose") {
+        session.purposeDelivered = true;
+        if (session.hearingResume?.phase === "purpose") session.hearingResume = undefined;
+      }
       if (pending.question) {
         const entry = session.questionLedger?.get(questionKey(pending.question));
         if (entry?.status === "pending") entry.status = "delivered";
       }
       if (/\b(?:can you hear me|are you still there)\?/i.test(pending.message.content)) {
         session.awaitingHearingConfirmation = true;
+      }
+      if (pending.endOffer) {
+        session.endOfferMade = true;
+        session.awaitingEndDecision = true;
       }
       session.pendingPlayback = undefined;
     };
@@ -132,6 +157,12 @@ export async function handleTestSession(
           )
         : json({ interrupted: true });
     }
+    if (session.transferAnnouncementTurn && action === "turn") {
+      const body = request.headers.get("content-type")?.startsWith("application/json")
+        ? await request.clone().json().catch(() => null) : null;
+      if (!owner.startsWith("vici-") || body?.handoffFailed !== true)
+        return json({error:"Call is no longer handled by AI",handoffPending:true},409);
+    }
     if (session.endedReason) return json({ error: "This call has ended.", code: "CALL_ENDED" }, 409);
     if (action !== "turn") return json({ error: "Unknown action" }, 400);
     if (session.busy)
@@ -174,7 +205,7 @@ export async function handleTestSession(
       {
         async start(controller) {
           const started = performance.now();
-          let synthesized = false, pcmBytes = 0;
+          let synthesized = false, pcmBytes = 0, endOffer = false;
           const send = async (event: object) => {
             while ((controller.desiredSize ?? 0) <= 0) {
               abort.signal.throwIfAborted();
@@ -197,6 +228,14 @@ export async function handleTestSession(
             };
             console.info("[Shahvex agent test]", { turnId, ...event });
             await send(event);
+          };
+          let introductionSignaled = false;
+          const streamAgentReply = async (options: Parameters<typeof streamReply>[0]) => {
+            if (session.speechPhase === "introduction" && !introductionSignaled) {
+              introductionSignaled = true;
+              await send({type:"introduction"});
+            }
+            return streamReply({...options, salutation:knownSalutation(session.messages)});
           };
           let answer = "";
           let repairSource: string | undefined;
@@ -268,7 +307,8 @@ export async function handleTestSession(
             let used = false;
             return (speech: string) => {
               if (isTransferOffer({role:"assistant",content:speech}) &&
-                  /\b(?:connect|transfer)\b/i.test(session.config.script)) return true;
+                  /\b(?:connect|transfer)\b/i.test(session.config.script))
+                return !plan(scriptMemory(history)).some(item=>item.applicability!=="not_applicable" && item.status!=="answered");
               if (!next || used || questionKey(speech) !== questionKey(next)) return false;
               used = true;
               return true;
@@ -277,16 +317,14 @@ export async function handleTestSession(
           const speakRepair = async (repair: {kind: string; source?: string}, customerText = "") => {
             if (repair.kind === "introduction") session.introPlaybackComplete = false;
             session.speechPhase = repair.kind === "introduction" ? "introduction" : repair.kind === "purpose" ? "purpose" : "conversation";
-            if (repair.kind === "introduction" && briefAgentOpening(session.config) !== undefined) {
-              const profile = voiceIdentity(session.config);
-              const company = profile.company ? ` from ${profile.company}` : "";
-              const introduction = `Hi, this is ${profile.name}${company}. How are you doing today?`;
-              await streamAgentReply({messages:[],fixedSpeech:introduction,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+            const introduction = repair.kind === "introduction" ? rephrasedAgentOpening(session.config) : undefined;
+            if (introduction) {
+              await streamAgentReply({messages:[],fixedSpeech:introduction,openingAudio:true,cacheAudio:true,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               session.introRestartPending = false;
               return;
             }
             if(repair.kind==="purpose"){
-              if (session.requirePlaybackAck && !session.purposeDelivered) session.purposeReplyTo ??= customerText;
+              if (!session.purposeDelivered) session.purposeReplyTo ??= customerText;
               const purpose=scriptPurpose(session.config);
               if(purpose){
                 const reciprocal=/\b(?:how are you|how about (?:you|yourself)|what about you|and you|and yourself)\b/i.test(session.purposeReplyTo || customerText);
@@ -376,6 +414,13 @@ export async function handleTestSession(
               const raw = await request.text();
               if (raw.length > 5000) throw Error("Message too long");
               const body = JSON.parse(raw);
+              if (body.handoffFailed === true && owner.startsWith("vici-") && session.transferAnnouncementTurn) {
+                session.transferAnnouncementTurn = undefined;
+                session.handoffDeclined = true;
+                await streamAgentReply({messages:[],fixedSpeech:"I couldn't connect you to the specialist. I'm still here.",voice:session.config.voice,
+                  signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                await send({type:"done"});return;
+              }
               text = typeof body.text === "string" ? body.text.trim() : "";
               if(body.opening===true && session.config.first==="customer" && !session.messages.some(m=>m.role==="user")){
                 session.speechPhase=previousSpeechPhase;await send({type:"done"});return;
@@ -490,12 +535,10 @@ export async function handleTestSession(
             }
             const conduct = conductDecision(text, session.conductWarned === true, session.endOfferMade === true, session.awaitingEndDecision === true);
             if (conduct) {
-              // Count the invitation before playback so an interruption cannot
-              // cause the same invitation to be offered again.
               if (conduct.kind === "offer") {
-                session.endOfferMade = true;
-                session.awaitingEndDecision = true;
+                endOffer = true;
                 session.endResumeQuestion = businessResume(session.messages.slice(1,-1));
+                await send({type:"end-offer"});
               }
               if (conduct.kind === "end" && conduct.immediate) {
                 session.endedReason = conduct.reason;
@@ -503,7 +546,7 @@ export async function handleTestSession(
                 await send({type:"done"});return;
               }
               const spokenConduct = conduct.kind === "offer"
-                ? knownSalutation(session.messages) + "I'll take just two minutes to explain. If it makes sense to you, we can continue. Otherwise, I'll end the call. May I go ahead?"
+                ? knownSalutation(session.messages) + conduct.text
                 : conduct.text;
               await streamAgentReply({
                 messages: [], fixedSpeech: spokenConduct, voice: session.config.voice,
@@ -511,6 +554,10 @@ export async function handleTestSession(
                 signal: abort.signal, engine, send, timing,
                 onText: value => { answer = value; },
               });
+              if (conduct.kind === "offer" && !session.requirePlaybackAck && pcmBytes > 0) {
+                session.endOfferMade = true;
+                session.awaitingEndDecision = true;
+              }
               if (conduct.kind === "warn") session.conductWarned = true;
               else if (conduct.kind !== "offer") {
                 session.endedReason = conduct.reason;
@@ -519,7 +566,7 @@ export async function handleTestSession(
               await send({ type: "done" });
               return;
             }
-            if (session.awaitingEndDecision && (isListeningSignal(text) || affirmativeTransferConsent(text.replace(/^oh[, .!]+/i, "")))) {
+            if (session.awaitingEndDecision && (declinesHangup(text) || isListeningSignal(text) || affirmativeTransferConsent(text.replace(/^oh[, .!]+/i, "")))) {
               session.awaitingEndDecision = false;
               session.introRestartPending = false;
               if (session.purposeDelivered) session.purposeAcknowledged = true;
@@ -539,8 +586,47 @@ export async function handleTestSession(
             const firstUnanswered = () => unfinished(session.messages.slice(1));
             const scriptIncomplete = () => plan(scriptMemory(session.messages.slice(1)))
               .some(item=>item.applicability!=="not_applicable" && item.status!=="answered");
+            const previousAssistant = flowHistory.findLast(turn => turn.role === "assistant");
+            const explicitTransfer = customerRequestsHuman(text, flowHistory) ||
+              Boolean(previousAssistant && isTransferOffer(previousAssistant) &&
+                affirmativeTransferConsent(text) && transferConsent(session.messages.slice(1)));
+            const nativeHandoff = session.requirePlaybackAck && owner.startsWith("vici-");
+            const configuredAnnouncement = configuredTransferAnnouncement(session.config.script);
+            const announceHandoff = async (announcement: string) => {
+              await send({type:"handoff-announcement",turnId,announcement:applySalutation(announcement,knownSalutation(session.messages))});
+              await streamAgentReply({messages:[],fixedSpeech:announcement,voice:session.config.voice,
+                customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              await send({type:"done"});
+              if (synthesized) session.transferAnnouncementTurn = turnId;
+            };
+            if (nativeHandoff && explicitTransfer) {
+              if (scriptIncomplete()) {
+                const next = firstUnanswered();
+                if (next && session.purposeDelivered) {
+                  session.purposeAcknowledged = true;
+                  await speakRepair({kind:"question",source:next.speech},text);
+                } else {
+                  await speakRepair({kind:session.purposeDelivered ? "continue" : "purpose"},text);
+                }
+                await send({type:"done"});
+                return;
+              }
+              await announceHandoff(requestedTransferAnnouncement(session.config.script));
+              return;
+            }
+            const greetingOnly = isGreetingOnly(text);
+            if (greetingOnly && (session.purposeDelivered || session.purposeReplyTo !== undefined)) {
+              if (session.purposeDelivered) {
+                session.purposeAcknowledged = true;
+                const next = firstUnanswered();
+                if (next && ledger.get(next.id)?.status !== "delivered")
+                  await speakRepair({kind:"question",source:next.speech},text);
+              }
+              await send({type:"done"});return;
+            }
             if (hearingIntent && !handoffWaiting(flowHistory) && !session.awaitingEndDecision) {
-              const saved = session.hearingResume;
+              const resumable = session.hearingResume;
+              const saved = session.purposeDelivered && resumable?.phase === "purpose" ? undefined : resumable;
               const question = session.purposeAcknowledged ? firstUnanswered()?.speech : undefined;
               const prefix = hearingIntent === "complaint" ? "Let me repeat that. " :
                 hearingIntent === "check" ? "Yes, I can hear you. " : "";
@@ -643,7 +729,7 @@ export async function handleTestSession(
               const identity=voiceIdentity(session.config),memory=questionMemory(flowHistory);
               const next=session.purposeDelivered?businessResume(flowHistory):undefined;
               const offered=flowHistory.some(isTransferOffer);
-              const closing=!next&&session.purposeDelivered&&!session.handoffDeclined ? (offered?"Shall I connect you now?":routineHandoffOffer(session.config.script,memory,memory.latestAnswer?.response||"")) : undefined;
+              const closing=!scriptIncomplete()&&!next&&session.purposeDelivered&&!session.handoffDeclined ? (offered?"Shall I connect you now?":routineHandoffOffer(session.config.script,memory,memory.latestAnswer?.response||"")) : undefined;
               const spoken=`I'm ${identity.name}${identity.company?" from "+identity.company:""}.`+(next?" "+next:closing?" "+closing:"");
               await streamAgentReply({messages:[],fixedSpeech:spoken,voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               if(!next&&!session.purposeDelivered){const identityText=answer;await speakRepair({kind:"purpose"},text);answer=identityText+" "+answer;}
@@ -697,7 +783,7 @@ export async function handleTestSession(
                 const next = session.purposeDelivered && (representative || !awaitingPurposeAcknowledgment)
                   ? businessResume(session.messages.slice(1)) : undefined;
                 if (representative && next) repairSource = next;
-                const offer = !next && answered && !session.handoffDeclined
+                const offer = !scriptIncomplete() && !next && answered && !session.handoffDeclined
                   ? routineHandoffOffer(session.config.script,flowMemory,flowMemory.latestAnswer?.response || "") : undefined;
                 await streamAgentReply({messages:[],fixedSpeech:[reply,next || offer].filter(Boolean).join(" "),voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                 await send({type:"done"});return;
@@ -708,11 +794,12 @@ export async function handleTestSession(
               await speakRepair({kind:"handoff-reason"},text);
               await send({type:'done'});return;
             }
-            const announcement = session.requirePlaybackAck && owner.startsWith("vici-") &&
-              configuredTransferAnnouncement(session.config.script);
             const explicitAcceptance = transferConsent(session.messages.slice(1));
+            const announcement = nativeHandoff && (explicitAcceptance
+              ? requestedTransferAnnouncement(session.config.script) : configuredAnnouncement);
             const configuredOffer = announcement && configuredTransferOffer(session.config.script);
-            if (configuredOffer && answered && !scriptIncomplete() && !explicitAcceptance &&
+            const readyToTransition = answered || session.purposeDelivered && affirmativeTransferConsent(text);
+            if (configuredOffer && readyToTransition && !scriptIncomplete() && !explicitAcceptance &&
                 !session.handoffDeclined && !withdrawsHumanRequest(text) && !isCustomerQuestion(text)) {
               await streamAgentReply({messages:[],fixedSpeech:configuredOffer,voice:session.config.voice,
                 customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
@@ -722,27 +809,22 @@ export async function handleTestSession(
             // An explicit script consent requirement still needs a customer acceptance.
             if (announcement && session.purposeDelivered && !scriptIncomplete() &&
                 !session.handoffDeclined && !withdrawsHumanRequest(text) && !isCustomerQuestion(text) &&
-                (explicitAcceptance || answered && !requiresTransferAcceptance(session.config.script + "\n" + session.config.instructions))) {
-              await send({type:"handoff-announcement",turnId});
-              await streamAgentReply({messages:[],fixedSpeech:announcement,voice:session.config.voice,
-                customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
-              session.transferAnnouncementTurn = turnId;
-              session.failedSpeech = undefined;
-              session.hearingResume = undefined;
-              session.awaitingHearingConfirmation = false;
-              await send({type:"done"});return;
+                readyToTransition && (explicitAcceptance || !requiresTransferAcceptance(session.config.script + "\n" + session.config.instructions))) {
+              await announceHandoff(announcement);
+              return;
             }
             const lastOffer=flowHistory.findLast(turn=>turn.role==="assistant");
-            if(lastOffer && affirmativeTransferConsent(text) && isTransferOffer({...lastOffer,content:lastOffer.content.replace(/\s*\[interrupted\]/g,"")})){
+            if(!nativeHandoff && lastOffer && affirmativeTransferConsent(text) && isTransferOffer({...lastOffer,content:lastOffer.content.replace(/\s*\[interrupted\]/g,"")})){
               await send({type:'done'});return;
             }
-            const transferReply=transferAcknowledgment(text,session.messages.slice(1,-1),session.config.script);
+            const transferReply=nativeHandoff && scriptIncomplete()
+              ? undefined : transferAcknowledgment(text,session.messages.slice(1,-1),session.config.script);
             if(transferReply!==undefined){
               if(transferConsent(session.messages.slice(1))){await send({type:"done"});return;}
               if(transferReply)await streamAgentReply({messages:[],fixedSpeech:transferReply,voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
-            if(handoffWaiting(flowHistory)&&!/[?]|\b(?:what|why|who|where|how|when|can you|could you)\b/i.test(text)){
+            if((!nativeHandoff || !scriptIncomplete())&&handoffWaiting(flowHistory)&&!/[?]|\b(?:what|why|who|where|how|when|can you|could you)\b/i.test(text)){
               await send({type:'done'});return;
             }
 
@@ -760,7 +842,7 @@ export async function handleTestSession(
             }
             if (spokenPurpose) {
               const receptive = affirmativeTransferConsent(text) || isListeningSignal(text) || isPresenceCheck(text);
-              if (!session.purposeDelivered && (confirmingPresence || receptive || session.purposeReplyTo !== undefined && /^(?:hello|hi|hey)[.! ]*$/i.test(text))) {
+              if (!session.purposeDelivered && (confirmingPresence || receptive || greetingOnly)) {
                 await speakRepair({kind:"purpose"},text);
                 await send({type:"done"});return;
               }
@@ -793,7 +875,8 @@ export async function handleTestSession(
                   const next = item?.speech;
                   if (next) {
                     const state = item && ledger.get(item.id)?.status;
-                    if (partialNow || state !== "delivered" || confirmingPresence || isPresenceCheck(text)) {
+                    const needsAge = /\b(?:your age|how old)\b/i.test(item.question) && !answered;
+                    if (partialNow || state !== "delivered" || confirmingPresence || isPresenceCheck(text) || needsAge && receptive) {
                       repairSource = next;
                       await streamAgentReply({messages:[],fixedSpeech:next,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                     }
@@ -813,7 +896,7 @@ export async function handleTestSession(
               if(acknowledgement||isListeningSignal(text)){
                 // An acknowledgment can move the conversation without inventing a missing age/name.
                 const target=session.config.script.match(/\b(?:connect|transfer) you (?:with|to) (?:a|an|the) ((?:licensed |human |live )?(?:specialist|agent|representative|advisor|adviser|person))\b/i)?.[1];
-                const closing=target&&!session.handoffDeclined?`Let me connect you with a ${target}.`:"Thank you for your time.";
+                const closing=target&&!nativeHandoff&&!session.handoffDeclined?`Let me connect you with a ${target}.`:"Thank you for your time.";
                 await streamAgentReply({messages:[],fixedSpeech:closing,voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});await send({type:"done"});return;
               }
             }
@@ -1062,7 +1145,10 @@ export async function handleTestSession(
               if (complete) session.lastCompletedTurnId=turnId;
               const phase = session.speechPhase === "introduction" ? "introduction" :
                 session.speechPhase === "purpose" || !session.purposeDelivered && /\b(?:I(?:'m| am) calling|reason for (?:my|this) call)\b/i.test(answer) ? "purpose" : "conversation";
-              if (complete && !session.requirePlaybackAck && phase === "purpose") session.purposeDelivered = true;
+              if (complete && phase === "purpose") {
+                session.purposeReplyTo ??= text;
+                if (!session.requirePlaybackAck) session.purposeDelivered = true;
+              }
               const sourceQuestion = resumedSpeech?.question || sourceFor(answer,session.messages.slice(1));
               if (sourceQuestion) {
                 session.questionAliases ??= new Map();
@@ -1075,7 +1161,7 @@ export async function handleTestSession(
                 ? {speech:answer,phase,question:sourceQuestion} : undefined;
               if (retry && !complete) session.failedSpeech = retry;
               // Handoff offers retain their independent consent and execution rules.
-              const deliveryTracked = session.requirePlaybackAck && (phase !== "conversation" || Boolean(sourceQuestion) ||
+              const deliveryTracked = session.requirePlaybackAck && (endOffer || phase !== "conversation" || Boolean(sourceQuestion) ||
                 /^\s*(?:(?:sir|ma['’]?am),\s*)?(?:Can you hear me|Are you still there)\?/i.test(answer));
               const message = { role: "assistant" as const, content: answer + (!complete || deliveryTracked ? " [interrupted]" : "") };
               session.messages.push(message);
@@ -1086,7 +1172,7 @@ export async function handleTestSession(
                   ledger.set(key, {status: complete ? "pending" : "interrupted"});
                 }
               }
-              if (deliveryTracked && complete) session.pendingPlayback = {turnId, phase, message, question: sourceQuestion, retry};
+              if (deliveryTracked && complete) session.pendingPlayback = {turnId, phase, message, question: sourceQuestion, retry, endOffer};
               if (
                 !session.messages[0].content.endsWith(
                   "The session has begun. Avoid unsolicited repeated introductions; answer identity questions whenever asked.",

@@ -85,7 +85,7 @@ function createManualBridge(config,{request,fetchImpl=fetch,logger=console.error
   if(config.enabled!==true||typeof config.secret!=='string'||config.secret.length<32)throw Error('Enable the isolated manual configuration and set its separate shared secret');
   const connectionId=crypto.randomUUID(),callbacks=manualCallbacks({agent:config.agent,request:request||testerTransport(config.tester,fetchImpl),callLimitSeconds:config.callLimitSeconds||120});
   const spoolDir=path.join(config.stateDirectory||'/var/lib/shahvex-vicidial','manual-test');
-  const bridge=createBridge({siteUrl:'https://manual-test.invalid/',connectionId,secret:config.secret,spoolDir,fetchImpl:callbacks.dispatch,logger,maxCalls:1,testOnly:true,allowUnregisteredManualAudio:config.allowUnregisteredAudio===true,localMonitor:callbacks.monitor});
+  const bridge=createBridge({speech:config.speech,siteUrl:'https://manual-test.invalid/',connectionId,secret:config.secret,spoolDir,fetchImpl:callbacks.dispatch,logger,maxCalls:1,testOnly:true,allowUnregisteredManualAudio:config.allowUnregisteredAudio===true,localMonitor:callbacks.monitor});
   let windowTimer;
   return {bridge,async listen(){
     const controlPort=config.controlPort??8792,audioPort=config.audioPort??9020;

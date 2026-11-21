@@ -1,5 +1,7 @@
-import { configuredTransferAnnouncement, requiresTransferAcceptance, transferConsent } from "../gateway/handoff-intent.cjs";
-import { FLOW_REVISION } from "../gateway/conversation-resume.cjs";
+import { configuredTransferAnnouncement, requestedTransferAnnouncement, requiresTransferAcceptance, transferConsent } from "../gateway/handoff-intent.cjs";
+import { rememberQuestions } from "../gateway/question-memory.cjs";
+import { scriptQuestionProgress } from "../gateway/reply-integrity.cjs";
+import { FLOW_REVISION, applySalutation, knownSalutation } from "../gateway/conversation-resume.cjs";
 import {
   directPrefixReadSql,
   directAdmissionSql,
@@ -83,6 +85,7 @@ const message = z
     turnFinal:z.boolean().optional(),
     completedTurnId:z.string().min(1).max(80).optional(),
     opening: z.boolean().optional(),
+    handoffFailed: z.boolean().optional(),
     silenceStep: z.number().int().min(1).max(4).optional(),
     recordingUrl: z.string().url().max(2000).optional(),
     recordingId: z.string().max(100).optional(),
@@ -98,7 +101,7 @@ const message = z
   .strict();
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION, "x-shahvex-call-cleanup-revision": "REC444-1" } });
-type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string; handoffTurnId?: string; handoffPlayed?: boolean };
+type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string; handoffTurnId?: string; handoffPlayed?: boolean; handoffFailedTurnId?: string };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
 async function stopCallVoice(call: { id: string; voice_session_id?: string }) {
   const sessionId = call.voice_session_id;
@@ -123,7 +126,7 @@ const statusHeaders = (line: string) =>
 
 async function startVoice(callId: string, agentId: string, config: TestConfig) {
   const owner = `vici-${callId}`,
-    voiceConfig = testConfig.parse(config);
+    voiceConfig = testConfig.parse({...config, first:"ai"});
   if (process.env.SHAHVEX_PC_AI_URL) {
     const response = await pcAiRequest(
       "/tester/start",
@@ -480,7 +483,7 @@ export async function vicidialCallback(request: Request) {
           return call.voice_session_id
             ? finish({
                 callId: call.id,
-                first: call.script_snapshot.first,
+                first: "ai",
                 status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
                 mediaReady: call.status === "ANSWERED",
               })
@@ -495,7 +498,7 @@ export async function vicidialCallback(request: Request) {
           const config = testConfig.parse(call.script_snapshot),
             payload = {
               callId: call.id,
-              first: config.first,
+              first: "ai",
               mediaReady: true,
               maxCallDurationSeconds: call.max_call_duration_seconds || 0,
             },
@@ -662,7 +665,7 @@ export async function vicidialCallback(request: Request) {
         return call.voice_session_id
           ? json({
               callId: call.id,
-              first: call.script_snapshot.first,
+              first: "ai",
               status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
               mediaReady: call.status === "ANSWERED",
             })
@@ -708,7 +711,7 @@ export async function vicidialCallback(request: Request) {
             return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: prior.id,
-            first: prior.script_snapshot.first,
+            first: "ai",
             status,
             mediaReady: status === "ANSWERED",
           });
@@ -800,7 +803,7 @@ export async function vicidialCallback(request: Request) {
         }
         return json({
           callId: id,
-          first: config.first,
+          first: "ai",
           mediaReady: true,
           maxCallDurationSeconds: a.max_call_duration_seconds || 0,
         });
@@ -816,8 +819,9 @@ export async function vicidialCallback(request: Request) {
         return call.voice_session_id
           ? json({
               callId: call.id,
-              first: call.script_snapshot.first,
+              first: "ai",
               status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
+              mediaReady: call.status === "ANSWERED",
             })
           : json(
               {
@@ -858,51 +862,34 @@ export async function vicidialCallback(request: Request) {
         : undefined;
       if (v.audioUuid && !directLine)
         return json({ error: "Unknown direct audio mapping" }, 409);
-      const route = (
-        await pool.query(
+      const routeLookup = pool.query(
           `SELECT p.id pool_id,p.campaign_id,cd.id campaign_definition_id FROM vicidial_pools p JOIN vicidial_pool_agents q ON q.pool_id=p.id
       LEFT JOIN campaign_agent_assignments ca ON ca.agent_id=q.agent_id
       LEFT JOIN campaign_definitions cd ON cd.id=ca.campaign_id
       JOIN voip_agent_assignments v ON v.agent_id=q.agent_id AND v.connection_id=p.connection_id AND v.owner_id=p.owner_id
       WHERE p.connection_id=$1 AND p.campaign_id=$2 AND q.remote_user=$3 AND ($4::text IS NULL OR q.agent_id=$4) AND q.ready=TRUE AND v.campaign_id=p.campaign_id AND (ca.agent_id IS NULL OR (ca.enabled=TRUE AND cd.enabled=TRUE AND cd.deleted_at IS NULL AND cd.intake_state='RUNNING' AND cd.external_campaign_id=p.campaign_id AND cd.connection_id=p.connection_id))`,
           [c.id, get("campaign_id"), v.agentUser, directLine?.agentId || null],
-        )
-      ).rows[0];
+        );
+      const leadLookup = async () => {
+        try {
+          return await vicidialRequest(c.server_url, c.username, key, {
+            function: "lead_all_info", lead_id: get("lead_id"), stage: "pipe", header: "YES",
+          }, false, 2500);
+        } catch {
+          const lead = await (await import("./vicidial-admin-lead")).readAdminLead(
+            c.server_url, c.username, key, get("lead_id") || "",
+          );
+          const fields = ["lead_id", "phone_number", "phone_code"];
+          return fields.join("|") + "\n" + fields.map(field => lead[field] || "").join("|");
+        }
+      };
+      const route = (await routeLookup).rows[0];
       if (!route || route.campaign_id !== get("campaign_id"))
         return json({ error: "Call is outside the assigned campaign" }, 409);
-      let metadata: string;
-      try {
-        metadata = await vicidialRequest(c.server_url, c.username, key, {
-          function: "lead_all_info",
-          lead_id: get("lead_id"),
-          stage: "pipe",
-          header: "YES",
-        });
-      } catch {
-        const lead = await (
-          await import("./vicidial-admin-lead")
-        ).readAdminLead(c.server_url, c.username, key, get("lead_id") || "");
-        const fields = ["lead_id", "phone_number", "phone_code"];
-        metadata =
-          fields.join("|") + "\n" + fields.map((k) => lead[k] || "").join("|");
-      }
-      const detailLines = metadata.trim().split(/\r?\n/),
-        detailHeaders = detailLines[0].split("|"),
-        detailValues = detailLines[1]?.split("|") || [];
-      const detail = (name: string) =>
-        String(detailValues[detailHeaders.indexOf(name)] || "").trim();
-      if (detail("lead_id") !== get("lead_id"))
-        return json(
-          { error: "VICIdial lead details could not be verified" },
-          409,
-        );
-      const rawNumber = detail("phone_number"),
-        code = detail("phone_code");
-      const number = rawNumber.startsWith("+")
-        ? rawNumber
-        : /^[1-9]\d{0,3}$/.test(code) && /^\d{6,14}$/.test(rawNumber)
-          ? `+${code}${rawNumber}`
-          : rawNumber;
+      const phoneNumber = (raw: string, code: string) =>
+        raw.startsWith("+") ? raw :
+        /^[1-9]\d{0,3}$/.test(code) && /^\d{6,14}$/.test(raw) ? `+${code}${raw}` : raw;
+      const number = phoneNumber(get("phone_number") || "", get("phone_code") || "");
       const tx = await pool.connect();
       let released = false;
       try {
@@ -923,7 +910,7 @@ export async function vicidialCallback(request: Request) {
             return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: duplicate.id,
-            first: duplicate.script_snapshot.first,
+            first: "ai",
             status,
             mediaReady: status === "ANSWERED",
           });
@@ -1034,10 +1021,23 @@ export async function vicidialCallback(request: Request) {
         released = true;
         try {
           const sessionId = await startVoice(id, a.agent_id, a.config);
-          await pool.query(
-            "UPDATE agent_calls SET voice_session_id=$1 WHERE id=$2",
-            [sessionId, id],
-          );
+          if (!(await mediaReady(id, sessionId)))
+            throw Error("Media reservation unavailable");
+          // agent_status already verified the answered call and lead identity.
+          // Display-number enrichment does not hold the media reservation.
+          if (!number) void leadLookup().then(async metadata => {
+            const [header = "", row = ""] = metadata.trim().split(/\r?\n/);
+            const headers = header.split("|"), values = row.split("|");
+            const detail = (name: string) => values[headers.indexOf(name)]?.trim() || "";
+            if (detail("lead_id") !== get("lead_id")) return;
+            const resolved = phoneNumber(detail("phone_number"), detail("phone_code"));
+            if (resolved)
+              await pool.query(
+                "UPDATE agent_calls SET lead_number=$2 WHERE id=$1 AND vicidial_call_id=$3 AND vicidial_lead_id=$4 AND COALESCE(lead_number,'')=''",
+                [id, resolved, v.externalCallId, get("lead_id")],
+              );
+          }).catch(() => {});
+
         } catch {
           await setRuntimeState(
             id,
@@ -1056,7 +1056,8 @@ export async function vicidialCallback(request: Request) {
         }
         return json({
           callId: id,
-          first: a.config.first,
+          first: "ai",
+          mediaReady: true,
           maxCallDurationSeconds: a.max_call_duration_seconds,
         });
       } catch (error) {
@@ -1218,6 +1219,7 @@ export async function vicidialCallback(request: Request) {
     if (v.action === "playback-complete" && v.completedTurnId) {
       let history: ConversationTurn[] = call.conversation_history || [];
       const last = history.at(-1);
+      if (last?.handoffFailedTurnId === v.completedTurnId && call.status === "ANSWERED") return json({transferFailed:true,resumeVoice:true});
       if (last?.handoffTurnId === v.completedTurnId) {
         if (["SUBMITTED", "ANSWERED"].includes(call.transfer_status))
           return json({transferSubmitted:true});
@@ -1227,8 +1229,10 @@ export async function vicidialCallback(request: Request) {
           return json({transferFailed:true});
         const script = call.script_snapshot?.script || "";
         const rules = call.script_snapshot?.campaignSettings?.transferConditions || "";
-        if (last.content !== configuredTransferAnnouncement(script) ||
-            (requiresTransferAcceptance(script + "\n" + rules) && !transferConsent(history.slice(0,-1))))
+        const accepted = transferConsent(history.slice(0,-1));
+        const expectedAnnouncement = accepted ? requestedTransferAnnouncement(script) : configuredTransferAnnouncement(script);
+        if (!expectedAnnouncement || last.content !== applySalutation(expectedAnnouncement, knownSalutation(history)) ||
+            (requiresTransferAcceptance(script + "\n" + rules) && !accepted))
           return json({transferFailed:true});
         if (!last.handoffPlayed) {
           const before = JSON.stringify(history);
@@ -1240,21 +1244,34 @@ export async function vicidialCallback(request: Request) {
           if (!saved.rowCount) return json({syncPending:true});
           history = saved.rows[0].conversation_history;
         }
+        const failHandoff = async (reason: string) => {
+          const restored = history.map((turn, index) => index === history.length - 1
+            ? {role:turn.role, content:turn.content, handoffFailedTurnId:v.completedTurnId}
+            : turn);
+          const saved = await pool.query(
+            `UPDATE agent_calls SET conversation_history=$2::jsonb,transfer_status='FAILED',
+              transfer_consent=FALSE,handoff_ready=FALSE,conversation_state='LISTENING',updated_at=NOW()
+              WHERE id=$1 AND status='ANSWERED' AND NOT ai_leg_released AND NOT ending_requested
+              AND conversation_history=$3::jsonb AND COALESCE(transfer_status,'') NOT IN ('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED')`,
+            [call.id, JSON.stringify(restored), JSON.stringify(history)],
+          );
+          return json({transferFailed:true, resumeVoice:saved.rowCount===1, transferReason:reason});
+        };
         try {
-          const audit = call.qualification;
-          const current = audit?.historyHash === conversationHash(history) &&
-            audit?.scriptHash === qualificationHash(call.script_snapshot);
-          const result = current ? {handoffReady:call.handoff_ready} :
-            await collectVicidialResult(call.id,history,JSON.stringify(call.script_snapshot));
-          if (!result.handoffReady) return json({transferFailed:true});
-          await syncVicidialComments(call.id);
+          if (directUuid && !call.vicidial_call_id) {
+            const {linkDirectNativeCall} = await import("./vicidial-direct-link");
+            call = await linkDirectNativeCall(call,c);
+            if (!call.vicidial_call_id) return await failHandoff("No verified native VICIdial call on the assigned line");
+          }
+          await prepareRequestedHumanHandoff(call.id, history, call.script_snapshot, call.qualification);
+          void syncVicidialComments(call.id).catch(() => {});
           await transferVicidialCall(call.id);
           return json({transferSubmitted:true});
         } catch {
           const status = (await pool.query("SELECT transfer_status FROM agent_calls WHERE id=$1",[call.id])).rows[0]?.transfer_status;
           if (["SUBMITTED","ANSWERED"].includes(status)) return json({transferSubmitted:true});
           if (["PREPARING","UNCERTAIN"].includes(status)) return json({transferUncertain:true});
-          return json(status === "FAILED" ? {transferFailed:true} : {syncPending:true});
+          return await failHandoff("VICIdial handoff could not be submitted");
         }
       }
     }
@@ -1297,6 +1314,7 @@ export async function vicidialCallback(request: Request) {
             JSON.stringify({
               text: v.text || "",
               opening: v.opening === true,
+              ...(v.handoffFailed === true && Boolean(call.conversation_history?.at(-1)?.handoffFailedTurnId) ? {handoffFailed:true} : {}),
               ...(v.completedTurnId?{completedTurnId:v.completedTurnId}:{}),
               ...(v.silenceStep ? { silenceStep: v.silenceStep } : {}),
             }),
@@ -1523,6 +1541,9 @@ export async function vicidialCallback(request: Request) {
     }
     let cleanupPending = false;
     if (["ended", "recover", "customer-ended"].includes(v.action)) {
+      const transferred = ["SUBMITTED", "ANSWERED"].includes(call.transfer_status);
+      // Free the voice session in parallel with the verified AI media cleanup.
+      const stoppingVoice = transferred ? stopCallVoice(call).then(() => true, () => false) : undefined;
       await pool.query(
         `UPDATE agent_calls SET ai_leg_released=TRUE,
          customer_ended=customer_ended OR $3::boolean,
@@ -1531,13 +1552,15 @@ export async function vicidialCallback(request: Request) {
          WHERE id=$1`,
         [call.id, v.durationSeconds ?? null, v.action === "customer-ended"],
       );
-      if (v.action !== "customer-ended" && !call.customer_ended &&
+      if (!transferred && v.action !== "customer-ended" && !call.customer_ended &&
           !["COMPLETED", "FAILED"].includes(call.status)) {
         const { observeNativeCustomer } = await import("./vicidial-call-state");
         await observeNativeCustomer(call, c, key);
       }
       cleanupPending = !(await releaseConfirmedAgent(call.id));
-      await stopCallVoice(call);
+      if (stoppingVoice ? !(await stoppingVoice) : false)
+        return json({saved:true,syncPending:true});
+      if (!stoppingVoice) await stopCallVoice(call);
       if (cleanupPending && v.action !== "customer-ended")
         await setRuntimeState(call.id, "ERROR", "AI media ended; native customer state must be reconciled");
     }
@@ -1553,6 +1576,8 @@ export async function vicidialCallback(request: Request) {
         call = (
           await pool.query("SELECT * FROM agent_calls WHERE id=$1", [call.id])
         ).rows[0];
+        if (v.action === "retry-sync" && call.transfer_status === "FAILED" && call.status === "ANSWERED")
+          return json({saved:true});
         if (v.action === "retry-sync" && call.conversation_history?.at(-1)?.handoffTurnId)
           return json({saved:true});
         if (call.conversation_busy)
@@ -1575,17 +1600,26 @@ export async function vicidialCallback(request: Request) {
             verificationPending: true,
             transferConsent: false,
           });
-        const history = call.conversation_history || [],
+        const history: ConversationTurn[] = call.conversation_history || [],
           audit = call.qualification;
         const currentAudit =
           Boolean(audit?.historyHash && audit?.scriptHash) &&
           audit.historyHash === conversationHash(history) &&
           audit.scriptHash === qualificationHash(call.script_snapshot);
-        const requested =
+        const snapshot = call.script_snapshot || {};
+        const scriptComplete = !scriptQuestionProgress(
+          snapshot.script, rememberQuestions(history.map(turn => turn.businessResponse
+            ? {...turn, content:turn.businessResponse, conversationOnly:false} : turn)),
+          {instructions:snapshot.instructions, knowledge:snapshot.knowledge},
+        ).some((step: {applicability: string; status: string}) =>
+          step.applicability !== "not_applicable" && step.status !== "answered");
+        if (v.action === "retry-sync" && call.status === "ANSWERED" && !scriptComplete)
+          return json({saved:true, verificationPending:true});
+        const requested = scriptComplete && (
           hasRequestedHumanHandoff(history) ||
           (v.action === "retry-sync" &&
             call.status === "ANSWERED" &&
-            hasTransferConsent(history));
+            hasTransferConsent(history)));
         const result =
           requested && call.status === "ANSWERED"
             ? await prepareRequestedHumanHandoff(
@@ -1661,6 +1695,7 @@ export async function vicidialCallback(request: Request) {
           return json({ saved: true, syncPending: true });
         if (
           v.action === "retry-sync" &&
+          scriptComplete &&
           result.consent &&
           result.handoffReady &&
           call.status === "ANSWERED"

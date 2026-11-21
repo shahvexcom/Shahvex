@@ -32,20 +32,6 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
   const { handleTestSession } = load('agent-test-speculative');
   const json = (status, body) => Response.json(body, { status, headers: { 'cache-control': 'no-store' } });
   let capacityChanging=false;
-  const warmingOpenings = new Map();
-  function warmOpening(config) {
-    if (typeof ai.engine !== 'function') return;
-    const text = load('agent-context-answer').briefAgentOpening(config);
-    if (!text) return;
-    const key = JSON.stringify([config.voice, text]);
-    if (warmingOpenings.has(key)) return;
-    const work = load('agent-test-stream').streamAgentReply({
-      messages: [], fixedSpeech: text, voice: config.voice, openingAudio: true, cacheAudio: true,
-      signal: AbortSignal.timeout(15000), engine: ai.engine,
-      send: async () => {}, timing: async () => {}, onText: () => {},
-    }).catch(() => {}).finally(() => warmingOpenings.delete(key));
-    warmingOpenings.set(key, work);
-  }
   async function dispatch(request) {
     const got = Buffer.from(request.headers.get('x-shahvex-ai-key') || '');
     const expected = Buffer.from(secret);
@@ -66,7 +52,7 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       catch(error){return json(error.status===409?409:503,{error:error.publicMessage||'Capacity update was not confirmed; check the audio bridges'});}
       finally{capacityChanging=false;}
     }
-    const match = /^\/tester\/(start|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.exec(url.pathname);
+    const match = /^\/tester\/(start|prepare-opening|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.exec(url.pathname);
     const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
@@ -107,6 +93,21 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       try { return json(200, await load('agent-script-extraction').extractAgentScript(owner, input.script, request.signal)); }
       catch { return json(503, { error: 'Script extraction unavailable' }); }
     }
+    if (match[1] === 'prepare-opening') {
+      let input;
+      try { input = JSON.parse(body.toString()); } catch { return json(400, {error:'Invalid JSON'}); }
+      const parsed = ai.testConfig.safeParse(input);
+      if (!parsed.success) return json(400, {error:'Invalid configuration'});
+      try {
+        const {briefAgentOpening, rephrasedAgentOpening} = load('agent-context-answer');
+        const openings = [briefAgentOpening(parsed.data), rephrasedAgentOpening(parsed.data)].filter(Boolean);
+        for (const text of openings) await load('agent-test-stream').streamAgentReply({
+          messages:[], fixedSpeech:text, voice:parsed.data.voice, openingAudio:true, cacheAudio:true,
+          signal:request.signal, engine:ai.engine, send:async()=>{}, timing:async()=>{}, onText:()=>{},
+        });
+        return json(200, {cached:openings.length>0});
+      } catch { return json(503, {error:'Opening audio preparation failed'}); }
+    }
     if (match[1] === 'start') {
       if(capacityChanging)return json(409,{error:'Call capacity is updating; retry shortly'});
       if (body.length > 70000) return json(413, { error: 'Configuration too large' });
@@ -125,7 +126,6 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       // No awaits between admission and allocation; single-process admission is atomic.
       const others = [...ai.sessions.values()].filter(s => s.owner !== owner).length;
       if (others >= maxSessions) return json(429, { error: 'Another test session is active. End that session and try again.', code:'CAPACITY' });
-      warmOpening(config); // Prepare audio while media admission proceeds.
       const sessionId=ai.newTest(owner,input.agentId,config);
       const session=ai.sessions.get(sessionId);
       if(session)session.requirePlaybackAck=input.requirePlaybackAck===true;

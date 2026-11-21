@@ -264,6 +264,7 @@ const asksToWait = (text) =>
     String(text || "").trim(),
   );
 module.exports = {
+  isGreetingOnly,
   isPresenceCheck,
   hearingRecoveryIntent,
   asksCallingPurpose,

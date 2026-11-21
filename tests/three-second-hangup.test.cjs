@@ -3,8 +3,12 @@ const {conductDecision}=require('../gateway/customer-conduct.cjs');
 const {ConversationSilence}=require('../gateway/conversation-silence.cjs');
 const {createTesterService}=require('../gateway/tester-service.cjs');
 const ends=['hangup','hang-up','hang up now','end the call','end the call now','end the calll now','hangout','hangout the call','hangup end the call','Hangout.','Hangout the call?','End the calll now.'];
-test('requested end phrases get one invitation, then a silent immediate end',()=>{
+test('requested end phrases get a confirmation prompt, then a silent immediate end',()=>{
  for(const text of ends){assert.equal(conductDecision(text,false,false).kind,'offer',text);const next=conductDecision(text,false,true);assert.equal(next.immediate,true,text);assert.equal(next.text,'',text);}
+ for(const text of ['Yes','Yes, please','Yep','Good bye','Okay, goodbye','Bye bye','No, please stop','I have to go','End call karo','Call band kar do','Allah Hafiz']){
+  assert.deepEqual(conductDecision(text,false,true,true),{kind:'end',reason:'customer_request',text:'',immediate:true},text);
+ }
+ for(const text of ['No','No, thanks','Hello','Okay, go ahead','Don’t hang up','What does goodbye mean?'])assert.equal(conductDecision(text,false,true,true),null,text);
  assert.equal(conductDecision('I hangout with my friends',false,false),null);
 });
 test('each quiet window triggers at three seconds, excluding playback',()=>{
@@ -28,12 +32,27 @@ test('the normal tester resumes the saved business question for listening replie
  const req=(action,body)=>new Request('http://fixture/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':secret,'x-shahvex-owner':'hangup-flow','x-shahvex-session':id||'none','x-shahvex-turn':crypto.randomUUID(),'content-type':'application/json'},body:JSON.stringify(body)});
  const turn=async text=>{const r=await service.dispatch(req('turn',{text}));assert.equal(r.status,200);const events=(await r.text()).trim().split('\n').map(JSON.parse);assert(!events.some(e=>e.type==='error'));return events;};
  try{
-  for(const reply of ['Yes','Yep','Hmm','Hello','Okay','Go ahead','Absolutely','Sure thing']){
+  for (const [identity, title, ending] of [
+   ['I am a woman', 'Madam, ', 'Okay, goodbye'],
+   ['I am a man', 'Sir, ', 'Just end it'],
+   ['', '', 'Call band karo'],
+  ]) {
+   id=(await(await service.dispatch(req('start',{agentId:'hangup-agent',config:{name:'Alex',voice:'hangup-voice',first:'customer',goal:'',task:'',instructions:'',script:'',knowledge:'',style:'Natural'}}))).json()).id;
+   if (identity) service.sessionStore.get(id).messages.push({role:'user',content:identity});
+   const offer=await turn('End the call now');
+   assert.ok(offer.filter(e=>e.type==='delta').map(e=>e.text).join('').startsWith(title+"Just to confirm, would you like me to end the call now?"));
+   const end=await turn(ending);
+   assert.ok(end.some(e=>e.type==='end_call'&&e.immediate));
+   assert.ok(!end.some(e=>e.type==='pcm'||e.type==='delta'));
+   await service.dispatch(req('stop',{}));id=undefined;
+  }
+  for(const reply of ['No','No, thanks','Don’t hang up','Hmm','Hello','Okay','Go ahead','Sure thing']){
    id=(await(await service.dispatch(req('start',{agentId:'hangup-agent',config:{name:'Alex',voice:'hangup-voice',first:'customer',goal:'Discuss home repairs',task:'Ask about home ownership',instructions:'',script:'Are you the homeowner?',knowledge:'',style:'Natural'}}))).json()).id;
    service.sessionStore.get(id).messages.push({role:'assistant',content:'Are you the homeowner?'});
-   const offer=await turn('End the call now');assert.match(offer.filter(e=>e.type==='delta').map(e=>e.text).join(''),/^Sir, .*two minutes/);assert(!offer.some(e=>e.type==='end_call'));
-   const resumed=await turn(reply);assert.equal(resumed.filter(e=>e.type==='delta').map(e=>e.text).join(''),'Sir, Do you own the home?',reply);assert(!resumed.some(e=>e.type==='end_call'));
-   const ending=await turn('Hangout');assert(ending.some(e=>e.type==='end_call'&&e.immediate));assert(!ending.some(e=>e.type==='pcm'||e.type==='delta'));
+   const offer=await turn('End the call now');assert.match(offer.filter(e=>e.type==='delta').map(e=>e.text).join(''),/^Just to confirm, would you like me to end the call now/);assert(!offer.some(e=>e.type==='end_call'));
+   const resumed=await turn(reply);assert.equal(resumed.filter(e=>e.type==='delta').map(e=>e.text).join(''),'Are you the homeowner?',reply);assert(!resumed.some(e=>e.type==='end_call'));
+   const renewed=await turn('Hangout');assert(renewed.some(e=>e.type==='end-offer'));assert(!renewed.some(e=>e.type==='end_call'));
+   const ending=await turn('Yes');assert(ending.some(e=>e.type==='end_call'&&e.immediate));assert(!ending.some(e=>e.type==='pcm'||e.type==='delta'));
    await service.dispatch(req('stop',{}));id=undefined;
   }
  }finally{if(id)await service.dispatch(req('stop',{}));global.fetch=original;}

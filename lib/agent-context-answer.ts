@@ -418,6 +418,12 @@ export function briefAgentOpening(
   return `Hello, this is ${name}${company ? ` from ${company}` : ""}. How are you doing today?`;
 }
 
+export function rephrasedAgentOpening(config: Pick<TestConfig, "name" | "script" | "instructions">) {
+  if (!briefAgentOpening(config)) return undefined;
+  const {name, company} = voiceIdentity(config);
+  return `Hi, this is ${name}${company ? ` from ${company}` : ""}. How are you doing today?`;
+}
+
 export function voiceIdentity(
   config: Pick<TestConfig, "script" | "instructions"> & { name?: string },
 ) {

@@ -10,11 +10,13 @@ type Mapping={connection_id:string;agent_id:string;agent_name:string;agent_avata
 type Cached={failed?:boolean;until:number;pending?:Promise<VisibleCall|null>;value?:VisibleCall|null};
 const shared=globalThis as typeof globalThis&{nativeLiveCache?:Map<string,Cached>};
 const cache=shared.nativeLiveCache ||= new Map<string,Cached>();
+const mappingKey = (row: Mapping) => createHash("sha256").update(JSON.stringify(row)).digest("hex");
+const refreshes = new Map<string, Promise<void>>();
 /** Request only the exact account-owned configured remote user. No lead HTML or dialer writes. */
 async function observe(row:Mapping):Promise<VisibleCall|null>{
- const key=createHash('sha256').update(JSON.stringify(row)).digest('hex');
+ const key=mappingKey(row);
  const prior=cache.get(key);if(prior?.pending)return prior.pending;if(prior&&prior.until>Date.now())return prior.value||null;
- const entry:Cached={until:0};cache.set(key,entry);
+ const entry:Cached={until:0,value:prior?.value,failed:prior?.failed};cache.set(key,entry);
  entry.pending=(async()=>{try{
   const raw=await vicidialRequest(row.server_url,row.username,decryptCredential(row.secret_ciphertext),{function:'agent_status',agent_user:row.remote_user,stage:'pipe',header:'YES'},false,1500);
   if(/^\s*ERROR:/.test(raw)){entry.failed=!/AGENT NOT (?:LOGGED IN|FOUND)/i.test(raw);return null;}
@@ -33,8 +35,25 @@ export async function withNativeLiveCalls(calls:VisibleCall[],portal:'admin'|'bp
  JOIN agents a ON a.id=line->>'agentId' AND a.deleted_at IS NULL
  JOIN voip_agent_assignments v ON v.agent_id=a.id AND v.connection_id=c.id AND v.owner_id=c.owner_id AND v.direction='OUTBOUND'
  WHERE c.enabled AND c.status='CONNECTED' AND c.live_config->>'enabled'='true' AND ${scope}`,portal==='bpo'?[owner]:[])).rows as Mapping[];
- const observed:VisibleCall[]=[];let next=0;
- await Promise.all(Array.from({length:Math.min(8,rows.length)},async()=>{while(next<rows.length){const item=await observe(rows[next++]);if(item)observed.push(item);}}));
- return {calls:mergeNativeCalls(calls,observed),native_status:{available:!rows.some(row=>cache.get(createHash('sha256').update(JSON.stringify(row)).digest('hex'))?.failed),checked_at:new Date().toISOString()}};
+ const keys = rows.map(mappingKey);
+ const refreshKey = keys.join(":");
+ let refresh = refreshes.get(refreshKey);
+ if (!refresh) {
+   let next = 0;
+   refresh = Promise.all(Array.from({length:Math.min(8,rows.length)}, async () => {
+     while (next < rows.length) await observe(rows[next++]);
+   })).then(() => {}).finally(() => refreshes.delete(refreshKey));
+   refreshes.set(refreshKey, refresh);
+ }
+ // Slow native enrichment must not hold back already-connected Shahvex calls.
+ let timer: ReturnType<typeof setTimeout> | undefined;
+ await Promise.race([refresh, new Promise<void>(resolve => { timer = setTimeout(resolve, 250); })])
+   .finally(() => clearTimeout(timer));
+ const observed = keys.flatMap(key => {
+   const value = cache.get(key)?.value;
+   return value ? [value] : [];
+ });
+ return {calls:mergeNativeCalls(calls,observed),native_status:{available:!keys.some(key=>cache.get(key)?.failed),checked_at:new Date().toISOString()}};
+
  }catch{return {calls,native_status:{available:false,checked_at:new Date().toISOString()}};}
 }

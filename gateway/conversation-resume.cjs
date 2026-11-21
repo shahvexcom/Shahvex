@@ -66,11 +66,26 @@ function repairInstruction(repair) {
   return 'The customer has not answered the pending question. This recovery rule overrides anti-repetition constraints for this unfinished step only. Ask that SAME question again, a little shorter and in natural different wording. Keep all names, alternatives, numbers and qualifying conditions. Do not add a presence check, introduction, purpose, new question or assumed answer. Output just one question. Source question: ' + JSON.stringify(repair.source);
 }
 function knownSalutation(history) {
-  // Use only an explicit preference from the customer, never the agent's voice.
-  const preference = history.filter(turn => turn.role === 'user').findLast(turn => /\b(?:call|address) me (?:sir|ma['’]?am|madam)\b/i.test(turn.content));
-  const word = preference?.content.match(/\b(?:call|address) me (sir|ma['’]?am|madam)\b/i)?.[1];
-  if (word) return /^sir$/i.test(word) ? 'Sir, ' : "Ma'am, ";
-  const stated = history.filter(turn => turn.role === 'user').findLast(turn => /\bI(?:'m| am) (?:a )?(?:male|female|man|woman)\b/i.test(turn.content));
-  return stated && /\b(?:female|woman)\b/i.test(stated.content) ? "Ma'am, " : 'Sir, ';
+  for (const turn of [...history].reverse()) {
+    if (turn.role !== 'user') continue;
+    const text = turn.content.replace(/[’]/g, "'");
+    if (/\b(?:don't|do not|never) (?:call|address) me (?:sir|ma'?am|madam)\b/i.test(text)) return '';
+    const preferred = text.match(/\b(?:call|address) me (sir|ma'?am|madam)\b/i)?.[1]?.toLowerCase();
+    if (preferred) return preferred === 'sir' ? 'Sir, ' : preferred === 'madam' ? 'Madam, ' : "Ma'am, ";
+    const stated = text.match(/\bI(?:'m| am) (?:a )?(male|female|man|woman)\b/i)?.[1]?.toLowerCase();
+    if (stated) return stated === 'male' || stated === 'man' ? 'Sir, ' : 'Madam, ';
+  }
+  return '';
 }
-module.exports = { FLOW_REVISION, isListeningSignal, isWellbeingReply, introductionOnly, openingPhase, pendingQuestion, repairTurn, repairInstruction, knownSalutation };
+function applySalutation(text, salutation) {
+  const title = salutation.replace(/, $/, "");
+  return text
+    .replace(/(^|[.!?]\s+)([ \t]*)(?:sir|ma['’]?am|madam),?\s+(?=[A-Z])/gi,
+      (_match, boundary, space) => boundary + space + (title ? title + ", " : ""))
+    .replace(/,\s*(?:sir|ma['’]?am|madam)(?=[,.!?]|$)/gi, title ? ", " + title : "")
+    .replace(/\b(thank you|thanks|yes|no|okay|goodbye|good morning|good afternoon)\s+(?:sir|ma['’]?am|madam)(?=[,.!?]|$)/gi,
+      (_match, courtesy) => courtesy + (title ? ", " + title : ""))
+    .replace(/(^|[.!?]\s+)([ \t]*)(?:sir|ma['’]?am|madam)[,.!?]*\s*$/i,
+      (_match, boundary, space) => boundary + space + (title ? title + "." : ""));
+}
+module.exports = { FLOW_REVISION, isListeningSignal, isWellbeingReply, introductionOnly, openingPhase, pendingQuestion, repairTurn, repairInstruction, knownSalutation, applySalutation };

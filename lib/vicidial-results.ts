@@ -1527,6 +1527,10 @@ export function hasCurrentQualification(call: {
     return hasRequestedHumanHandoff(call.conversation_history || []);
   if (audit.mode === "CUSTOMER_ACCEPTED_HANDOFF")
     return hasTransferConsent(call.conversation_history || []);
+  if (audit.mode === "SCRIPT_ANNOUNCED_HANDOFF") {
+    const last = call.conversation_history?.at(-1);
+    return last?.handoffPlayed === true && Boolean(last.handoffTurnId);
+  }
   const steps = z.array(handoffStepSchema).safeParse(audit.steps),
     checks = z.array(checkSchema).safeParse(audit.stepChecks);
   const source = qualificationSource(call.script_snapshot);
@@ -1761,8 +1765,11 @@ export async function prepareRequestedHumanHandoff(
       note.evidence !== requestEvidence &&
       !customerRequestsHuman(note.evidence),
   );
+  const announcement = history.at(-1);
+  const scriptAnnounced = announcement?.handoffPlayed === true && Boolean(announcement.handoffTurnId) &&
+    !transferConsent(history.slice(0,-1));
   const qualification = {
-    mode: requested ? "CUSTOMER_REQUESTED_HUMAN" : "CUSTOMER_ACCEPTED_HANDOFF",
+    mode: scriptAnnounced ? "SCRIPT_ANNOUNCED_HANDOFF" : requested ? "CUSTOMER_REQUESTED_HUMAN" : "CUSTOMER_ACCEPTED_HANDOFF",
     goalAchieved: false,
     handoffReady: true,
     historyHash: conversationHash(history),
@@ -2302,7 +2309,8 @@ export async function transferVicidialCall(callId: string) {
       (call.transfer_status === "FAILED" && call.conversation_history?.at(-1)?.handoffPlayed === true) ||
       !hasTransferConsent(call.conversation_history || []) ||
       (call.vicidial_sync_status !== "SYNCED" &&
-        !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF"].includes(
+        call.conversation_history?.at(-1)?.handoffPlayed !== true &&
+        !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF", "SCRIPT_ANNOUNCED_HANDOFF"].includes(
           call.qualification?.mode,
         )) ||
       ["PREPARING", "SUBMITTED", "UNCERTAIN", "ANSWERED"].includes(
@@ -2331,7 +2339,7 @@ export async function transferVicidialCall(callId: string) {
     const saved = call.script_snapshot || {},
       settings = campaignSettings.parse(saved.campaignSettings || {});
     if (
-      !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF"].includes(
+      !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF", "SCRIPT_ANNOUNCED_HANDOFF"].includes(
         call.qualification?.mode,
       ) &&
       settings.requiredLeadFields.some(field => !requiredHandoffFieldPresent(call, field))
@@ -2400,21 +2408,15 @@ export async function transferVicidialCall(callId: string) {
       "UPDATE agent_calls SET transfer_status='SUBMITTED',conversation_state='TRANSFERRING',updated_at=NOW() WHERE id=$1 AND transfer_status='UNCERTAIN'",
       [callId],
     );
-    await pool.query(
-      "UPDATE ai_transfer_attempts SET state='SUBMITTED',updated_at=NOW() WHERE call_id=$1 AND state='UNCERTAIN'",
-      [callId],
-    );
     // The native transfer owns the customer now; detach only the AI audio leg.
-    try {
-      await requestBridge(
-        live.bridgeUrl,
-        decryptCredential(call.bridge_secret_ciphertext),
-        "/command",
-        { callId, action: "detach-ai" },
-      );
-    } catch {
-      /* Signed bridge retry-sync also detaches on transferSubmitted. */
-    }
+    await Promise.allSettled([
+      requestBridge(live.bridgeUrl, decryptCredential(call.bridge_secret_ciphertext),
+        "/command", { callId, action: "detach-ai" }),
+      pool.query(
+        "UPDATE ai_transfer_attempts SET state='SUBMITTED',updated_at=NOW() WHERE call_id=$1 AND state='UNCERTAIN'",
+        [callId],
+      ),
+    ]);
     return { submitted: true };
   } catch (error) {
     // A request that may have reached VICIdial is never retried automatically.

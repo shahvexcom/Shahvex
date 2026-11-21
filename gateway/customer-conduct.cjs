@@ -21,6 +21,16 @@ function explicitlyEndsCall(customer) {
   return /^(?:stop|no thanks|no thank you|(?:i(?:'m| am) )?not interested)[.! ]*$/i.test(text)
     || /\b(?:stop calling(?: me)?|don't call(?: me)?(?: again)?|do not call(?: me)?(?: again)?|remove (?:me|my number)|leave me alone|end (?:the|this) call|hang[ -]?up(?: now)?|disconnect (?:me|this call)|end this conversation|call band (?:karo|kar do|krdo))\b/i.test(text);
 }
+function confirmsHangup(text) {
+  if (/\b(?:don't|do not|never) (?:hang[ -]?up|end|disconnect|cut)\b/i.test(text)) return false;
+  const reply = text.replace(/[,!.?]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(?:(?:yes|yeah|yep|yup|sure|absolutely)(?: please| go ahead)?|please stop|(?:no|nope|nah) (?:please )?(?:just )?stop)$/i.test(reply) ||
+    /^(?:(?:okay|ok|alright|well|thanks|thank you|no thanks|bye)[ ]+)*(?:good[ -]?bye|bye(?: bye)?|see you(?: later)?|take care|have a (?:good|nice) day|i(?:'m| am) (?:leaving|hanging up)|i(?:'ve| have) got to go|i (?:need|have) to go|gotta go|allah hafiz|khuda hafiz)(?: (?:now|then|thanks|thank you|bye|goodbye))*$/i.test(reply) ||
+    /^(?:(?:yes|yeah|ok|okay|no|please|just) )*(?:(?:end|cut|disconnect|close) (?:the |this |my )?(?:phone )?call|hang[ -]?up|hang it up|end it|(?:call )?band (?:kar(?:o| do| dein)|krdo)|(?:end call|hang[ -]?up) (?:karo|kar do|krdo))(?: (?:now|please|karo|kro|kar do|krdo))*$/i.test(reply);
+}
+function declinesHangup(text) {
+  return /^(?:no|nope|nah)(?:[, ]+(?:thanks|thank you))?[.!? ]*$|\b(?:don't|do not) (?:hang[ -]?up|end the call)\b/i.test(normalize(text));
+}
 /**
  * @param {string} customer
  * @param {boolean} warned
@@ -29,11 +39,12 @@ function explicitlyEndsCall(customer) {
 function conductDecision(customer, warned = false, endOfferMade, awaitingEndDecision = endOfferMade) {
   const text = normalize(customer);
   const stopNow = /\b(?:stop calling|don't call|do not call|remove (?:me|my number)|leave me alone|stop immediately)\b/i.test(text);
-  if (endOfferMade === false && explicitlyEndsCall(text) && !stopNow) {
-    return { kind: 'offer', text: "Would you be willing to give me two minutes to explain? We can continue if it makes sense for you, or I can end the call." };
-  }
-  if (endOfferMade === true && (explicitlyEndsCall(text) || awaitingEndDecision && /^(?:no|nope|nah|no thanks|stop|please stop)[.! ]*$/i.test(text))) {
+  if (awaitingEndDecision && declinesHangup(text)) return null;
+  if (awaitingEndDecision && (explicitlyEndsCall(text) || confirmsHangup(text))) {
     return { kind: 'end', reason: 'customer_request', text: '', immediate: true };
+  }
+  if (endOfferMade !== undefined && explicitlyEndsCall(text) && !stopNow) {
+    return { kind: 'offer', text: "Just to confirm, would you like me to end the call now?" };
   }
   if (explicitlyEndsCall(customer)) return { kind: 'end', reason: 'customer_request', text: "Understood. I'll end the call. Goodbye." };
   if (!isHarassment(customer)) return null;
@@ -41,5 +52,5 @@ function conductDecision(customer, warned = false, endOfferMade, awaitingEndDeci
     ? { kind: 'end', reason: 'harassment', text: "The comments have continued, so I'm ending the call now. Goodbye." }
     : { kind: 'warn', text: "I'm here to help with your enquiry. Please keep the conversation respectful." };
 }
-module.exports = { isHarassment, explicitlyEndsCall, conductDecision };
+module.exports = { isHarassment, explicitlyEndsCall, conductDecision, declinesHangup };
 

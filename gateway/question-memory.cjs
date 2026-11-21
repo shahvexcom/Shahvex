@@ -24,6 +24,8 @@ function usable(question,text){
  if(/^(?:I(?:'m| am) (?:still )?here|I(?:'m| am) (?:fine|good|well|great|okay|ok|doing well)|my day|thank(?:s| you))/i.test(t))return false;
  if(/^(?:okay|ok|sure|absolutely|yup|hmm|hm|mm|mhm|mm[- ]?hmm)[.! ]*$/i.test(t))return /^(?:are|is|do|does|have|has|can|could|would|will|may)\b/i.test(question) || qkind==='permission';
  if(contextualAffirmation.test(t))return answersAffirmatively(question,t);
+ if(qkind==='age' && !/^(?:are|were|will|would|is|have)\b/i.test(key(question)) &&
+    /^(?:yes|no|yeah|nope|yep|yup|correct|that['’]s right)[.! ]*$/i.test(t))return false;
  const bare=/^(?:yes|no|yeah|nope|yep|correct)[.! ]*$/i.test(t);
  if(bare)return !/^(?:what|which|how (?:old|many|much)|may I know)/i.test(question);
  if(qkind==='age')return /^(?:(?:um|uh|actually|no|sorry)[, ]+)*(?:(?:I(?:'m| am)|my age is|it(?:'s| is))\s+)?(?:\d{1,3}|(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|and)[ -]*)+)(?:\s+years? old)?[.! ]*$/i.test(t);

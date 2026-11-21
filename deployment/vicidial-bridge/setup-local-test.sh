@@ -17,7 +17,7 @@ fi
 install -d -o asterisk -g asterisk -m 0750 /var/lib/shahvex-vicidial
 install -d /opt/shahvex-vicidial
 install -d /var/lib/asterisk/agi-bin
-for file in manual-test-server.cjs server.cjs ai-recording.cjs; do
+for file in manual-test-server.cjs server.cjs ai-recording.cjs input-speech.cjs; do
   install -m 0644 "$project/deployment/vicidial-bridge/$file" /opt/shahvex-vicidial/
 done
 install -m 0755 "$project/deployment/vicidial-bridge/register-call.py" /var/lib/asterisk/agi-bin/register-call.py

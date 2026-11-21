@@ -414,7 +414,7 @@ type Session = {
   requirePlaybackAck?: boolean;
   introPlaybackComplete?: boolean;
   lastCompletedTurnId?: string;
-  pendingPlayback?: { turnId: string; phase: Session["speechPhase"]; message: Message; question?: string; retry?: Session["failedSpeech"] };
+  pendingPlayback?: { turnId: string; phase: Session["speechPhase"]; message: Message; question?: string; retry?: Session["failedSpeech"]; endOffer?: boolean };
   hearingResume?: { speech: string; phase: Session["speechPhase"]; question?: string };
   failedSpeech?: NonNullable<Session["hearingResume"]>;
   questionOutcomes?: Map<string,string>;

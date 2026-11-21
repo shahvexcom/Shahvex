@@ -51,11 +51,11 @@ function reaffirmsHumanRequest(value, history = []) {
 function affirmativeTransferConsent(value) {
   const text = textOf(value)
     .toLowerCase()
-    .replace(/[,!.]+/g, ' ')
+    .replace(/[,!.?]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/^(?:(?:um|uh)\s+)+/, '');
-  const yes = /^(?:hmm|hm|mm|yes|yeah|yep|yup|uh[- ]?huh|mm[- ]?hmm|mhm|okay|ok|sure|sure thing|alright|all right|absolutely|certainly|of course|sounds good|that's fine|please do|go ahead)(?: (?:please|go ahead|yes|sure|okay|ok))*$/;
+  const yes = /^(?:hmm|hm|mm|yes|yeah|yep|yup|uh[- ]?huh|mm[- ]?hmm|mhm|okay|ok|sure|sure thing|alright|all right|absolutely|certainly|of course|sounds good|great|why not|why nit|that's fine|please do|go ahead)(?: (?:please|go ahead|yes|sure|okay|ok|great|i ?am|i do|i would|why not|why nit))*$/;
   return yes.test(text);
 }
 function customerRequestsHuman(value, history = []) {
@@ -135,6 +135,9 @@ function isTransferOffer(turn) {
       offer,
     )
   );
+}
+function requestedTransferAnnouncement(script) {
+  return configuredTransferAnnouncement(script) || "I'll connect you now.";
 }
 function configuredTransferAnnouncement(script) {
   return String(script || '').split('\n').map(line=>line.trim()).find(line=>
@@ -294,6 +297,7 @@ function handoffExplanationReply(value, history, script = "") {
 }
 module.exports = {
   configuredTransferAnnouncement,
+  requestedTransferAnnouncement,
   configuredTransferOffer,
   requiresTransferAcceptance,
   reaffirmsHumanRequest,

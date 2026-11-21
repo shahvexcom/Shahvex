@@ -17,21 +17,21 @@ test('standalone bridge resolves a configured prefix and retries the same admiss
   const admissions=events.filter(e=>e.action==='connected');assert.equal(admissions.length,2);assert.equal(admissions[0].eventId,admissions[1].eventId);assert(admissions.every(e=>e.audioUuid===uuid&&e.agentUser==='78618'));
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
-test('greeting and listening backchannels stop played audio and reach the shared turn handler',async()=>{
+test('greeting and listening backchannels leave played audio uninterrupted',async()=>{
  for(const signal of ['Hello','Hmm','Yep']){
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-resume-'));let socket,bytes=0,interrupts=0,reply;
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-resume-'));let socket,bytes=0,interrupts=0,reply,probes=0;
   const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'resume-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},fetchImpl:async(_url,init)=>{
    const e=JSON.parse(init.body);
    if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true});
-   if(e.action==='listen')return Response.json({text:signal});
+   if(e.action==='listen'){probes++;return Response.json({text:signal});}
    if(e.action==='interrupt'){interrupts++;return Response.json({interrupted:true});}
    if(e.action==='turn'){if(!e.opening)reply=e.text;return new Response(pcm());}
    return Response.json({saved:true});
   }});
   try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>bytes+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await until(()=>bytes>0);
-   const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);
+   const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);
    socket.write(Buffer.concat([...Array.from({length:20},()=>packet(0x10,voice)),...Array.from({length:30},()=>packet(0x10,Buffer.alloc(320)))]));
-   await until(()=>reply===signal);assert.equal(interrupts,1,signal);
+   await until(()=>probes>=2);await wait(60);assert.equal(reply,undefined,signal);assert.equal(interrupts,0,signal);
   }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
  }
 });
@@ -86,7 +86,7 @@ test('an immediate customer end discards queued audio and closes locally while n
   return Response.json({saved:true});
  }});
  try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>output+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await until(()=>output>0);
-  const closed=new Promise(r=>socket.once('close',r)),voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);
+  const closed=new Promise(r=>socket.once('close',r)),voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);
   socket.write(Buffer.concat([...Array.from({length:20},()=>packet(0x10,voice)),...Array.from({length:30},()=>packet(0x10,Buffer.alloc(320)))]));
   await Promise.race([closed,wait(2000).then(()=>{throw Error('Customer end waited for backend or queued audio');})]);assert.equal(turns,2);assert.equal(hangups,1);
   assert(fs.readdirSync(dir).some(name=>name.endsWith('.event.json')&&JSON.parse(fs.readFileSync(path.join(dir,name))).action==='hangup'));
@@ -114,15 +114,15 @@ test('a legacy incomplete completion label cannot impose an extra 1500ms hold on
  }});
  try{
  await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',()=>{});socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(100);
- const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);
+ const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);
  const phrase=Buffer.concat(Array.from({length:15},()=>packet(0x10,voice)));socket.write(phrase);await until(()=>replies.length===1);assert.equal(replies[0],'I have');socket.write(phrase);
  await until(()=>replies.length===2,3000);assert.equal(replies[1],'I have Medicaid.');assert.equal(probes[1].length,probes[0].length,'independent speech windows are not held and retranscribed together');
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
-test('failed or empty final speech probes retry the original audio turn instead of dropping the caller',async()=>{
+test('failed or empty final speech probes cannot bypass transcript filtering',async()=>{
  for(const mode of ['http','empty']){
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-probe-fallback-'));let socket;const committed=[],logs=[];
- const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'probe-fallback-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:text=>logs.push(text),fetchImpl:async(_url,init)=>{
+ const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'probe-fallback-fixture-'.repeat(4),speech:{debug:true},spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:text=>logs.push(text),fetchImpl:async(_url,init)=>{
  const e=JSON.parse(init.body);
  if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true});
  if(e.action==='listen')return mode==='http'?Response.json({error:'Probe unavailable'},{status:503}):Response.json({text:'',kind:'ignore'});
@@ -131,7 +131,7 @@ test('failed or empty final speech probes retry the original audio turn instead 
  }});
  try{
  await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',()=>{});socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(100);
- const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);socket.write(Buffer.concat(Array.from({length:8},()=>packet(0x10,voice))));await until(()=>committed.length===1,3000);assert.equal(committed[0].readUInt32LE(24),16000);assert(committed[0].length>=44+8*640);assert.equal(socket.destroyed,false);assert(logs.some(text=>text.includes(mode==='http'?'http_503':'empty_transcript')));
+ const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);socket.write(Buffer.concat(Array.from({length:8},()=>packet(0x10,voice))));await until(()=>logs.some(text=>text.includes(mode==='http'?'http_503':'empty_transcript')));assert.equal(committed.length,0);assert.equal(socket.destroyed,false);
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
  }
 });

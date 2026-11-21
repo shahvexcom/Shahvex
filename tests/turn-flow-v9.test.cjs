@@ -7,7 +7,7 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(f,limit=4000){const end=Date.now()+limit;while(!f()){if(Date.now()>end)throw Error('Timed out');await wait(10);}}
 const q1='Are you getting any money back on a card each month?',q2='Do you have Medicare Part A or Part B or Medicaid?',q3='Are you between 60 and 80 years old?';
 const config={name:'Lauren',voice:'v9-fixture',first:'customer',goal:'Discuss coverage review',task:'Ask the configured questions',instructions:'',script:'Hi, this is Lauren from Wellness Team. I am calling to discuss a coverage review.\n'+q1+'\n'+q2+'\n'+q3+'\nLet me connect you with a licensed specialist.',knowledge:'',style:'Natural'};
-function fixture({tts, stt}={}){
+function fixture({tts, stt, confidence}={}){
  const original=global.fetch,secret='v9-fixture-'.repeat(4);let models=0,recognitions=0,id;
  global.fetch=async (url,init)=>{
   if(String(url).includes('11434')){
@@ -16,7 +16,7 @@ function fixture({tts, stt}={}){
    const content=/You know\?/i.test(customer||'')?'':'A licensed specialist reviews the details. '+q2;
    return new Response(JSON.stringify({message:{content},done:true})+'\n');
   }
-  if(String(url).includes('8766')){recognitions++;return Response.json({text:stt?.() ?? 'Hello'});}
+  if(String(url).includes('8766')){recognitions++;return Response.json({text:stt?.() ?? 'Hello',confidence});}
   if (tts) return tts(url,init);
   return new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
  };
@@ -57,28 +57,36 @@ test('agent-first speaks once; identity/health questions resume the interrupted 
  }finally{await f.close();}
 });
 test('final listen does one recognition and no semantic LLM classification',async()=>{
- const f=fixture();try{await f.start();const audio=Buffer.alloc(16044);audio.write('RIFF');audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8);audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22);audio.writeUInt32LE(16000,24);audio.writeUInt32LE(32000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34);audio.write('data',36);audio.writeUInt32LE(16000,40);for(let i=44;i<audio.length;i+=2)audio.writeInt16LE(2200,i);
- const r=await f.dispatch('listen',audio,{'content-type':'audio/wav','x-shahvex-turn-final':'1'});assert.equal(r.status,200);assert.equal((await r.json()).completion,'complete');assert.equal(f.recognitions,1);assert.equal(f.models,0);
+ const f=fixture({confidence:0.72});try{await f.start();const audio=Buffer.alloc(16044);audio.write('RIFF');audio.writeUInt32LE(audio.length-8,4);audio.write('WAVEfmt ',8);audio.writeUInt32LE(16,16);audio.writeUInt16LE(1,20);audio.writeUInt16LE(1,22);audio.writeUInt32LE(16000,24);audio.writeUInt32LE(32000,28);audio.writeUInt16LE(2,32);audio.writeUInt16LE(16,34);audio.write('data',36);audio.writeUInt32LE(16000,40);for(let i=44;i<audio.length;i+=2)audio.writeInt16LE(2200,i);
+ const r=await f.dispatch('listen',audio,{'content-type':'audio/wav','x-shahvex-turn-final':'1'});assert.equal(r.status,200);const heard=await r.json();assert.equal(heard.completion,'complete');assert.equal(heard.confidence,0.72);assert.equal(f.recognitions,1);assert.equal(f.models,0);
  }finally{await f.close();}
 });
 test('native customer-first waits; 350ms boundary uses one STT pass and plays first PCM before synthesis completes',async()=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'v9-stream-'));let socket,release,streamOpen=false,bytes=0,probes=0,opening=0,turns=0,interrupts=0,lastVoice=0,probeAt=0;
+ const latencies=[];
  const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'v9-stream-fixture-'.repeat(4),spoolDir:dir,endOfSpeechMs:1000,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},fetchImpl:async(_u,init)=>{
  const e=JSON.parse(init.body);
  if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),first:'customer',mediaReady:true});
  if(e.action==='interrupt'){interrupts++;return Response.json({interrupted:true});}
- if(e.action==='listen'){probes++;probeAt=Date.now();return Response.json({text:'Hello',completion:'incomplete'});}
+ if(e.action==='listen'){probes++;probeAt=Date.now();return Response.json({text:probes===1?'Hello':'Wait.',completion:'incomplete'});}
  if(e.action==='turn'){
   if(e.opening)opening++;else turns++;
-  return new Response(new ReadableStream({start(controller){streamOpen=true;controller.enqueue(new TextEncoder().encode(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(48000,4).toString('base64')})+'\n'));release=()=>{if(!streamOpen)return;streamOpen=false;try{controller.enqueue(new TextEncoder().encode('{"type":"done","turnId":"v9-stream"}\n'));controller.close();}catch{}};init.signal.addEventListener('abort',release,{once:true});}}));
+  return new Response(new ReadableStream({start(controller){
+   streamOpen=true;
+   const emit=value=>controller.enqueue(new TextEncoder().encode(JSON.stringify({...value,turnId:e.eventId})+'\n'));
+   emit({type:'introduction'});
+   emit({type:'pcm',sampleRate:24000,data:Buffer.alloc(48000,turns===1?4:8).toString('base64')});
+   release=()=>{if(!streamOpen)return;streamOpen=false;try{emit({type:'done'});controller.close();}catch{}};
+   init.signal.addEventListener('abort',release,{once:true});
+  }}));
  }
  return Response.json({saved:true});
  }});
- try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',v=>bytes+=v.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(650);assert.equal(opening,0);assert.equal(bytes,0);
- const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?2400:-2400,i);
+ try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',v=>{bytes+=v.length;if(latencies.length<turns)latencies.push(Date.now()-lastVoice);});socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(650);assert.equal(opening,0);assert.equal(bytes,0);
+ const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);
  const phrase=Buffer.concat(Array.from({length:10},()=>packet(0x10,voice)));socket.write(phrase);await wait(220);socket.write(phrase);lastVoice=Date.now();await until(()=>bytes>0,2200);
  assert.equal(probes,1);assert.equal(turns,1);assert.equal(streamOpen,true,'first audio must not wait for the SSE/TTS stream to close');assert(probeAt-lastVoice<650,'legacy 1-second pause must not delay the boundary');assert(Date.now()-lastVoice<1400,'fixture transport must respond without an artificial multi-second hold');
- socket.write(phrase);await until(()=>turns===2,1600);assert.equal(probes,2);assert.equal(interrupts,1,'a new Hello must interrupt while the previous synthesis stream is still open');
+ lastVoice=Date.now();socket.write(phrase);await until(()=>latencies.length===2,1600);assert.equal(probes,2);assert.equal(interrupts,1,'a priority phrase must interrupt while the previous synthesis stream is still open');console.log('Hello-to-first-PCM loopback ms',latencies);
  }finally{release?.();socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
 
@@ -112,8 +120,8 @@ test('filler-prefixed wellbeing gets Great/address and actual purpose; every bus
  for(const [social,rebate] of [["Uh, I'm good.",'Yes'],['Um, I am good.','No'],["Umm, I'm good, and you?",'Yes']]){
   const f=fixture();try{
    const session=await f.start('customer',{script});const intro=await f.turn({text:'Hello'});assert.match(intro.text,/How are you doing today\?$/);await f.dispatch('playback-complete',{completedTurnId:intro.id});
-   const goal=await f.turn({text:social});assert.match(goal.text,/Sir, I am calling because/);assert.doesNotMatch(goal.text,/money back|Medicare Part|between 60/);
-   if(!/and you/.test(social))assert.match(goal.text,/^Great, Sir,/);
+   const goal=await f.turn({text:social});assert.match(goal.text,/I am calling because/);assert.doesNotMatch(goal.text,/money back|Medicare Part|between 60/);
+   if(!/and you/.test(social))assert.match(goal.text,/^Great,/);
    assert.equal((await f.turn({text:'Yes'})).text,q1);
    assert.equal((await f.turn({text:rebate})).text,q2,'coverage must follow every applicable rebate answer');
    assert.equal((await f.turn({text:'I have Medicaid.'})).text,q3);
@@ -136,7 +144,7 @@ test('shared handler and bridge drain each sentence before delivering purpose or
  const originalTempo=process.env.SHAHVEX_SPEECH_TEMPO;
  if(!realConfig)process.env.SHAHVEX_SPEECH_TEMPO='1';
  const ttsCalls=[], events=[], frames=[];
- let stallProbe=false, stalledProbe=false, spoken='Hello', releasePurpose, openingSecond=false, wellbeingRequests=0, holdOpening=!realConfig, holdPurpose=!realConfig, socket, received=Buffer.alloc(0);
+ let stallProbe=false, stalledProbe=false, spoken='Hello', releaseOpening, releasePurpose, openingSecond=false, wellbeingRequests=0, holdOpening=!realConfig, holdPurpose=!realConfig, socket, received=Buffer.alloc(0);
  const f=fixture({stt:()=>spoken,tts:async(url,init)=>{
   const {text}=JSON.parse(init.body);
   const call={text,bytes:0};ttsCalls.push(call);
@@ -150,6 +158,7 @@ test('shared handler and bridge drain each sentence before delivering purpose or
    const pcm=sourcePcm(520,240);call.bytes=pcm.length;
    return new Response(new ReadableStream({start(controller){
     controller.enqueue(pcm);
+    releaseOpening=()=>controller.close();
     init.signal.addEventListener('abort',()=>controller.error(init.signal.reason),{once:true});
    }}),{headers:pcmHeaders});
   }
@@ -185,7 +194,7 @@ test('shared handler and bridge drain each sentence before delivering purpose or
  const say=async text=>{
   spoken=text;
   socket.write(Buffer.concat([
-   ...Array.from({length:10},()=>packet(0x10,sourcePcm(2400,20).subarray(0,320))),
+   ...Array.from({length:10},()=>packet(0x10,sourcePcm(3000,20).subarray(0,320))),
    ...Array.from({length:19},()=>packet(0x10,Buffer.alloc(320))),
   ]));
   await until(()=>events.some(e=>e.action==='listen'&&!e.seen));
@@ -208,8 +217,10 @@ test('shared handler and bridge drain each sentence before delivering purpose or
   if(!realConfig){
    await until(()=>openingSecond&&frames.some(frame=>frame.readInt16LE(100)===520));
    await say('Hello');
+   await wait(60);
+   assert.equal(events.filter(e=>e.action==='interrupt').length,0);
+   releaseOpening();
    await until(()=>session.introPlaybackComplete);
-   assert.equal(events.filter(e=>e.action==='interrupt').length,1);
    const initial=events.find(e=>e.action==='turn').eventId;
    assert(!events.some(e=>e.action==='playback-complete'&&e.completedTurnId===initial));
   }else{
@@ -224,12 +235,14 @@ test('shared handler and bridge drain each sentence before delivering purpose or
    await f.dispatch('playback-complete',{completedTurnId:intro});
    assert.notEqual(session.purposeDelivered,true);
    // Unrecognized overlap preserves both queued and still-synthesizing audio.
+   const beforeOverlap=events.length;
    await say('');
    await wait(3200);
-   assert(!events.some(e=>e.silenceStep));
-   assert.equal(events.filter(e=>e.action==='interrupt').length,1);
+   assert(!events.slice(beforeOverlap).some(e=>e.silenceStep));
+   assert.equal(events.filter(e=>e.action==='interrupt').length,0);
    await say('Hello');
-   await until(()=>events.filter(e=>e.action==='interrupt').length===2);
+   await wait(60);
+   assert.equal(events.filter(e=>e.action==='interrupt').length,0);
    releasePurpose();
    assert.notEqual(session.purposeDelivered,true);
   }
