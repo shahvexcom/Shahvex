@@ -87,6 +87,11 @@ const message = z
     aiRecordingId: z.string().uuid().optional(),
     recordingSize: z.number().int().min(44).max(1000000044).optional(),
     durationSeconds: z.number().int().min(0).max(86400).optional(),
+    endInitiation: z.object({
+      reason: z.enum(["voicemail_detected", "no_speech_timeout"]),
+      decidedAt: z.string().datetime(),
+      evidence: z.string().max(100),
+    }).strict().optional(),
   })
   .strict();
 const json = (value: unknown, status = 200) =>
@@ -1054,6 +1059,15 @@ export async function vicidialCallback(request: Request) {
     }
     if (!call || v.callId !== call.id)
       return json({ error: "Call not found" }, 404);
+    if (v.endInitiation && (v.action === "hangup" || v.action === "ended")) {
+      await pool.query(
+        `UPDATE agent_calls SET end_initiation=COALESCE(end_initiation,$2::jsonb),
+         ending_requested=CASE WHEN status IN ('INITIATED','RINGING','ANSWERED') AND NOT customer_ended
+                               THEN TRUE ELSE ending_requested END
+         WHERE id=$1 AND COALESCE(transfer_status,'') NOT IN ('PREPARING','SUBMITTED','UNCERTAIN','ANSWERED')`,
+        [call.id, JSON.stringify({ ...v.endInitiation, source: "audio_bridge" })],
+      );
+    }
     const owner = `vici-${call.id}`,
       sessionId = call.voice_session_id;
     if (directUuid) {

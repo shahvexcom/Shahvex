@@ -48,3 +48,5 @@ temp_interactive_push.bat
 
 # Private local voice reference uploads
 /.data/
+
+/.silero-runtime/

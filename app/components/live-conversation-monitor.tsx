@@ -13,11 +13,17 @@ type Turn = { role: string; content: string };
 type Call = {
   telephony_provider?: string; direct_audio_line?: string; id: string; native_only?:boolean; native_connected?:boolean; agent_avatar?: string; agent_name: string; status: string; conversation_state: string;
   recording_serial?: string; recording_active?: boolean; ai_recording_id?: string; ending_requested?: boolean; ai_leg_released?: boolean;
+  end_initiation?: { reason: string };
   conversation_busy: boolean; lead_name: string; lead_number: string;
   vicidial_agent_user: string; external_campaign_id: string; asterisk_uniqueid: string;
   conversation_history: Turn[]; transcript: string;
 };
 const active = (call: Call) => ["INITIATED", "RINGING", "ANSWERED"].includes(call.status);
+
+function guardReason(call: Call) {
+  if (call.end_initiation?.reason === "no_speech_timeout") return "No caller speech detected";
+  if (call.end_initiation?.reason === "voicemail_detected") return "Voicemail detected";
+}
 
 function AgentAvatar({ name, url, large = false, live = false }: {name: string; url?: string; large?: boolean; live?: boolean}) {
   const [failed, setFailed] = useState("");
@@ -164,7 +170,7 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
           <div className="monitor-call-list">
             {loading && !calls.length ? <div className="monitor-list-loading" role="status">Loading conversations…</div> : !visible.length ? <div className="monitor-list-empty"><FiPhoneOff /><strong>{calls.length ? "No matching calls" : "No calls just yet"}</strong><p>{calls.length ? "Try another search or status filter." : "Your live and recently ended calls will appear here."}</p></div> : visible.map(item => <div className="monitor-call-row" key={item.id}><button className="monitor-call" onClick={() => setSelected(item.id)} aria-pressed={call?.id === item.id}>
               <AgentAvatar name={item.agent_name} url={item.agent_avatar} live={active(item)} />
-              <span className="monitor-call-info"><strong>{item.agent_name}</strong><span>{item.lead_name || item.lead_number || "Customer"}</span><small>{item.external_campaign_id || (source === "local" ? "Local test" : "Campaign")}{item.direct_audio_line ? ` · ${item.direct_audio_line}` : ""}</small></span>
+              <span className="monitor-call-info"><strong>{item.agent_name}</strong><span>{item.lead_name || item.lead_number || "Customer"}</span><small>{item.external_campaign_id || (source === "local" ? "Local test" : "Campaign")}{item.direct_audio_line ? ` · ${item.direct_audio_line}` : ""}{guardReason(item) ? ` · ${guardReason(item)}` : ""}</small></span>
               <span className={active(item) ? "monitor-call-state live" : "monitor-call-state"}>{active(item) ? "Live" : "Ended"}</span>
             </button>{active(item) && !item.native_only && <span className="monitor-row-actions"><button className={listening?.id === item.id ? "monitor-row-listen listening" : "monitor-row-listen"} aria-label={`${listening?.id === item.id ? "Stop listening to" : "Listen live to"} ${item.agent_name}`} title={listening?.id === item.id ? "Stop listening" : "Listen live · microphone off"} disabled={item.status !== "ANSWERED" || item.ai_leg_released} onClick={() => toggleListen(item)}>{listening?.id === item.id ? <FiSquare /> : <FiHeadphones />}</button><button className="monitor-row-end" aria-label={`End call for ${item.agent_name}`} title="End this call only" disabled={!!pending || item.ending_requested} onClick={() => void control(item,"hangup")}><FiPhoneOff /></button></span>}</div>)}
           </div>
@@ -174,6 +180,7 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
           {call ? <><header>
             <div className="monitor-conversation-title"><AgentAvatar name={call.agent_name} url={call.agent_avatar} large /><div><h2>{call.agent_name}</h2><p>{call.lead_name || call.lead_number || "Customer conversation"}</p></div><span className={active(call) ? "monitor-session-state live" : "monitor-session-state"}><i />{call.native_only ? "Connected in VICIdial" : call.status === "INITIATED" ? "Connecting" : call.status === "RINGING" ? "Ringing" : active(call) ? "On a call" : "Call ended"}</span></div>
             <div className="monitor-call-meta"><div><small>Campaign</small><strong>{call.external_campaign_id || (source === "local" ? "Local test" : "—")}</strong></div><div><small>Extension</small><strong>{call.direct_audio_line || "—"}</strong></div><div><small>Remote agent</small><strong>{call.vicidial_agent_user || "—"}</strong></div><div><small>Call state</small><strong>{(call.conversation_state || call.status).replaceAll("_"," ").toLowerCase()}</strong></div></div>
+            {guardReason(call) && <p>{guardReason(call)}{active(call) ? " · awaiting hangup confirmation" : ""}</p>}
             <div className="monitor-call-controls" aria-label="Selected call controls">
               {active(call) && !call.ai_leg_released && <button className={listening?.id === call.id ? "monitor-listen-button listening" : "monitor-listen-button"} disabled={call.status !== "ANSWERED"} onClick={() => toggleListen(call)}>{listening?.id === call.id ? <FiSquare /> : <FiHeadphones />}{listening?.id === call.id ? "Stop listening" : "Listen live"}</button>}
               {!call.native_only && <span className={call.recording_active && active(call) ? "monitor-recording active" : "monitor-recording"}><i />{call.recording_active && active(call) ? "Recording" : "Recording stopped"}</span>}

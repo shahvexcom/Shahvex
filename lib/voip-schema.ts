@@ -61,6 +61,7 @@ export async function ensureVoipSchema(client: { query: (sql: string) => Promise
     ADD COLUMN IF NOT EXISTS transfer_consent BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS handoff_ready BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS ai_media_ended_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS end_initiation JSONB,
     ADD COLUMN IF NOT EXISTS ai_recording_id TEXT,
     ADD COLUMN IF NOT EXISTS vicidial_recording_url TEXT NOT NULL DEFAULT ''`);
   await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_calls_vicidial_id_idx
