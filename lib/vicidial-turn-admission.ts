@@ -20,6 +20,7 @@ export const turnAdmissionSql = `WITH verified_connection AS (
  qualification='{}'::jsonb,updated_at=NOW()
  FROM claimed WHERE a.id=(SELECT id FROM candidate) AND a.status='ANSWERED'
  AND COALESCE(a.transfer_status,'') NOT IN ('PREPARING','UNCERTAIN','SUBMITTED','ANSWERED')
+ AND a.conversation_history->-1->>'handoffTurnId' IS NULL
  AND a.ai_leg_released=FALSE AND a.conversation_busy=FALSE RETURNING a.id,a.status,a.transfer_status,a.voice_session_id,a.vicidial_call_id,a.conversation_history
 )
  SELECT (SELECT row_to_json(leased) FROM leased) AS admitted_call,

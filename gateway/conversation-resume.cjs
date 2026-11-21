@@ -1,6 +1,6 @@
 'use strict';
 const { rememberQuestions } = require('./question-memory.cjs');
-const FLOW_REVISION = 'REC585-595-hearing-recovery-v2';
+const FLOW_REVISION = 'script-handoff-playback-v1';
 const { mainQuestions } = require('./conversation-flow.cjs');
 
 // A short listening signal is not an answer to an interrupted business question.

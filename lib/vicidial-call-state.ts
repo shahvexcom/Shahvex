@@ -18,6 +18,6 @@ export async function observeNativeCustomer(call:any,connection:any,key:string){
  };
  const first=await read();if(first.state!=='ended')return {linked:true,customerEnded:false};
  const second=await read();if(second.state!=='ended'||second.signature!==first.signature)return {linked:true,customerEnded:false};
- const result=await(await db()).query(`UPDATE agent_calls SET customer_ended=TRUE,updated_at=NOW() WHERE id=$1 AND voip_connection_id=$2 AND vicidial_call_id=$3 AND status IN ('INITIATED','RINGING','ANSWERED') AND COALESCE(transfer_status,'') NOT IN ('PREPARING','SUBMITTED','UNCERTAIN','ANSWERED') RETURNING id`,[call.id,connection.id,call.vicidial_call_id]);
+ const result=await(await db()).query(`UPDATE agent_calls SET customer_ended=TRUE,ended_at=COALESCE(ended_at,NOW()),updated_at=NOW() WHERE id=$1 AND voip_connection_id=$2 AND vicidial_call_id=$3 AND status IN ('INITIATED','RINGING','ANSWERED') AND COALESCE(transfer_status,'') NOT IN ('PREPARING','SUBMITTED','UNCERTAIN','ANSWERED') RETURNING id`,[call.id,connection.id,call.vicidial_call_id]);
  return {linked:true,customerEnded:result.rowCount===1};
 }

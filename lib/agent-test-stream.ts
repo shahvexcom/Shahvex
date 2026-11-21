@@ -8,15 +8,7 @@ import { createSpeechRenderer } from "../gateway/speech-text.cjs";
 import { speechBoundary } from "../gateway/speech-boundary.cjs";
 import { createEmotionSelector, expressionCapabilityReply, identityVoiceReply } from "../gateway/voice-emotion.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
-type Options = { answerOnly?: boolean; requirePurpose?: boolean; responsePrefix?: string; allowRephrase?: boolean; openingAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
-
-function sentenceBoundary(text: string) {
-  for (const match of text.matchAll(/[.!?](?:["')\]]*)(?=\s|$)/g)) {
-    const at = match.index! + match[0].length;
-    if (!/(?:\b(?:Mr|Mrs|Ms|Dr|Prof|e\.g|i\.e)|\b[A-Z])\.$/.test(text.slice(0, at))) return at;
-  }
-  return 0;
-}
+type Options = { allowQuestion?: (speech: string) => boolean; answerOnly?: boolean; requirePurpose?: boolean; responsePrefix?: string; allowRephrase?: boolean; openingAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
 
 // Runtime status is never model-authored dialogue, even when copied from history.
 function withoutInterruptionMarkers(text: string) {
@@ -43,7 +35,12 @@ function purposeStatement(text: string) {
 }
 
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
-export async function streamAgentReply({ answerOnly = false, requirePurpose = false, responsePrefix, allowRephrase = false, messages, voice, signal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
+export async function streamAgentReply({ allowQuestion, answerOnly = false, requirePurpose = false, responsePrefix, allowRephrase = false, messages, voice, signal: turnSignal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
+  const speechAbort = new AbortController();
+  const signal = AbortSignal.any([turnSignal, speechAbort.signal]);
+  const questionAllowed = (speech: string) => !allowQuestion ||
+    (!speech.includes("?") && !/^\s*(?:(?:please|and|so|now)[, ]+)*(?:tell me|give me|share|provide|confirm|what|which|where|when|who|how|do you|are you|have you|can you|could you|would you)\b/i.test(speech)) ||
+    allowQuestion(speech);
   const audioCache = openingAudio ? openingPcmCache : pcmCache;
   if (openingAudio) cacheAudio = true;
   // Inspect complete questions before either transcript or audio is emitted.
@@ -130,7 +127,7 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
           break;
         }
       }
-    } catch (error) { failure = error; notify(); }
+    } catch (error) { failure = error; speechAbort.abort(error); notify(); }
   })();
   const enqueue = async (text: string) => {
     let spoken = renderSpeech(text).trim();
@@ -154,7 +151,7 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
       // Start the short introduction as soon as its first sentence is ready.
       let remaining=fixedSpeech;
       let boundary:number;
-      while((boundary=sentenceBoundary(remaining))){await enqueue(remaining.slice(0,boundary));remaining=remaining.slice(boundary).trimStart();}
+      while((boundary=speechBoundary(remaining, false, true))){await enqueue(remaining.slice(0,boundary));remaining=remaining.slice(boundary).trimStart();}
       if(remaining)await enqueue(remaining);
       finished = true; notify(); await worker;
       if (failure) throw failure;
@@ -168,22 +165,28 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
       if (!line.trim()) return;
       signal.throwIfAborted(); if (failure) throw failure;
       const data = JSON.parse(line); if (data.error) throw Error("Ollama inference failed");
+      if (done) throw Error("Unexpected data after Ollama completion");
+      if (data.message?.tool_calls?.length) throw Error("Unexpected tool call in spoken response");
+      if (data.done && data.done_reason === "length") throw Error("Ollama stopped before completing the answer");
       const delta = data.message?.content || "";
       if (typeof delta !== "string") throw Error("Invalid Ollama text");
       if (delta) {
         if (firstToken) { firstToken = false; await timing("llm-first-token"); }
         phrase += delta;
+        if (/<\/?(?:think|analysis|tool(?:_call)?|function)(?=[\s>/]|$)|```|^\s*(?:\{|\[\s*["{])/i.test(phrase)) {
+          throw Error("Unexpected structured content in spoken response");
+        }
         if (answer.length + phrase.length > 64000) throw Error("Response exceeds session safety limit; ask for the remaining detail in a follow-up");
         let boundary: number;
         // Hold questions until complete so split tokens cannot leak into text or audio.
         const phraseAllowed = () => maxStatementSentences===undefined && !(messages as {role:string}[]).some(m=>m.role==='assistant') && !completedQuestions.length && !repeatedIntroduction(phrase) && phraseStreaming && !/^\s*(?:got it\b|thank(?:s| you)\b)/i.test(phrase) && !/^\s*(?:is|are|do|would|will|can|could|may|have)\b/i.test(phrase);
-        while ((boundary = phraseAllowed() ? speechBoundary(phrase, true) : sentenceBoundary(phrase))) {
+        while ((boundary = phraseAllowed() ? speechBoundary(phrase, true) : speechBoundary(phrase))) {
           let part = firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase.slice(0, boundary))),customerText));
           phrase = phrase.slice(boundary);
           if(answerOnly&&part.includes("?"))continue;
           if (isTransferOffer({role:"assistant",content:part}) && handoffSpokenInTurn) continue;
           if (requirePurpose && !answer.trim() && !purposeStatement(part)) continue;
-          if (!part.trim() || outbound && rejectedSpeech(part) || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part)) continue;
+          if (!part.trim() || outbound && rejectedSpeech(part) || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part) || !questionAllowed(part)) continue;
           if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(part.trim())){fillerPrefix=part;continue;}
           if(fillerPrefix){part=fillerPrefix+' '+part.trimStart();fillerPrefix='';}
           if (!answer && responsePrefix) part = responsePrefix + part.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
@@ -194,7 +197,6 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
         }
       }
       if (data.done) {
-        if (data.done_reason === "length") throw Error("Ollama stopped before completing the answer");
         done = true; await timing("llm-completed", { characters: answer.length });
       }
     };
@@ -205,7 +207,7 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
     phrase = firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText));
     if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(phrase.trim())){fillerPrefix=phrase;phrase='';}
-    if (phrase && !(outbound && rejectedSpeech(phrase)) && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase))) {
+    if (phrase && !(outbound && rejectedSpeech(phrase)) && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase)) && questionAllowed(phrase)) {
       if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}
       if (!answer && responsePrefix) phrase = responsePrefix + phrase.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
       answer += phrase; onText(answer);
@@ -217,11 +219,11 @@ export async function streamAgentReply({ answerOnly = false, requirePurpose = fa
     await timing("total-synthesis-completed");
     if (!answer.trim() && !repetitionRetry) {
       const retryMessages=(messages as {role:string;content:string}[]).map((m,i)=>i===0&&m.role==='system'?{...m,content:m.content+"\nYour previous response replayed conversation history or contained only an acknowledgment and was not spoken. Answer ONLY the latest customer message. Do not copy earlier assistant statements or customer dialogue. Give a substantive response to the customer and continue the unresolved script step. Continue from the next applicable unanswered script step, respecting branches and refusals. If no questions remain, close or follow the supported consented handoff. Never re-ask these answered questions: "+JSON.stringify(completedQuestions)}:m);
-      await streamAgentReply({answerOnly,requirePurpose,messages:retryMessages,allowRephrase,responsePrefix,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
+      await streamAgentReply({allowQuestion,answerOnly,requirePurpose,messages:retryMessages,allowRephrase,responsePrefix,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
     } else if (!answer.trim() && repetitionRetry) {
       const recovery = answerOnly ? "" : recoveryReply(messages);
       if (recovery) await streamAgentReply({messages:[],fixedSpeech:recovery,voice,signal,engine,send,timing,onText,customerText,emotionState,phraseStreaming,cacheAudio});
     }
-  } finally { finished = true; queue.length = 0; notify(); await worker; signal.removeEventListener("abort", abort); }
+  } finally { speechAbort.abort(); finished = true; queue.length = 0; notify(); await worker; signal.removeEventListener("abort", abort); }
 }
 

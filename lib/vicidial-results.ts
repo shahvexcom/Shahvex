@@ -1240,7 +1240,7 @@ import { vicidialRequest, requireVicidialSuccess } from "./vicidial";
 import { setRuntimeState } from "./agent-runtime";
 import { requestBridge } from "./vicidial-bridge";
 import { vicidialLiveConfig } from "./vicidial-config";
-type Turn = { role: string; content: string; conversationOnly?: boolean; businessResponse?: string };
+type Turn = { role: string; content: string; conversationOnly?: boolean; businessResponse?: string; handoffTurnId?: string; handoffPlayed?: boolean };
 const handoffStepSchema = z
   .object({
     id: z.string().min(1).max(60),
@@ -1659,10 +1659,10 @@ export function explicitlyRequestsHuman(history: Turn[]) {
   );
 }
 export function hasTransferConsent(history: Turn[]) {
-  return transferConsent(history);
+  return transferConsent(history) || history.at(-1)?.handoffPlayed === true;
 }
 /** An explicit human request is a separate handoff path, never proof of qualification. */
-export function hasRequestedHumanHandoff(history: Turn[]) {
+export function hasRequestedHumanHandoff(history: Turn[], includeAcceptedOffer = true) {
   let requested = false;
   const prefix: Turn[] = [];
   for (const turn of history) {
@@ -1677,7 +1677,7 @@ export function hasRequestedHumanHandoff(history: Turn[]) {
       preceding?.role === "assistant" &&
       isTransferOffer(preceding) &&
       affirmativeTransferConsent(turn.content);
-    if (acceptedOffer || explicitlyRequestsHuman(prefix)) {
+    if ((includeAcceptedOffer && acceptedOffer) || explicitlyRequestsHuman(prefix)) {
       requested = true;
     }
   }
@@ -1749,7 +1749,7 @@ export async function prepareRequestedHumanHandoff(
   if (!hasTransferConsent(history))
     throw Error("No current customer consent for a human handoff");
   const fields = partialHandoffFields(history);
-  const requested = hasRequestedHumanHandoff(history);
+  const requested = hasRequestedHumanHandoff(history, false);
   const requestEvidence =
     history.findLast(
       (t) =>
@@ -2256,6 +2256,29 @@ export async function retryVicidialSyncJobs(connectionId: string) {
     }
   return jobs.rows.length;
 }
+function requiredHandoffFieldPresent(call: {
+  collected_fields?: Record<string, {value?: string}>;
+  conversation_history?: Turn[];
+  qualification?: {steps?: unknown; stepChecks?: unknown};
+}, field: string) {
+  const wanted = normalizeSpoken(field);
+  if (Object.entries(call.collected_fields || {}).some(([name, entry]) =>
+    normalizeSpoken(name).replaceAll(" ","") === wanted.replaceAll(" ","") && entry.value?.trim())) return true;
+  const history = call.conversation_history || [];
+  if (!history.at(-1)?.handoffPlayed) return false;
+  const steps = z.array(handoffStepSchema).safeParse(call.qualification?.steps);
+  const checks = z.array(checkSchema).safeParse(call.qualification?.stepChecks);
+  if (!steps.success || !checks.success) return false;
+  const matches = steps.data.filter(step => step.kind === "customer_answer" &&
+    (normalizeSpoken(step.requirement) === wanted ||
+      (wanted.length >= 20 && normalizeSpoken(step.requirement).startsWith(wanted + " "))));
+  if (matches.length !== 1) return false;
+  const step = matches[0];
+  const check = checks.data.find(item=>item.id===step.id);
+  return Boolean(step.conditional && check?.status === "not_applicable" ||
+    Object.keys(verifiedQuestionFields([step],checks.data,history)).length);
+}
+
 export async function transferVicidialCall(callId: string) {
   const pool = await db(),
     tx = await pool.connect();
@@ -2276,6 +2299,7 @@ export async function transferVicidialCall(callId: string) {
       !call.handoff_ready ||
       !hasCurrentQualification(call) ||
       !call.transfer_consent ||
+      (call.transfer_status === "FAILED" && call.conversation_history?.at(-1)?.handoffPlayed === true) ||
       !hasTransferConsent(call.conversation_history || []) ||
       (call.vicidial_sync_status !== "SYNCED" &&
         !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF"].includes(
@@ -2310,15 +2334,7 @@ export async function transferVicidialCall(callId: string) {
       !["CUSTOMER_REQUESTED_HUMAN", "CUSTOMER_ACCEPTED_HANDOFF"].includes(
         call.qualification?.mode,
       ) &&
-      settings.requiredLeadFields.some(
-        (k) =>
-          !Object.entries(call.collected_fields || {}).some(
-            ([name, field]) =>
-              name.toLowerCase().replace(/[^a-z0-9]/g, "") ===
-                k.toLowerCase().replace(/[^a-z0-9]/g, "") &&
-              Boolean((field as { value?: string }).value?.trim()),
-          ),
-      )
+      settings.requiredLeadFields.some(field => !requiredHandoffFieldPresent(call, field))
     )
       throw Error("Required campaign lead fields are missing");
     if (saved.transferInGroup) live.transferInGroup = saved.transferInGroup;

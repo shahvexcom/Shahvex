@@ -44,10 +44,12 @@ export async function reconcileVicidialQueues(connectionId:string) {
     LEFT JOIN campaign_definitions d ON d.id=x.campaign_id WHERE p.connection_id=$1`,[connectionId])).rows;
   let confirmed=0,failed=0;
   for(const q of rows){
-    const desired=q.ready&&['READY','OFFLINE'].includes(q.runtime_state)&&!q.call_id&&q.connection_enabled&&new Date(q.last_heartbeat_at).getTime()>Date.now()-90000
+    // An occupied native line stays attached to its current customer until cleanup.
+    if(q.call_id)continue;
+    const desired=q.ready&&['READY','OFFLINE'].includes(q.runtime_state)&&q.connection_enabled&&new Date(q.last_heartbeat_at).getTime()>Date.now()-90000
       &&(!q.intake_state||(q.intake_state==='RUNNING'&&q.campaign_enabled&&q.assignment_enabled))&&await queueAgentAllowed(q.agent_id);
     const state=desired?'ACTIVE':'INACTIVE';
-    if(!q.call_id&&['READY','OFFLINE'].includes(q.runtime_state))await pool.query("UPDATE ai_agent_runtime_states SET state=$1 WHERE agent_id=$2 AND call_id IS NULL AND state IN ('READY','OFFLINE')",[desired?'READY':'OFFLINE',q.agent_id]);
+    if(['READY','OFFLINE'].includes(q.runtime_state))await pool.query("UPDATE ai_agent_runtime_states SET state=$1 WHERE agent_id=$2 AND call_id IS NULL AND state IN ('READY','OFFLINE')",[desired?'READY':'OFFLINE',q.agent_id]);
     if(q.manage_remote_agents===false)continue;
     if(q.line_state===state)continue;
     try{

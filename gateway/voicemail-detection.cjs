@@ -115,6 +115,7 @@ function isVoicemailGreeting(value, recent = []) {
       .trim();
   const prompt = clean(context);
   return (
+    /^(?:(?:hi|hello)[,!. ]+)?(?:you(?:'ve| have) reached (?:the )?voice[ -]?mail(?: of| for)?|welcome to (?:the )?voice[ -]?mail)\b/i.test(text) ||
     answeringPrompt(clean(text)) ||
     answeringPrompt(prompt) ||
     /\b(?:at|after) (?:the|a) (?:tone|beep)\b.{0,120}\b(?:record|leave) (?:me |us )?(?:a |your )?(?:voice[ -]?)?message\b/i.test(prompt) ||

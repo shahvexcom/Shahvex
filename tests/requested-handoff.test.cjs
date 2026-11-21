@@ -154,3 +154,162 @@ test('a specialist definition uses the assigned role rather than invented sales 
  assert.match(reply,/professional license/);assert.match(reply,/role here is to review your plan/);assert.doesNotMatch(reply,/don.t sell|certified|refund|eligible/);
 });
 
+
+test('a drained AudioSocket announcement submits one native transfer and suppresses recovery on concurrent calls', async () => {
+ const net=require('node:net'),os=require('node:os');
+ const {createBridge,packet}=require('../deployment/vicidial-bridge/server.cjs');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'handoff-drain-'));
+ const announcement='Let me connect you with a licensed specialist.';
+ const sockets=[], states=new Map(), requests=[];
+ const connection={id:crypto.randomUUID(),enabled:true,bridge_secret_ciphertext:'bridge',secret_ciphertext:'dialer',live_config:{enabled:true}};
+ let callback;
+ const bridge=createBridge({
+  siteUrl:'https://fixture.invalid/',connectionId:connection.id,secret:'handoff-fixture-'.repeat(4),spoolDir:dir,
+  testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},
+  fetchImpl:async (_,init)=>{
+   const event=JSON.parse(init.body);
+   if(event.action==='connected'){
+    const state=[...states.values()].find(item=>!item.admitted);
+    state.admitted=true;state.call.vicidial_call_id=event.externalCallId;
+    return Response.json({callId:state.call.id,first:'ai',mediaReady:true});
+   }
+   const state=states.get(event.callId);
+   if(event.action==='turn'){
+    assert.equal(event.silenceStep,undefined);
+    state.turns++;
+    assert.equal(state.turns,1);
+    state.call.conversation_history.push({...A(announcement),handoffTurnId:event.eventId});
+    const pcm=Buffer.alloc(24000,12).toString('base64');
+    return new Response([{type:'handoff-announcement',turnId:event.eventId},{type:'delta',text:announcement},{type:'pcm',sampleRate:24000,data:pcm},{type:'done',turnId:event.eventId}].map(JSON.stringify).join('\n')+'\n');
+   }
+   if(event.action==='playback-complete'){
+    const result=await callback(new Request('http://localhost/api/telephony/vicidial',{method:'POST',headers:{'x-shahvex-connection':connection.id},body:JSON.stringify(event)}));
+    state.ack=event;
+    return result;
+   }
+   return Response.json({saved:true});
+  }
+ });
+ try{
+  const calls=new Map();
+  const query=async(sql,args=[])=>{
+   if(sql.startsWith('SELECT * FROM voip_connections'))return {rows:[connection]};
+   if(sql.startsWith('SELECT * FROM agent_calls WHERE voip_connection_id'))return {rows:[...calls.values()].filter(call=>call.vicidial_call_id===args[1])};
+   const call=calls.get(args[0]);
+   if(sql.includes('SELECT a.*,c.live_config'))return {rows:[{...call}]};
+   if(sql.startsWith('SELECT transfer_status'))return {rows:[{transfer_status:call.transfer_status}]};
+   if(sql.includes('RETURNING conversation_history')){call.conversation_history=JSON.parse(args[1]);return {rowCount:1,rows:[{conversation_history:call.conversation_history}]};}
+   const state=sql.match(/UPDATE agent_calls SET transfer_status='([A-Z]+)'/)?.[1];
+   if(state&&call)call.transfer_status=state;
+   return {rowCount:1,rows:[]};
+  };
+  const pool={query,connect:async()=>({query,release(){}})};
+  const deps={'./database':{db:async()=>pool},'./credential-crypto':{decryptCredential:v=>v},'./agent-test':{},'./agent-test-speculative':{},'./pc-ai-engine':{},'./vicidial-queue':{},'./vicidial-recording':{},'./bpo-entitlements':{},'./vicidial-handoff':{},
+   './vicidial-config':{vicidialLiveConfig:{parse:v=>({...v})}},'./agent-runtime':{setRuntimeState:async()=>{}},
+   './vicidial-bridge':{verifyBridgeSignature:()=>true,requestBridge:async()=>({accepted:true})},
+   './vicidial':{requireVicidialSuccess:value=>assert.match(value,/SUCCESS:/),vicidialRequest:async(_url,_user,_key,p)=>{
+    const state=[...states.values()].find(item=>item.call.vicidial_agent_user===p.agent_user);
+    if(p.function==='agent_status')return 'status|callerid|lead_id\nINCALL|'+state.call.vicidial_call_id+'|234';
+    assert.equal(p.stage,'INGROUPTRANSFER');
+    assert.ok(state.pcmBytes>=8000,'native request must follow the complete announcement PCM');
+    requests.push(state.call.id);
+    return state.fail ? 'ERROR: simulated rejection' : 'SUCCESS: ra_call_control';
+   }}
+  };
+  const results=load('lib/vicidial-results.ts',deps);
+  callback=load('lib/vicidial-callback.ts',{...deps,'./vicidial-results':{...results,
+   syncVicidialComments:async()=>{},
+   collectVicidialResult:async(id,history)=>{
+    const call=calls.get(id);
+    const question='What is your age?';
+    call.transfer_consent=results.hasTransferConsent(history);call.handoff_ready=true;
+    call.qualification={scriptHash:results.qualificationHash(call.script_snapshot),historyHash:results.conversationHash(history),
+     steps:[{id:'age',kind:'customer_answer',conditional:false,requirement:question}],
+     stepChecks:[{id:'age',status:'complete',agentEvidence:[question],customerEvidence:['67']}]};
+    return {handoffReady:true};
+   }
+  }}).vicidialCallback;
+  await new Promise((resolve,reject)=>bridge.audio.once('error',reject).listen(0,'127.0.0.1',resolve));
+  for(let i=0;i<3;i++){
+   const call={id:crypto.randomUUID(),status:'ANSWERED',handoff_ready:false,transfer_consent:false,transfer_status:'',vicidial_sync_status:'SYNCED',conversation_busy:false,
+    conversation_history:[A('What is your age?'),U('67')],script_snapshot:{script:'What is your age?\n'+announcement,campaignSettings:{requiredLeadFields:['What is your age?']}},
+    live_config:{transferInGroup:'LICENSED',remoteUsers:['9001','9002']},vicidial_lead_id:'234',vicidial_agent_user:String(9001+i),bridge_secret_ciphertext:'bridge',secret_ciphertext:'dialer'};
+   const state={call,turns:0,pcmBytes:0,fail:i===2};states.set(call.id,state);calls.set(call.id,call);
+   const socket=net.connect(bridge.audio.address().port,'127.0.0.1');sockets.push(socket);
+   let buffer=Buffer.alloc(0);
+   socket.on('data',chunk=>{
+    buffer=Buffer.concat([buffer,chunk]);
+    while(buffer.length>=3&&buffer.length>=3+buffer.readUInt16BE(1)){
+     const size=buffer.readUInt16BE(1);if(buffer[0]===0x10)state.pcmBytes+=size;
+     buffer=buffer.subarray(3+size);
+    }
+   });
+   await new Promise((resolve,reject)=>socket.once('connect',resolve).once('error',reject));
+   socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));
+ }
+ const deadline=Date.now()+6000;
+ while((requests.length<3||[...states.values()].some(state=>!state.ack))&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,25));
+ assert.deepEqual(new Set(requests),new Set(states.keys()));
+ for(const state of states.values()){
+  const duplicate={...state.ack,eventId:crypto.randomUUID()};
+  const replay=await callback(new Request('http://localhost/api/telephony/vicidial',{method:'POST',headers:{'x-shahvex-connection':connection.id},body:JSON.stringify(duplicate)}));
+  assert.equal((await replay.json())[state.fail ? "transferFailed" : "transferSubmitted"],true);
+  assert.equal(state.turns,1);
+ }
+ assert.equal(requests.length,3);
+ await new Promise(resolve=>setTimeout(resolve,4200));
+ assert.equal(requests.length,3);
+ assert.ok([...states.values()].every(state=>state.turns===1));
+ } finally {
+  sockets.forEach(socket=>socket.destroy());bridge.close();
+  await new Promise(resolve=>setTimeout(resolve,100));
+  fs.rmSync(dir,{recursive:true,force:true});
+ }
+});
+
+test('native session announces immediately after the real last answer and preserves explicit consent', async () => {
+ const {createTesterService}=require('../gateway/tester-service.cjs');
+ const secret='handoff-worker-fixture-'.repeat(4);
+ const service=createTesterService({secret,testHooks:true,maxSessions:5});
+ const original=global.fetch;
+ const announcement='Let me connect you with a licensed specialist.';
+ const question='What is your age?';
+ const ids=[];
+ global.fetch=async()=>new Response(new Uint8Array(4800).fill(12),{headers:{
+  'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'
+ }});
+ async function start(extra='',afterQuestion=''){
+  const owner='vici-'+crypto.randomUUID();
+  const call=(action,id,body)=>service.dispatch(new Request('http://fixture/tester/'+action,{
+   method:'POST',headers:{'x-shahvex-owner':owner,'x-shahvex-ai-key':secret,'x-shahvex-session':id||'none','x-shahvex-turn':crypto.randomUUID(),'content-type':'application/json'},body:JSON.stringify(body)
+  }));
+  const script="Hi, this is Lauren from Wellness Team. I am calling to review your account.\n"+extra+question+'\n'+afterQuestion+announcement;
+  const {id}=await (await call('start',null,{agentId:crypto.randomUUID(),requirePlaybackAck:true,config:{
+   name:'Lauren',voice:'fixture',first:'ai',script,goal:'Review your account',task:'',instructions:'',knowledge:'',style:'Friendly'
+  }})).json();
+  assert.ok(id);ids.push(()=>call('stop',id,{}));
+  const session=service.sessionStore.get(id);
+  session.purposeDelivered=true;session.purposeAcknowledged=true;
+  if(extra)session.messages.push(A('May I connect you with a licensed specialist?'),U('Mm-hmm.'));
+  session.messages.push(A(question));
+  session.questionLedger=new Map([[require('../gateway/reply-integrity.cjs').questionKey(question),{status:'delivered'}]]);
+  return async(action,body)=>call(action,id,body);
+ }
+ try{
+  for(const permission of ['', 'May I connect you with a licensed specialist?\n']){
+   const call=await start(permission);
+   const response=await call('turn',{text:'67'});
+   const events=(await response.text()).trim().split('\n').map(JSON.parse);
+   assert.equal(events.filter(e=>e.type==='delta').map(e=>e.text).join(''),announcement);
+   assert.equal(events.filter(e=>e.type==='handoff-announcement').length,1);
+   assert.ok(events.some(e=>e.type==='pcm'));
+   for(const text of [{silenceStep:3},{text:'Hello'},{text:'Yep'}]){
+    assert.equal((await call('turn',text)).status,409);
+   }
+  }
+  const refusal=await start('','If refuses: What is your ZIP code?\n');
+  const declined=(await (await refusal('turn',{text:"I'd rather not answer."})).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(declined.filter(e=>e.type==='delta').map(e=>e.text).join(''),'What is your ZIP code?');
+  assert.ok(!declined.some(e=>e.type==='handoff-announcement'));
+ }finally{await Promise.all(ids.map(stop=>stop()));global.fetch=original;}
+});

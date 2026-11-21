@@ -151,7 +151,9 @@ export async function startVicidialAgent(
     );
     const poolId = saved.rows[0].id;
     const existing = await client.query(
-      "SELECT agent_id,remote_user,pool_id FROM vicidial_pool_agents WHERE agent_id=$1 OR pool_id IN (SELECT id FROM vicidial_pools WHERE connection_id=$2)",
+      `SELECT q.agent_id,q.remote_user,q.pool_id,q.ready,p.connection_id,p.owner_id,p.campaign_id
+       FROM vicidial_pool_agents q JOIN vicidial_pools p ON p.id=q.pool_id
+       WHERE q.agent_id=$1 OR p.connection_id=$2`,
       [agentId, c.id],
     );
     const own = existing.rows.find((r) => r.agent_id === agentId);
@@ -182,7 +184,9 @@ export async function startVicidialAgent(
       throw Error(
         "No dedicated VICIdial remote user is available; add another Remote Agent user in VoIP",
       );
-    if (own && own.pool_id !== poolId)
+    const canRefreshIdlePool = own && !own.ready &&
+      own.connection_id === c.id && own.owner_id === c.owner_id && own.campaign_id === c.campaign_id;
+    if (own && own.pool_id !== poolId && !canRefreshIdlePool)
       throw Error(
         "Stop the existing VICIdial queue before changing this agent's campaign or script",
       );
@@ -244,9 +248,17 @@ export async function startVicidialAgent(
       remoteUser,
       campaignId: c.campaign_id,
     });
-    await client.query(
+    const prepared = await client.query(
       `INSERT INTO vicidial_pool_agents(agent_id,pool_id,remote_user,ready,config,dialing_source,max_call_duration_seconds)
-      VALUES($1,$2,$3,TRUE,$4::jsonb,$5,$6) ON CONFLICT(agent_id) DO UPDATE SET ready=TRUE,config=EXCLUDED.config,dialing_source=EXCLUDED.dialing_source,max_call_duration_seconds=EXCLUDED.max_call_duration_seconds,updated_at=NOW()`,
+      VALUES($1,$2,$3,TRUE,$4::jsonb,$5,$6) ON CONFLICT(agent_id) DO UPDATE SET
+        pool_id=EXCLUDED.pool_id,ready=TRUE,config=EXCLUDED.config,dialing_source=EXCLUDED.dialing_source,
+        max_call_duration_seconds=EXCLUDED.max_call_duration_seconds,updated_at=NOW()
+      WHERE vicidial_pool_agents.remote_user=EXCLUDED.remote_user
+        AND (vicidial_pool_agents.pool_id=EXCLUDED.pool_id OR
+          ($7::text IS NOT NULL AND vicidial_pool_agents.pool_id=$7 AND NOT vicidial_pool_agents.ready
+           AND NOT EXISTS (SELECT 1 FROM ai_agent_runtime_states r WHERE r.agent_id=$1 AND r.call_id IS NOT NULL)
+           AND NOT EXISTS (SELECT 1 FROM agent_calls a WHERE a.agent_id=$1 AND a.status IN ('INITIATED','RINGING','ANSWERED'))))
+      RETURNING agent_id`,
       [
         agentId,
         poolId,
@@ -260,8 +272,11 @@ export async function startVicidialAgent(
         }),
         options.dialingSource || "DIRECT",
         options.maxCallDurationSeconds || 0,
+        canRefreshIdlePool ? own.pool_id : null,
       ],
     );
+    if (!prepared.rowCount)
+      throw Error("The agent route changed during preparation; retry from the current campaign");
     if (c.manage_remote_agents !== false) {
       const active = await vicidialRequest(c.server_url, c.username, key, {
         function: "update_remote_agent",

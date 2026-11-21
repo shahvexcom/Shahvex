@@ -22,6 +22,11 @@ export async function vicidialCallCommand(
     )
   ).rows[0];
   if (!a) return null;
+  const hangupInitiation = nativeOnly ? null : JSON.stringify({
+    reason: agentId ? "agent_hangup" : "admin_hangup",
+    source: "website_call_control",
+    decidedAt: new Date().toISOString(),
+  });
   try {
     if (
       a.telephony_provider === "AUDIOSOCKET" &&
@@ -56,8 +61,8 @@ export async function vicidialCallCommand(
       if (result.accepted !== true)
         throw Error("Audio bridge did not confirm call closure");
       await pool.query(
-        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,updated_at=NOW() WHERE id=$1",
-        [id],
+        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,end_initiation=COALESCE(end_initiation,$2::jsonb),updated_at=NOW() WHERE id=$1",
+        [id, hangupInitiation],
       );
       return Response.json({ message: "Closing direct audio call." });
     }
@@ -77,15 +82,16 @@ export async function vicidialCallCommand(
           true,
         );
       // The exact historical caller-code fences a retry from a newer call.
-      if (!/ERROR:.*no active call found/i.test(response)) requireVicidialSuccess(response, "ra_call_control");
+      const nativeAlreadyEnded = /ERROR:.*no active call found/i.test(response);
+      if (!nativeAlreadyEnded) requireVicidialSuccess(response, "ra_call_control");
       if (a.telephony_provider === "AUDIOSOCKET" && !nativeOnly) {
         const live = vicidialLiveConfig.parse(a.live_config);
         const closed = await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),"/command",{callId:id,action:"close-audio"});
         if (closed.accepted !== true) throw Error("Native hangup submitted. AI audio closure is not yet confirmed");
       }
       await pool.query(
-        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,updated_at=NOW() WHERE id=$1",
-        [id],
+        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,end_initiation=COALESCE(end_initiation,$2::jsonb),updated_at=NOW() WHERE id=$1",
+        [id, nativeAlreadyEnded ? null : hangupInitiation],
       );
       return Response.json({
         message: "Ending call; waiting for VICIdial confirmation.",

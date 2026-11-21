@@ -20,7 +20,7 @@ test('linked audio hangup sends native HANGUP for the exact customer and closes 
  const r=await loadControls(call,events).vicidialCallCommand('call','hangup');assert.equal(r.status,200);
  assert(events.some(e=>e.function==='ra_call_control'&&e.stage==='HANGUP'&&e.value==='exact-customer'));
  assert(events.some(e=>e.action==='close-audio'));
- const retry=[];const again=await loadControls({...call,status:'COMPLETED'},retry,'ERROR: no active call found').vicidialCallCommand('call','hangup',undefined,false,true);assert.equal(again.status,200);assert(!retry.some(e=>e.action==='close-audio'));
+ const retry=[];const again=await loadControls({...call,status:'COMPLETED'},retry,'ERROR: no active call found').vicidialCallCommand('call','hangup',undefined,false,true);assert.equal(again.status,409);assert(!retry.some(e=>e.stage==='HANGUP'||e.action==='close-audio'));
 });
 test('the normal tester resumes the saved business question for listening replies after the hangup invitation',async()=>{
  const original=global.fetch;global.fetch=async(url)=>String(url).includes('11434')?new Response(JSON.stringify({message:{content:'Do you own the home?'},done:true})+'\n'):new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});

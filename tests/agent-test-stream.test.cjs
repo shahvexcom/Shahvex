@@ -8,6 +8,8 @@ const mod = { exports: {} }; new Function('require', 'module', 'exports', code)(
 const { streamAgentReply } = mod.exports;
 const pcmHeaders = { 'x-audio-format': 'pcm_s16le', 'x-sample-rate': '24000', 'x-channels': '1' };
 const enc = new TextEncoder();
+// Provide a full second of PCM for fixtures that exercise Lissa's normal playback path.
+const normalPcmFixtureBytes = 48000;
 
 test('split emoji/status tags never reach TTS and marker-only output starts no audio job',async()=>{
   const spoken=[];
@@ -15,7 +17,7 @@ test('split emoji/status tags never reach TTS and marker-only output starts no a
     engine:async(port,path,init)=>{
       if(port===11434)return new Response(['Hello 😊 [inter','rupted] there.',' [interrupted]'].map((text,i)=>JSON.stringify({message:{content:text},done:i===2})).join('\n')+'\n');
       spoken.push(JSON.parse(init.body).text);
-      return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+      return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
     }};
   await streamAgentReply(options);
   assert.deepEqual(spoken,['Hello there.']);
@@ -145,7 +147,7 @@ test('approved expression uses metadata, exactly one existing LLM request and un
  const spoken=[],events=[];let llm=0,answer='';const text='That really made me smile. Thank you for sharing that.';
  await streamAgentReply({messages:[],voice:'lissa',customerText:'Hahaha, that was funny.',emotionState:{turn:0},signal:new AbortController().signal,onText:t=>{answer=t},timing:async()=>{},send:async e=>events.push(e),engine:async(port,_path,init)=>{
   if(port===11434){llm++;return new Response(JSON.stringify({message:{content:text},done:true})+'\n')}
-  spoken.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  spoken.push(JSON.parse(init.body));return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});
  assert.equal(llm,1);assert.equal(answer,text);assert.equal(spoken.filter(x=>x.emotion==='laugh').length,1);assert.equal(spoken[1].emotion,undefined);
  assert.ok(spoken.every(x=>!x.text.includes('[laughter]')));assert.equal(events.filter(x=>x.type==='delta').map(x=>x.text).join(''),text);
@@ -153,19 +155,19 @@ test('approved expression uses metadata, exactly one existing LLM request and un
 test('fixed presence checks and non-Lissa voices keep the original voice request',async(t)=>{
  const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
  for(const voice of ['lissa','af_heart']){
-  const calls=[];await streamAgentReply({messages:[],voice,customerText:'hahaha that was funny',fixedSpeech:'That was funny.',signal:new AbortController().signal,onText:()=>{},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});}});
+  const calls=[];await streamAgentReply({messages:[],voice,customerText:'hahaha that was funny',fixedSpeech:'That was funny.',signal:new AbortController().signal,onText:()=>{},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});}});
   assert.deepEqual(calls,[{text:'That was funny.',voice_id:voice}]);
  }
 });
 test('approved calm reassurance stays metadata-only and uses no additional LLM call',async(t)=>{
  const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
  let llm=0,answer='';const calls=[];const text='I understand. We can take this one step at a time.';
- await streamAgentReply({messages:[],voice:'lissa',customerText:'I feel confused and worried.',emotionState:{turn:0},signal:new AbortController().signal,onText:t=>{answer=t},send:async()=>{},timing:async()=>{},engine:async(port,_path,init)=>{if(port===11434){llm++;return new Response(JSON.stringify({message:{content:text},done:true})+'\n')}calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders})}});
+ await streamAgentReply({messages:[],voice:'lissa',customerText:'I feel confused and worried.',emotionState:{turn:0},signal:new AbortController().signal,onText:t=>{answer=t},send:async()=>{},timing:async()=>{},engine:async(port,_path,init)=>{if(port===11434){llm++;return new Response(JSON.stringify({message:{content:text},done:true})+'\n')}calls.push(JSON.parse(init.body));return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders})}});
  assert.equal(llm,1);assert.equal(answer,text);assert.equal(calls.filter(c=>c.emotion==='reassure').length,1);assert.ok(calls.every(c=>!c.text.includes('[')));
 });
 test('explicit expression demonstration laughs on the fixed answer without an LLM request',async(t)=>{
  const old=process.env.SHAHVEX_LISSA_EMOTIONS;process.env.SHAHVEX_LISSA_EMOTIONS='1';t.after(()=>{if(old===undefined)delete process.env.SHAHVEX_LISSA_EMOTIONS;else process.env.SHAHVEX_LISSA_EMOTIONS=old;});
- const calls=[];let answer='';await streamAgentReply({messages:[],voice:'lissa',customerText:'Do you have expressions?',fixedSpeech:'Yes, I do have expressions.',emotionState:{turn:5,lastTurn:5,total:6},signal:new AbortController().signal,onText:s=>{answer=s},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders})}});
+ const calls=[];let answer='';await streamAgentReply({messages:[],voice:'lissa',customerText:'Do you have expressions?',fixedSpeech:'Yes, I do have expressions.',emotionState:{turn:5,lastTurn:5,total:6},signal:new AbortController().signal,onText:s=>{answer=s},timing:async()=>{},send:async()=>{},engine:async(port,_path,init)=>{assert.equal(port,8767);calls.push(JSON.parse(init.body));return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders})}});
  assert.equal(answer,'Yes, I do have expressions.');assert.deepEqual(calls,[{text:answer,voice_id:'lissa',emotion:'laugh'}]);
 });
 
@@ -176,7 +178,7 @@ test('situational filler words reach cloning TTS unchanged for every selectable 
    engine:async(port,path,init)=>{
     if(port===11434)return new Response(JSON.stringify({message:{content:'Mm-hmm, what time are you usually free?'},done:true})+'\n');
     const body=JSON.parse(init.body);assert.equal(body.voice_id,voice);spoken.push(body.text);
-    return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+    return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
    }});
   assert.deepEqual(spoken,['Mm-hmm, what time are you usually free?']);
  }
@@ -187,7 +189,7 @@ test('split patience filler is removed before transcript and TTS while the actua
   let answer='';const spoken=[],deltas=[];
   await streamAgentReply({phraseStreaming,messages:[],voice:'lissa',signal:new AbortController().signal,onText:t=>{answer=t},send:async e=>{if(e.type==='delta')deltas.push(e.text)},timing:async()=>{},engine:async(port,_path,init)=>{
    if(port===11434)return new Response(['Got it, thank',' you for your patience. ','Do you have Medicare Part A or Part B?'].map((content,i)=>JSON.stringify({message:{content},done:i===2})).join('\n')+'\n');
-   spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+   spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
   }});
   assert.equal(answer.trim(),'Do you have Medicare Part A or Part B?');assert.equal(deltas.join('').trim(),answer.trim());assert.deepEqual(spoken,['Do you have Medicare Part A or Part B?']);
  }
@@ -198,7 +200,7 @@ test('answered questions are removed before text and TTS; the next unanswered qu
  await streamAgentReply({completedQuestions:['Do you have Medicaid?'],messages:[],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async e=>events.push(e),timing:async()=>{},
  engine:async(port,path,init)=>{
   if(port===11434)return new Response(JSON.stringify({message:{content:'Do you currently have Medicaid? What is your age?'},done:true})+'\n');
-  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});
  assert.equal(final.trim(),'What is your age?');assert.deepEqual(spoken,['What is your age?']);
  assert.ok(!events.filter(e=>e.type==='delta').some(e=>/Medicaid/.test(e.text)));
@@ -208,7 +210,7 @@ test('a reply containing only an answered question gets one bounded correction a
  await streamAgentReply({completedQuestions:['Do you have Medicaid?'],messages:[{role:'system',content:'Follow the script.'}],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},
  engine:async(port,path,init)=>{
   if(port===11434){models++;return new Response(JSON.stringify({message:{content:models===1?'Do you have Medicaid?':'What is your age?'},done:true})+'\n');}
-  return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});assert.equal(models,2);assert.equal(final,'What is your age?');
 });
 
@@ -217,7 +219,7 @@ test('repeated self-introduction and paraphrased permission are suppressed after
  await streamAgentReply({completedQuestions:['May I ask you a few questions?'],introducedName:'Alex',messages:[],voice:'lissa',signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},
  engine:async(port,path,init)=>{
   if(port===11434)return new Response(JSON.stringify({message:{content:"I'm Alex from Wellness Team. Would you mind if I ask you a few questions? Do you have Medicare Part A and Part B?"},done:true})+'\n');
-  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});
  assert.equal(final.trim(),'Do you have Medicare Part A and Part B?');assert.equal(spoken.length,1);
 });
@@ -226,7 +228,7 @@ test('outbound goal speech stays short while retaining the actual question and s
  let final='';const spoken=[];
  await streamAgentReply({messages:[],voice:'lissa',maxStatementSentences:3,outbound:true,signal:new AbortController().signal,onText:v=>final=v,send:async()=>{},timing:async()=>{},engine:async(port,path,init)=>{
   if(port===11434)return new Response(JSON.stringify({message:{content:'First purpose sentence. Second purpose sentence. Third purpose sentence. Fourth unnecessary sentence. Fifth unnecessary sentence. How can I assist you today? May I know your exact age?'},done:true})+'\n');
-  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});
  assert.match(final,/May I know your exact age/);assert.doesNotMatch(final,/Fourth|Fifth|assist/);assert.equal(spoken.length,4);
 });
@@ -261,9 +263,49 @@ test('history replay and copied customer answers are blocked before transcript a
  const history=[{role:'system',content:'Answer the customer.'},{role:'assistant',content:"I'm good, thanks! I'm calling about the benefit review."},{role:'user',content:'Yes.'},{role:'assistant',content:'Do you have Part A and B?'},{role:'user',content:'Part A and B.'}];
  await streamAgentReply({messages:history,customerText:'Are you serious?',voice:'lissa',phraseStreaming:true,signal:new AbortController().signal,onText:t=>{full=t;},send:async e=>{events.push(e);},timing:async()=>{},engine:async(port,path,init)=>{
   if(port===11434){calls++;const text=calls===1?"I'm good, thanks! I'm calling about the benefit review. Yes. Part A and B.":'I missed your point. What would you like to ask?';return new Response(JSON.stringify({message:{content:text},done:true})+'\n');}
-  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+  spoken.push(JSON.parse(init.body).text);return new Response(new Uint8Array(normalPcmFixtureBytes).fill(12),{headers:pcmHeaders});
  }});
  assert.equal(calls,2);assert.equal(full,'I missed your point. What would you like to ask?');
  assert.deepEqual(spoken,['I missed your point.','What would you like to ask?']);
  assert.ok(!events.filter(e=>e.type==='delta').some(e=>/Part A|benefit review/.test(e.text)));
+});
+
+test('a first complete sentence emits PCM before model completion and a split decimal stays intact', {timeout:3000}, async () => {
+  const spoken = [], stages = [];
+  let release;
+  const firstPcm = new Promise(resolve => { release = resolve; });
+  const line = (content, done = false) => enc.encode(JSON.stringify({message:{content,thinking:"private reasoning"},done})+'\n');
+  await streamAgentReply({
+    messages:[], voice:'selected', signal:new AbortController().signal, onText:()=>{},
+    timing:async stage=>{stages.push(stage);},
+    send:async event=>{if(event.type==='pcm')release();},
+    engine:async(port,path,init)=>{
+      if(port===11434)return new Response(new ReadableStream({async start(controller){
+        controller.enqueue(line('Here is the current rate. The rate is 3.'));
+        await firstPcm;
+        assert.deepEqual(spoken,['Here is the current rate.']);
+        controller.enqueue(line('50 dollars. Ask at reception',true));
+        controller.close();
+      }}));
+      spoken.push(JSON.parse(init.body).text);
+      return new Response(new Uint8Array(1920).fill(12),{headers:pcmHeaders});
+    }
+  });
+  assert.equal(spoken.length,3);
+  assert.match(spoken[1],/3\.50|three.*fifty/i);
+  assert.equal(spoken[2],'Ask at reception');
+  assert.ok(stages.indexOf('first-pcm-received') < stages.indexOf('llm-completed'));
+});
+
+test('structured model output is rejected before synthesis', async () => {
+  let syntheses = 0;
+  await assert.rejects(streamAgentReply({
+    messages:[], voice:'selected', signal:new AbortController().signal, onText:()=>{},
+    send:async()=>{}, timing:async()=>{},
+    engine:async port=>{
+      if(port!==11434){syntheses++;throw Error('Unexpected synthesis');}
+      return new Response(['<thi','nk>Private reasoning.'].map(content=>JSON.stringify({message:{content}})).join('\n')+'\n');
+    }
+  }), /Unexpected structured content/);
+  assert.equal(syntheses,0);
 });

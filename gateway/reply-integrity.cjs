@@ -25,29 +25,91 @@ function createReplayGuard(messages,customer=''){
  };
 }
 const questionKey=text=>canonical(String(text).match(/\b(?:are you|do you|does your|have you|is your|what (?:is|are)|how (?:old|many|much)|may I know|can you|would you|which\b)[^?\n]*\?/i)?.[0]||text).replace(/\b(?:currently|please)\b/g,'').replace(/\s+/g,' ').trim();
-/** Keep explicit Yes/No branches attached to their preceding question. Unknown is not N/A. */
-function scriptQuestionProgress(script,memory,{includeBranchQuestions=false}={}){
- const entries=[];let anchor=null,condition=null;
- for(const line of String(script||'').split('\n')){
-  if(/^\s*(?:knowledge|FAQs?|restrictions)\s*:?\s*$/i.test(line))break;
-  const branch=line.match(/^\s*if (?:the )?(?:customer |they )?says?\s+(yes|no)\b|^\s*if\s+(yes|no)\b/i);
-  if(branch)condition=anchor?{question:anchor,answer:(branch[1]||branch[2]).toLowerCase()}:null;
-  if(/^\s*(?:whatever|regardless|in (?:either|both) case|always|next step)/i.test(line))condition=null;
-  for(const match of line.matchAll(/\b(?:are you|do you|does your|have you|is your|what (?:is|are)|how (?:old|many|much)|may I know|can you|would you|which\b)[^?\n]*\?/gi)){
-   const question=match[0];if(/^(?:are you today|are you doing|are you feeling)\b/i.test(question))continue;if(/\b(?:how are you|good time|time to talk|connect|transfer|can you hear|are you (?:still )?there)\b/i.test(question))continue;
-   if(!entries.some(e=>questionKey(e.question)===questionKey(question)))entries.push({question,condition});
-   if(!condition)anchor=question;
+const { questionParts, missingQuestion, memoryQuestionKey, answersAffirmatively } = require('./question-memory.cjs');
+const questionPattern = /\b(?:are you|do you|does your|have you|is your|what\b|where\b|when\b|how\b|may I (?:know|have)|can you|could you|would you|will you|which\b)[^?\n]*\?/gi;
+const policyLine = /\b(?:do not|don['’]t|never|must not|avoid|skip)\s+(?:ever\s+)?(?:ask|collect|request|screen for)\b/i;
+const nonSteps = /^(?:knowledge(?: base)?|faqs?|frequently asked questions|restrictions|prohibitions|examples?|explanations?|notes|background|objections|customer questions)\b/i;
+const section = /^(?:conversation flow|tasks?|call (?:flow|script)|script|screening(?: questions)?|qualification(?: questions)?|questions|opening|closing|purpose|steps|instructions|goal)\s*:?$/i;
+
+function prohibited(question, restrictions) {
+ const normalized = questionKey(question);
+ const topics = [
+  [/\b(?:medicare|medicaid|coverage|insurance|part [ab])\b/i, /\b(?:coverage|insurance)\b/i],
+  [/\b(?:age|how old|years old)\b/i, /\bage\b/i],
+  [/\b(?:rebate|refund|money back)\b/i, /\b(?:rebate|refund)\b/i],
+ ];
+ return restrictions.some(rule => {
+  const target = rule.slice(rule.search(policyLine)).replace(policyLine,'').trim();
+  if (/^(?:any|all)\s+(?:screening |business |qualification )?questions\b/i.test(target)) return true;
+  if ([...target.matchAll(questionPattern)].some(match=>questionKey(match[0])===normalized)) return true;
+  if (topics.some(([inQuestion,inRule])=>inQuestion.test(question)&&inRule.test(target))) return true;
+  const words = target.toLowerCase().match(/[a-z0-9]+/g) || [];
+  const subject = words.filter(word=>!/^(?:the|a|an|about|for|of|or|and|any|their|your|whether|if|they|you|have|customer|s|questions?|details?|ever|again)$/.test(word));
+  const questionWords = new Set(normalized.split(' '));
+  return subject.length > 0 && (subject.every(word=>questionWords.has(word)) ||
+    subject.some(word=>/^(?:medicare|medicaid|zip|address|age|rebate|refund)$/.test(word)&&questionWords.has(word)));
+ });
+}
+
+function scriptQuestions(script, instructions = '', knowledge = '') {
+ const lines = String(script || '').split('\n').map(line=>line.trim().replace(/^(?:#{1,6}\s*|[-*•]\s+|\d+[.)]\s*)+/,'').replace(/\*\*/g,''));
+ const restrictions = [...lines,...String(instructions).split('\n')].filter(line=>policyLine.test(line));
+ const reference = String(knowledge).split('\n').map(line=>line.trim().toLowerCase()).filter(line=>line.length>4);
+ const entries = [];
+ let excluded = false, anchor = null, condition = null;
+ for (const line of lines) {
+  if (nonSteps.test(line) && (!line.includes('?') || /:/.test(line))) { excluded = true; continue; }
+  if (section.test(line)) { excluded = false; continue; }
+  if (excluded || reference.includes(line.toLowerCase()) || policyLine.test(line) || /^(?:Q:|A:|customer (?:asks?|says?)\b|if asked\b|for example\b|e\.g\.|such as\b|explain\b|describe\b)/i.test(line)) continue;
+  const branch = line.match(/^if\s+(?:(?:the )?customer says?\s+|they say\s+)?(yes|no|unsure|both|refuses?|declines?)\b/i);
+  if (branch) condition = {question:anchor, answer:/^(?:refus|declin)/i.test(branch[1]) ? 'refused' : branch[1].toLowerCase()};
+  else if (/^(?:whatever|regardless|in (?:either|both) case|always|next step)/i.test(line)) condition = null;
+  else if (/^(?:otherwise|else)\b/i.test(line) && condition?.answer && anchor)
+   condition = {question:anchor, answer:'not:'+condition.answer};
+  else if (/^(?:if|unless|otherwise|else|optional)\b/i.test(line)) condition = {question:anchor, answer:null};
+  const spoken = line.replace(/^(?:if|unless|otherwise|else|optional)\b[^:?,]*[:,]\s*/i,'');
+  for (const match of spoken.matchAll(questionPattern)) {
+   const question = match[0];
+   const prefix = spoken.slice(0,match.index).split(/[.!?]/).at(-1).trim().replace(/["“*]+$/,'').trim();
+   if (prefix && !/^(?:(?:ask|question)(?:\s+(?:the )?customer)?\s*[:,-]?|(?:thank you|thanks|got it|great|perfect|okay|ok|so|and|sir|ma'am)[, ]*|(?:then |now )?ask(?: them)?[: ]*)$/i.test(prefix)) continue;
+   if (/^(?:are you today|are you doing|are you feeling)\b/i.test(question) ||
+       /\b(?:how are you|how is your day|good time|time to talk|connect|transfer|can you hear|are you (?:still )?there)\b/i.test(question)) continue;
+   const id = questionKey(question);
+   if (!entries.some(entry=>entry.id===id && entry.condition?.answer===condition?.answer && entry.condition?.question===condition?.question))
+    entries.push({id,question,condition,parts:questionParts(question), prohibited:prohibited(question,restrictions)});
+   if (!condition) anchor = question;
   }
  }
- return entries.map(entry=>{
-  const answer=memory.completed.find(a=>questionKey(a.question)===questionKey(entry.question));
+ return entries.filter(entry=>!entry.prohibited);
+}
+
+const isRefusal = text => /\b(?:rather not|prefer not|don['’]t (?:want to|wish to) (?:answer|share|say|give)|not (?:sharing|saying)|that['’]s private|I refuse)\b/i.test(text);
+function branchAnswer(question, response) {
+ const text = response?.trim() || '';
+ if (isRefusal(text)) return 'refused';
+ if (/\bboth\b|\bpart a and (?:part )?b\b/i.test(text) && /\bPart A\b.*\bPart B\b/i.test(question)) return 'both';
+ if (/^(?:no|nope)\b|\bI (?:do not|don't) have\b/i.test(text)) return 'no';
+ if (/^(?:yes|yeah|yep|yup|correct)\b/i.test(text) || answersAffirmatively(question,text) ||
+     /^do you have\b/i.test(question) && /^I have\b/i.test(text) ||
+     /\b(?:coverage|medicare|medicaid|part [ab])\b/i.test(question) && /^(?:medicaid|medicare|part [ab])\b/i.test(text)) return 'yes';
+ if (/^(?:unsure|not sure|I don['’]t know)\b/i.test(text)) return 'unsure';
+}
+
+/** Keep branches in script order. An unknown outcome cannot activate a branch. */
+function scriptQuestionProgress(script,memory,{instructions='',knowledge='',outcomes=new Map()}={}){
+ return scriptQuestions(script,instructions,knowledge).map(entry=>{
+  const answer=memory.completed.find(item=>questionKey(item.question)===entry.id);
+  const supplied=memory.parts?.get(memoryQuestionKey(entry.question));
+  /** @type {'required'|'unresolved'|'not_applicable'} */
   let applicability='required';
   if(entry.condition){
-   const parent=memory.completed.find(a=>questionKey(a.question)===questionKey(entry.condition.question));
-   const yesNo=parent?.response.trim().match(/^(yes|yeah|yep|yup|okay|ok|sure|hmm|hm|mm|mhm|mm-hmm|no|nope)\b/i)?.[1];
-   applicability=!yesNo?'unresolved':(!/^(no|nope)$/i.test(yesNo)?'yes':'no')===entry.condition.answer?'required':'not_applicable';
+   const parent=memory.completed.find(item=>questionKey(item.question)===questionKey(entry.condition.question));
+   const outcome=outcomes?.get(questionKey(entry.condition.question)) || (parent && branchAnswer(parent.question,parent.response));
+   applicability=!outcome || !entry.condition.answer ? 'unresolved' : (entry.condition.answer.startsWith('not:') ? outcome!==entry.condition.answer.slice(4) : outcome===entry.condition.answer || entry.condition.answer==='yes' && outcome==='both') ? 'required' : 'not_applicable';
   }
-  return {...entry,applicability:includeBranchQuestions?'required':applicability,status:answer?'answered':'pending'};
+  return {...entry,applicability,status:answer || outcomes?.has(entry.id)?'answered':'pending',
+   speech:missingQuestion(entry.question,entry.parts,supplied),
+   missingParts:entry.parts.filter(part=>!supplied?.has(part.id)).map(part=>part.label)};
  });
 }
 function supportsSimpleScriptFlow(script){
@@ -60,7 +122,7 @@ function nextScriptQuestion(script,memory,customer){
  if(answer?.response!==customer)return;
  const progress=scriptQuestionProgress(script,memory);
  const next=progress.find(q=>q.status==='pending'&&q.applicability!=='not_applicable');
- if(next?.applicability==='required')return next.question;
+ if(next?.applicability==='required')return next.speech;
 }
 function customerFloorReply(text,history=[]){
  const value=String(text||'').trim();
@@ -71,5 +133,11 @@ function customerFloorReply(text,history=[]){
  if(/^(?:(?:so|really|please|just|okay|ok|I(?:'m| am) saying)[, ]+)*(?:(?:just )?tell me (?:one|a) thing|let me ask(?: you)?(?: (?:one|a) (?:thing|question))?|can I ask(?: you)?(?: (?:one|a) (?:thing|question))?)[.!? ]*$/i.test(value))return 'Of course. What would you like to ask?';
  if(/^(?:you (?:don't|do not) understand (?:me|English)|(?:do|don't) you understand (?:me|English))[.!? ]*$/i.test(value))return "I can understand English, but I missed your point. What would you like to ask?";
 }
-module.exports={questionKey,createReplayGuard,scriptQuestionProgress,nextScriptQuestion,customerFloorReply,supportsSimpleScriptFlow};
+function configuredQuestionOutcome(script,instructions,knowledge,question,response) {
+ const outcome=branchAnswer(question,response);
+ if (!['refused','unsure'].includes(outcome)) return;
+ return scriptQuestions(script,instructions,knowledge).some(entry=>
+  questionKey(entry.condition?.question)===questionKey(question) && entry.condition?.answer===outcome) ? outcome : undefined;
+}
+module.exports={configuredQuestionOutcome,scriptQuestions,questionKey,createReplayGuard,scriptQuestionProgress,nextScriptQuestion,customerFloorReply,supportsSimpleScriptFlow};
 

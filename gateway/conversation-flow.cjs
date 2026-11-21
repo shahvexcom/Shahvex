@@ -90,39 +90,10 @@ const key = (s) =>
     .replace(/\s+/g, " ")
     .trim();
 function mainQuestions(script) {
-  let source = String(script || "");
-  const task = source.search(/(?:^|\n)\s*\d*\.?\s*Tasks\s*\n/i);
-  if (task >= 0) source = source.slice(task);
-  source = source.split(
-    /(?:^|\n)\s*\d*\.?\s*(?:Knowledge|FAQs?|Restrictions)\s*\n/i,
-  )[0];
-  const out = [];
-  for (const line of source.split("\n")) {
-    if (
-      /^\s*(?:if (?:yes|no|both|unsure|they|customer)|FAQ|Q:|customer asks|if asked)/i.test(
-        line,
-      )
-    )
-      continue;
-    for (const match of line.matchAll(
-      /\b(?:are you|do you|does your|have you|is your|what (?:is|are)|how (?:old|many|much)|may I know|can you|would you|which\b)[^?\n]*\?/gi,
-    )) {
-      const q = match[0].trim();
-      if (
-        q.length > 500 ||
-        /^(?:are you today|are you doing|are you feeling)\b/i.test(q) ||
-        /\b(?:good time|okay time|time to talk|minute|moment|how are you|connect|transfer|permission|continue reviewing)\b/i.test(
-          q,
-        )
-      )
-        continue;
-      if (!out.some((x) => key(x) === key(q))) out.push(q);
-    }
-  }
-  return out;
+  return require("./reply-integrity.cjs").scriptQuestions(script).filter(entry=>!entry.condition).map(entry=>entry.question);
 }
 // Audio checks precede progression so a greeting cannot consume a script step.
-function audioCheckReply(text, history) {
+function audioCheckReply(text, history, scriptResume) {
   const spoken = history.filter((t) => t.role === "assistant");
   if (!spoken.length) return;
   const check = "Can you hear me clearly?";
@@ -152,7 +123,7 @@ function audioCheckReply(text, history) {
       if (spoken.at(-1).content === repeatedRecovery)
         return "Of course, take your time.";
       // Resume only a pending question, never replay an introduction or sales pitch.
-      const question = rememberQuestions(history).pendingQuestion;
+      const question = arguments.length > 2 ? scriptResume : rememberQuestions(history).pendingQuestion;
       return question
         ? `Thank you. ${question}`
         : "Thank you for letting me know. We can continue when you're ready.";
@@ -169,7 +140,7 @@ function audioCheckReply(text, history) {
   if (isPresenceCheck(text)) return;
   if (spoken.at(-1).content !== check) return;
   if (confirmed) {
-    const question = rememberQuestions(history).pendingQuestion;
+    const question = arguments.length > 2 ? scriptResume : rememberQuestions(history).pendingQuestion;
     return question && !/\bhow are you(?: today| doing)?\?/i.test(question)
       ? question
       : "Yes, I'm here.";

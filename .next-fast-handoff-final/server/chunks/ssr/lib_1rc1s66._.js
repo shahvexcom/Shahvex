@@ -100,6 +100,7 @@ CREATE INDEX IF NOT EXISTS sync_jobs_due_idx ON vicidial_sync_jobs(state,next_at
     ADD COLUMN IF NOT EXISTS transfer_consent BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS handoff_ready BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS ai_media_ended_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS end_initiation JSONB,
     ADD COLUMN IF NOT EXISTS ai_recording_id TEXT,
     ADD COLUMN IF NOT EXISTS vicidial_recording_url TEXT NOT NULL DEFAULT ''`),await a.query(`CREATE UNIQUE INDEX IF NOT EXISTS agent_calls_vicidial_id_idx
     ON agent_calls(voip_connection_id,vicidial_call_id) WHERE vicidial_call_id IS NOT NULL`),await a.query("CREATE UNIQUE INDEX IF NOT EXISTS agent_calls_direct_audio_uuid ON agent_calls(voip_connection_id,direct_audio_uuid) WHERE direct_audio_uuid IS NOT NULL"),await a.query(`CREATE TABLE IF NOT EXISTS vicidial_pools (

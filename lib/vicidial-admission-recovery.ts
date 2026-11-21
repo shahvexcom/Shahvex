@@ -35,9 +35,21 @@ export async function recoverPreviousCallForAdmission(connection:any,line:{agent
   };
   if(!(await oldLegAbsent()))return false;
   const key=decryptCredential(connection.secret_ciphertext);
-  const read=async()=>{const raw=await vicidialRequest(connection.server_url,connection.username,key,{function:'agent_status',agent_user:line.remoteUser,stage:'pipe',header:'YES'},false,2000);if(/^\s*ERROR:/.test(raw))return null;const s=parseVicidialTable(raw)[0],id=s?.call_id||s?.callerid||'';return s?.campaign_id===old.campaign_id&&['READY','INCALL'].includes(s.status)&&/^[-\w]{16,40}$/.test(id)?{id,status:s.status}:null;};
-  const first=await read();if(!first||first.status==='INCALL'&&first.id===old.vicidial_call_id)return false;
-  const second=await read();if(!second||second.id!==first.id||second.status!==first.status)return false;
+  const read = async () => {
+   const raw = await vicidialRequest(connection.server_url, connection.username, key,
+    {function:'agent_status',agent_user:line.remoteUser,stage:'pipe',header:'YES'},false,2000);
+   const rows = parseVicidialTable(raw);
+   if (rows.length !== 1) return null;
+   const row = rows[0];
+   if (row.campaign_id !== old.campaign_id) return null;
+   const id = row.call_id || row.callerid || '';
+   if (row.status === 'READY' && !id && row.lead_id === '0') return 'ready';
+   if (row.status === 'INCALL' && /^[-\w]{16,40}$/.test(id) && id !== old.vicidial_call_id &&
+       /^[1-9]\d*$/.test(row.lead_id)) return `${id}|${row.lead_id}`;
+   return null;
+  };
+  const first = await read();
+  if (!first || first !== await read()) return false;
   if(!(await oldLegAbsent()))return false;
   // Recheck desired intake under the SQL lock too; a concurrent Pause must win.
   const result=await pool.query(confirmedOldCallReleaseSql,[old.id,line.agentId,connection.id,old.vicidial_call_id]);return result.rowCount===1;

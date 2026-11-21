@@ -24,6 +24,29 @@ test('admission recovery requires an absent old AI leg and two stable native rea
  const connection={id:'conn',owner_id:'owner',secret_ciphertext:'key',bridge_secret_ciphertext:'bridge',server_url:'fixture',username:'user'},line={agentId:'mia',remoteUser:'78616'};
  active=true;assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),false);assert.equal(reads,0);active=false;nativeId=oldId;assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),false);assert.equal(updates,0);nativeId=newId;unstable=true;reads=0;assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),false);assert.equal(updates,0);unstable=false;assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),true);assert.equal(updates,1);assert.deepEqual(queries.at(-1).args,['old','mia','conn',oldId]);assert.match(queries.at(-1).sql,/FOR UPDATE OF c,r/);assert.match(queries.at(-1).sql,/x.enabled AND q.ready/);assert.match(queries.at(-1).sql,/UNCERTAIN/);found=false;assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),false);assert.equal(updates,1);
 });
+test('an idle native line can recover an old reservation before the next audio admission', async () => {
+ let reads = 0, updates = 0;
+ let native = 'status|callerid|lead_id|campaign_id\nREADY||0|DIALER';
+ const api = load('lib/vicidial-admission-recovery.ts', {
+  './database': {db: async () => ({query: async sql => {
+   if (sql.startsWith('SELECT')) return {rows:[{id:'old',vicidial_call_id:oldId,campaign_id:'DIALER'}]};
+   updates++;
+   return {rowCount:1};
+  }})},
+  './credential-crypto': {decryptCredential: value => value},
+  './vicidial-bridge': {requestBridge: async () => ({activeCalls:0,streams:[]})},
+  './vicidial': {vicidialRequest: async () => { reads++; return native; }},
+  './campaign-config': table,
+ });
+ const connection = {id:'conn', owner_id:'owner'};
+ const line = {agentId:'mia', remoteUser:'78616'};
+ assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),true);
+ assert.equal(reads,2);
+ assert.equal(updates,1);
+ native += '\nREADY||0|DIALER';
+ assert.equal(await api.recoverPreviousCallForAdmission(connection,line,'bridge'),false);
+ assert.equal(updates,1);
+});
 test('atomic release cannot clear a newer reservation, paused assignment or pending human handoff',{skip:process.env.SHAHVEX_LIVE_TMP_DB_TEST!=='1'},async()=>{
  require('@next/env').loadEnvConfig(process.cwd(),false);const {Client}=require('pg'),db=new Client({connectionString:process.env.DATABASE_URL,ssl:{rejectUnauthorized:false}});await db.connect();const api=load('lib/vicidial-admission-recovery.ts',{'./database':{},'./credential-crypto':{},'./vicidial-bridge':{},'./vicidial':{},'./campaign-config':{}});
  try{await db.query('BEGIN');await db.query(`CREATE TEMP TABLE agent_calls(id text PRIMARY KEY,agent_id text,voip_connection_id text,vicidial_call_id text,status text,transfer_status text,ai_leg_released bool,customer_ended bool,conversation_state text,ai_media_ended_at timestamptz,ended_at timestamptz,conversation_busy bool,recording_active bool,updated_at timestamptz);

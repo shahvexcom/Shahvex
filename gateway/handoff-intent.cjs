@@ -136,6 +136,18 @@ function isTransferOffer(turn) {
     )
   );
 }
+function configuredTransferAnnouncement(script) {
+  return String(script || '').split('\n').map(line=>line.trim()).find(line=>
+    /^(?:let me|I(?:'ll| will| am going to)) (?:connect|transfer) (?:you|your call)\b[^?!]*[.!]?$/i.test(line));
+}
+function configuredTransferOffer(script) {
+  return String(script || '').split('\n').map(line=>line.trim()).find(content=>
+    /^(?:may|can|could|shall|should|would|do)\b[^?]+\?$/i.test(content) && isTransferOffer({role:'assistant',content}));
+}
+function requiresTransferAcceptance(script) {
+  return /\b(?:consent|permission|agrees?|accepts?|opts? in)\b[^.\n]{0,55}\b(?:transfer|handoff|connect)\b|\b(?:transfer|handoff|connect)\b[^.\n]{0,55}\b(?:consent|permission|agrees?|accepts?|opts? in)\b/i.test(script) ||
+    Boolean(configuredTransferOffer(script));
+}
 function handoffDeclineReply(value, history) {
   const text = textOf(value);
   if (
@@ -281,6 +293,9 @@ function handoffExplanationReply(value, history, script = "") {
   return `${wait && history.some((t) => t.role === "assistant" && /\b(?:please wait|hold on)\b/i.test(t.content)) ? "I should have explained before asking you to wait. " : ""}${purpose} Would you like me to connect you?`;
 }
 module.exports = {
+  configuredTransferAnnouncement,
+  configuredTransferOffer,
+  requiresTransferAcceptance,
   reaffirmsHumanRequest,
   handoffWaiting,
   customerRequestsHuman,
