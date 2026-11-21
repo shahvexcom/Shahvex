@@ -18,3 +18,13 @@ body .conversation-monitor .monitor-search input::placeholder{color:#959daa}
 .monitor-call-badges{display:flex;flex-direction:column;align-items:flex-end;gap:4px;align-self:flex-start}
 .monitor-call-badges .monitor-call-state{align-self:auto}
 .monitor-call-state.transfer{color:#955422;background:#fcf0e8}
+
+.monitor-call-badges,
+.monitor-session-state {
+  flex-shrink: 0;
+}
+
+.monitor-conversation-title > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

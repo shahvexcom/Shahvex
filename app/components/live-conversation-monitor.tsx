@@ -13,7 +13,7 @@ type Turn = { role: string; content: string };
 type Call = {
   telephony_provider?: string; direct_audio_line?: string; id: string; native_only?:boolean; native_connected?:boolean; agent_avatar?: string; agent_name: string; status: string; conversation_state: string;
   recording_serial?: string; recording_active?: boolean; ai_recording_id?: string; ending_requested?: boolean; ai_leg_released?: boolean;
-  created_at?: string; ended_at?: string; history_at?: string; transfer_status?: string;
+  created_at?: string; ended_at?: string; ai_media_ended_at?: string; history_at?: string; transfer_status?: string;
   end_initiation?: { reason: string };
   conversation_busy: boolean; lead_name: string; lead_number: string;
   vicidial_agent_user: string; external_campaign_id: string; asterisk_uniqueid: string;
@@ -22,11 +22,13 @@ type Call = {
 const active = (call: Call) => ["INITIATED", "RINGING", "ANSWERED"].includes(call.status);
 
 const transferred = (call: Call) => call.transfer_status === "SUBMITTED" || call.transfer_status === "ANSWERED" || call.conversation_state === "HANDED_OFF";
+const awaitingHangup = (call: Call) => call.ai_leg_released && !transferred(call) && !["PREPARING", "UNCERTAIN"].includes(call.transfer_status || "");
+const hangupConfirmationHint = "Awaiting hangup confirmation";
 const callFilters = { all: "All calls", live: "Live", ended: "Ended", transfer: "Transfer" } as const;
 
 function callStatus(call: Call) {
   if (!active(call)) return call.status === "FAILED" ? "Failed" : "Ended";
-  if (call.ending_requested) return "Ending";
+  if (call.ending_requested || awaitingHangup(call)) return "Ending";
   if (call.transfer_status === "ANSWERED") return "Transferred";
   if (call.transfer_status === "SUBMITTED") return "Transferring";
   if (call.native_only) return "Audio unlinked";
@@ -45,7 +47,7 @@ function outcomeLabel(call: Call) {
     voicemail_detected: "Voicemail detected",
     customer_request: "Customer requested hangup",
     agent_hangup: "Agent requested hangup",
-    admin_hangup: "Admin requested hangup",
+    admin_hangup: "Hangup",
     audio_link_timeout: "Audio link failed",
     media_pipeline_failure: "Media pipeline failed",
     no_speech_timeout: "No speech detected",
@@ -56,7 +58,9 @@ function outcomeLabel(call: Call) {
 
 function elapsed(call: Call, now: number) {
   const start = Date.parse(call.created_at || "");
-  const end = active(call) ? now : Date.parse(call.ended_at || "");
+  const end = active(call) && !awaitingHangup(call)
+    ? now
+    : Date.parse(call.ended_at || call.ai_media_ended_at || "");
   if (!Number.isFinite(start) || !Number.isFinite(end)) return "Unavailable";
   const seconds = Math.max(0, Math.floor((end - start) / 1000));
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
@@ -301,7 +305,7 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
               <AgentAvatar name={item.agent_name} url={item.agent_avatar} live={active(item)} />
               <span className="monitor-call-info"><strong>{item.agent_name}</strong><span>{item.lead_name ? `${item.lead_name} · ` : ""}{item.lead_number || "Unavailable"}</span><small>{item.external_campaign_id || (source === "local" ? "Local test" : "Campaign")}{item.direct_audio_line ? ` · ${item.direct_audio_line}` : ""} · {elapsed(item, now)}{!active(item) && outcomeLabel(item) ? ` · ${outcomeLabel(item)}` : ""}</small></span>
               <span className="monitor-call-badges">
-                <span className={active(item) ? "monitor-call-state live" : "monitor-call-state"}>{callStatus(item)}</span>
+                <span className={active(item) ? "monitor-call-state live" : "monitor-call-state"} title={active(item) && awaitingHangup(item) ? hangupConfirmationHint : undefined}>{callStatus(item)}</span>
                 {!active(item) && transferred(item) && <span className="monitor-call-state transfer">Transfer</span>}
               </span>
             </button>{active(item) && !item.native_only && <span className="monitor-row-actions"><button className={listening?.id === item.id ? "monitor-row-listen listening" : "monitor-row-listen"} aria-label={`${listening?.id === item.id ? "Stop listening to" : "Listen live to"} ${item.agent_name}`} title={listening?.id === item.id ? "Stop listening" : "Listen live · microphone off"} disabled={item.status !== "ANSWERED" || item.ai_leg_released} onClick={() => toggleListen(item)}>{listening?.id === item.id ? <FiSquare /> : <FiHeadphones />}</button><button className="monitor-row-end" aria-label={`End call for ${item.agent_name}`} title="End this call only" disabled={!!pending || item.ending_requested} onClick={() => void control(item,"hangup")}><FiPhoneOff /></button></span>}</div>)}
@@ -314,7 +318,7 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
         </aside>
         <section className="monitor-conversation" aria-label="Conversation">
           {call ? <><header>
-            <div className="monitor-conversation-title"><AgentAvatar name={call.agent_name} url={call.agent_avatar} large /><div><h2>{call.agent_name}</h2><p>{call.lead_name ? `${call.lead_name} · ` : ""}{call.lead_number || "Unavailable"}</p></div><span className={active(call) ? "monitor-session-state live" : "monitor-session-state"}><i />{callStatus(call)}</span></div>
+            <div className="monitor-conversation-title"><AgentAvatar name={call.agent_name} url={call.agent_avatar} large /><div><h2>{call.agent_name}</h2><p>{call.lead_name ? `${call.lead_name} · ` : ""}{call.lead_number || "Unavailable"}</p></div><span className={active(call) ? "monitor-session-state live" : "monitor-session-state"} title={active(call) && awaitingHangup(call) ? hangupConfirmationHint : undefined}><i />{callStatus(call)}</span></div>
             <div className="monitor-call-meta"><div><small>Campaign</small><strong>{call.external_campaign_id || (source === "local" ? "Local test" : "—")}</strong></div><div><small>Extension</small><strong>{call.direct_audio_line || "—"}</strong></div><div><small>Remote agent</small><strong>{call.vicidial_agent_user || "—"}</strong></div><div><small>Call state</small><strong>{(call.conversation_state || call.status).replaceAll("_"," ").toLowerCase()}</strong></div></div>
             <div className="monitor-call-meta"><div><small>Started</small><strong>{callTime(call.created_at)}</strong></div><div><small>Ended</small><strong>{active(call) ? "In progress" : callTime(call.ended_at)}</strong></div><div><small>Duration</small><strong>{elapsed(call, now)}</strong></div></div>
             {outcomeLabel(call) && <p>{call.transfer_status === "ANSWERED" ? outcomeLabel(call) : `Hangup initiated · ${outcomeLabel(call)}`}</p>}

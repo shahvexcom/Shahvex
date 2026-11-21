@@ -37,3 +37,19 @@ test('local controls reject unsigned users, cross-origin actions and calls outsi
  const req=origin=>new Request('http://app/api/admin/live-monitor/local/control',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({id,action:'hangup'})});
  try{assert.equal((await api.localMonitorControl('admin',req('http://app'))).status,401);owner='owner';assert.equal((await api.localMonitorControl('admin',req('http://evil'))).status,403);assert.equal(dbReads,0);global.fetch=async(url)=>{fetches++;assert.equal(url,'http://127.0.0.1:8792/local-monitor');return Response.json({testOnly:true,calls:[{id:crypto.randomUUID()}]});};assert.equal((await api.localMonitorControl('admin',req('http://app'))).status,404);assert.equal(fetches,1);}finally{global.fetch=oldFetch;}
 });
+
+
+test('a finalized local test recording is linked to its ended call', async () => {
+ const {manualCallbacks}=require('../deployment/vicidial-bridge/manual-test-server.cjs');
+ const callbacks=manualCallbacks({
+  agent:{name:'Test',voice:'test',script:'Test recording.',first:'customer'},
+  request:async action=>Response.json(action==='start'?{id:'fixture-session',derivedFromScript:true}:{})
+ });
+ const externalCallId='manual-'+crypto.randomUUID().replaceAll('-','');
+ const send=(action,extra)=>callbacks.dispatch(null,{body:JSON.stringify({action,externalCallId,...extra})});
+ const {callId}=await (await send('connected',{agentUser:'manual-test'})).json();
+ const aiRecordingId=crypto.randomUUID();
+ await send('ended',{callId});
+ assert.equal((await send('recording',{callId,aiRecordingId})).status,200);
+ assert.equal(callbacks.monitor().calls[0].ai_recording_id,aiRecordingId);
+});

@@ -25,7 +25,7 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
   const stop=async c=>{if(!c?.sessionId)return;try{const r=await request('stop',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}'},c.owner);await r.body?.cancel();}catch{/* Shared tester leases also expire abandoned diagnostic sessions. */}};
   async function dispatch(_url,init){
     const v=JSON.parse(Buffer.from(init.body).toString());
-    if(v.action==='maintenance'||v.action==='recording'||v.action==='retry-sync'||v.action==='recover')return json({saved:true,testOnly:true});
+    if(v.action==='maintenance'||v.action==='retry-sync'||v.action==='recover')return json({saved:true,testOnly:true});
     if(v.action==='connected'){
       if(v.agentUser!=='manual-test'||!/^manual-[a-f0-9]{32}$/.test(v.externalCallId))return json({error:'Manual namespace required'},409);
       const prior=[...calls.values()].find(c=>c.externalCallId===v.externalCallId);if(prior)return json({callId:prior.id,first:agent.first,maxCallDurationSeconds:callLimitSeconds,testOnly:true});
@@ -43,7 +43,7 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
       }finally{starting--;}
     }
     const c=calls.get(v.callId)||recent.find(item=>item.id===v.callId);
-    if(!c)return v.action==='ended'?json({saved:true,testOnly:true}):json({error:'Manual session not found'},404);
+    if(!c)return ['ended','recording'].includes(v.action)?json({saved:true,testOnly:true}):json({error:'Manual session not found'},404);
     if(c.externalCallId!==v.externalCallId)return json({error:'Manual session mismatch'},409);
     if(v.action==='recording'){c.ai_recording_id=v.aiRecordingId;c.recording_active=false;return json({saved:true});}
     if(v.action==='media-ready')return json({saved:true,testOnly:true});

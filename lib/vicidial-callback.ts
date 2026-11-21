@@ -157,7 +157,6 @@ export async function vicidialCallback(request: Request) {
   const connectionId = request.headers.get("x-shahvex-connection") || "";
   if (!z.string().uuid().safeParse(connectionId).success)
     return json({ error: "Unauthorized" }, 401);
-  const pool = await db();
   const parts: Uint8Array[] = [];
   let size = 0;
   if (request.body)
@@ -171,6 +170,10 @@ export async function vicidialCallback(request: Request) {
   const parsed = message.safeParse(JSON.parse(bytes.toString()));
   if (!parsed.success) return json({ error: "Invalid event" }, 400);
   const v = parsed.data;
+  const bridgeRecording = v.action === "recording" && v.aiRecordingId;
+  // A call already exists before the bridge can finalize its WAV. Avoid
+  // waiting on unrelated schema setup when the website has just started.
+  const pool = await db({ ensureSchema: !bridgeRecording });
   const cached =
     v.action === "turn" && process.env.SHAHVEX_TURN_CONNECTION_CACHE === "1"
       ? turnConnections.get(connectionId)
@@ -219,6 +222,28 @@ export async function vicidialCallback(request: Request) {
   const live = vicidialLiveConfig.parse(c.live_config);
   if ((!live.enabled || !c.enabled) && v.action === "connected")
     return json({ error: "Live calling disabled" }, 409);
+  // WAVs are finalized on the bridge. Publish their metadata with one
+  // idempotent update, independently of call teardown and event leases.
+  if (bridgeRecording) {
+    if (!v.callId) return json({ error: "Call ID required" }, 400);
+    const recordingId = bridgeRecording;
+    const direct = v.externalCallId.startsWith("direct-");
+    if (direct && v.externalCallId !== "direct-" + recordingId.replaceAll("-", ""))
+      return json({ error: "Recording identity mismatch" }, 409);
+    const url = new URL(`/recordings/${recordingId}.wav`, live.bridgeUrl).href;
+    const linked = await pool.query(
+      `UPDATE agent_calls
+       SET ai_recording_id=$1,recording_id=$1,recording_url=$2,
+           recording_size_bytes=GREATEST(recording_size_bytes,$3),
+           recording_active=FALSE,updated_at=NOW()
+       WHERE id=$4 AND voip_connection_id=$5
+         AND (ai_recording_id IS NULL OR ai_recording_id=$1)
+         AND (CASE WHEN $6::boolean THEN telephony_provider='AUDIOSOCKET' AND direct_audio_uuid=$1
+                   ELSE telephony_provider='VICIDIAL' AND vicidial_call_id=$7 END)`,
+      [recordingId, url, v.recordingSize || 0, v.callId, c.id, direct, v.externalCallId],
+    );
+    return linked.rowCount ? json({ saved: true }) : json({ error: "Call or recording identity mismatch" }, 409);
+  }
   const key = decryptCredential(c.secret_ciphertext);
   // Speech probes are authenticated reads: do not serialize them through the
   // durable mutation ledger or transcript writes while the caller is speaking.
@@ -1494,18 +1519,6 @@ export async function vicidialCallback(request: Request) {
       });
     }
     if (v.action === "recording") {
-      if (v.aiRecordingId) {
-        const url = new URL(
-          `/recordings/${v.aiRecordingId}.wav`,
-          live.bridgeUrl,
-        ).href;
-        await pool.query(
-          "UPDATE agent_calls SET ai_recording_id=$1,recording_id=$1,recording_url=$2,recording_size_bytes=$3,recording_active=FALSE,updated_at=NOW() WHERE id=$4",
-          [v.aiRecordingId, url, v.recordingSize || 0, call.id],
-        );
-        return json({ saved: true });
-      }
-
       if (!v.recordingUrl)
         return json({ error: "Recording URL required" }, 400);
       const url = new URL(v.recordingUrl),
@@ -1542,7 +1555,13 @@ export async function vicidialCallback(request: Request) {
       if (!transferred && v.action !== "customer-ended" && !call.customer_ended &&
           !["COMPLETED", "FAILED"].includes(call.status)) {
         const { observeNativeCustomer } = await import("./vicidial-call-state");
-        await observeNativeCustomer(call, c, key);
+        const native = await observeNativeCustomer(call, c, key);
+        if (v.action === "ended" && native.customerActive) {
+          // The audio socket closed while the exact linked customer was still
+          // connected. Keep the terminal event pending until native confirmation.
+          const { vicidialCallCommand } = await import("./vicidial-controls");
+          await vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
+        }
       }
       cleanupPending = !(await releaseConfirmedAgent(call.id));
       if (stoppingVoice ? !(await stoppingVoice) : false)

@@ -31,7 +31,7 @@ export async function liveCallMonitor(portal: "admin" | "bpo", params: URLSearch
     CASE WHEN c.customer_ended AND c.status IN ('INITIATED','RINGING','ANSWERED') THEN 'COMPLETED' ELSE c.status END status,
     CASE WHEN c.customer_ended AND c.status IN ('INITIATED','RINGING','ANSWERED') THEN 'COMPLETED' ELSE c.conversation_state END conversation_state,c.conversation_busy,c.lead_name,c.lead_number,
     c.vicidial_agent_user,c.external_campaign_id,c.asterisk_uniqueid,
-    c.transfer_status,c.end_initiation,c.customer_ended,c.ending_requested,c.ai_leg_released,c.ai_recording_id,(c.status='ANSWERED' AND NOT c.ai_leg_released AND (c.recording_active OR c.ai_recording_id IS NULL)) recording_active,c.conversation_history,c.transcript,c.created_at,c.updated_at,c.ended_at,
+    c.transfer_status,c.end_initiation,c.customer_ended,c.ending_requested,c.ai_leg_released,c.ai_media_ended_at,c.ai_recording_id,(c.status='ANSWERED' AND NOT c.ai_leg_released AND (c.recording_active OR c.ai_recording_id IS NULL)) recording_active,c.conversation_history,c.transcript,c.created_at,c.updated_at,c.ended_at,
     to_char(c.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') history_at
     FROM agent_calls c JOIN agents a ON a.id=c.agent_id
     WHERE a.deleted_at IS NULL AND c.telephony_provider IN ('VICIDIAL','AUDIOSOCKET') AND ${scope}
