@@ -119,10 +119,15 @@ async function stopCallVoice(call: { id: string; voice_session_id?: string }) {
   }
 }
 
-const statusHeaders = (line: string) =>
-  line
-    .split("|")
-    .map((field) => (field.trim() === "callerid" ? "call_id" : field.trim()));
+function nativeStatusReader(body: string) {
+  const [header, row, ...extra] = body.trim().split(/\r?\n/);
+  const headers = header.replace(/^\uFEFF/, "").split("|").map(field => field.trim().toLowerCase());
+  const values = row?.split("|") || [];
+  const valid = extra.length === 0 && headers.length === values.length &&
+    new Set(headers).size === headers.length;
+  const get = (name: string) => valid ? values[headers.indexOf(name)]?.trim() || "" : "";
+  return (name: string) => get(name) || (name === "call_id" ? get("callerid") : "");
+}
 
 async function startVoice(callId: string, agentId: string, config: TestConfig) {
   const owner = `vici-${callId}`,
@@ -328,7 +333,7 @@ export async function vicidialCallback(request: Request) {
       }
     }
     if (!assigned)
-      return json({ error: "The assigned audio-line agent is not ready" }, 409);
+      return json({ error: "The assigned audio-line agent is not ready", retryable: live.directAudioMode }, 409);
     // Start the existing direct-audio route promptly; native identity is verified before transfer.
     if (live.directAudioMode)
       return json({
@@ -337,40 +342,25 @@ export async function vicidialCallback(request: Request) {
         agentUser: line.remoteUser,
         externalCallId: "direct-" + v.audioUuid.replaceAll("-", ""),
       });
-    // Prefer a verified native customer call, retaining audio-only fallback for direct extension tests.
-    try {
-      const status = await vicidialRequest(c.server_url, c.username, key, {
-        function: "agent_status",
-        agent_user: line.remoteUser,
-        stage: "pipe",
-        header: "YES",
-      });
-      const [head, row] = status.trim().split(/\r?\n/),
-        keys = statusHeaders(head),
-        values = row?.split("|") || [],
-        get = (name: string) => String(values[keys.indexOf(name)] || "").trim();
-      if (
-        get("status") === "INCALL" &&
-        get("campaign_id") === assigned.external_campaign_id &&
-        /^\d+$/.test(get("lead_id")) &&
-        /^[-\w]{16,40}$/.test(get("call_id")) &&
-        !get("call_id").startsWith("manual-")
-      )
-        return json({
-          uuid: v.audioUuid,
-          audioUuid: v.audioUuid,
-          agentUser: line.remoteUser,
-          externalCallId: get("call_id"),
-        });
-    } catch (error) {
-      if (!live.directAudioMode) throw error;
-    }
-    if (live.directAudioMode)
+    const status = await vicidialRequest(c.server_url, c.username, key, {
+      function: "agent_status",
+      agent_user: line.remoteUser,
+      stage: "pipe",
+      header: "YES",
+    });
+    const get = nativeStatusReader(status);
+    if (
+      get("status") === "INCALL" &&
+      get("campaign_id") === assigned.external_campaign_id &&
+      /^[1-9]\d*$/.test(get("lead_id")) &&
+      /^[-\w]{16,40}$/.test(get("call_id")) &&
+      !get("call_id").startsWith("manual-")
+    )
       return json({
         uuid: v.audioUuid,
         audioUuid: v.audioUuid,
         agentUser: line.remoteUser,
-        externalCallId: "direct-" + v.audioUuid.replaceAll("-", ""),
+        externalCallId: get("call_id"),
       });
     return json(
       { error: "VICIdial has not confirmed an active call on this line" },
@@ -840,14 +830,11 @@ export async function vicidialCallback(request: Request) {
         stage: "pipe",
         header: "YES",
       });
-      const lines = status.trim().split(/\r?\n/),
-        headers = statusHeaders(lines[0]),
-        values = lines[1]?.split("|") || [],
-        get = (name: string) => values[headers.indexOf(name)];
+      const get = nativeStatusReader(status);
       if (
         get("call_id") !== v.externalCallId ||
         get("status") !== "INCALL" ||
-        !/^\d+$/.test(get("lead_id") || "")
+        !/^[1-9]\d*$/.test(get("lead_id"))
       )
         return json(
           { error: "VICIdial has not confirmed this answered call" },

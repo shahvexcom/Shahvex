@@ -47,16 +47,17 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
   }
   const retryStates=new Map(),pendingSync=new Map();let backgroundRetryAt=0;
   const terminal=action=>['ended','recover','customer-ended','human-answered','hangup'].includes(action);
+  const timeSensitive=action=>terminal(action)||action==='recording';
   const deferEvent=value=>{const attempts=Math.min(6,(retryStates.get(value.eventId)?.attempts||0)+1);
     if(value.action==='playback-complete'&&attempts>=3&&[...calls.values()].some(call=>call.callId===value.callId&&call.handoffAnnouncement===value.completedTurnId)){
       fs.rmSync(path.join(spoolDir,`${value.eventId}.event.json`),{force:true});retryStates.delete(value.eventId);logger('Handoff playback reconciliation exhausted');return;
-    }const delay=terminal(value.action)?Math.min(10000,1000*2**(attempts-1)):Math.min(60000,10000*2**(attempts-1));retryStates.set(value.eventId,{attempts,next:Date.now()+delay});};
+    }const delay=timeSensitive(value.action)?Math.min(10000,1000*2**(attempts-1)):Math.min(60000,10000*2**(attempts-1));retryStates.set(value.eventId,{attempts,next:Date.now()+delay});};
   const delivering=new Set(),deliveringCalls=new Set();const urgent=action=>['ended','recover','customer-ended','human-answered','hangup','playback-complete'].includes(action);
   const independent=action=>urgent(action)||action==='recording';
   async function deliverEvent(value,file,immediate=false){
-    if((retryStates.get(value.eventId)?.next||0)>Date.now()||!immediate&&!terminal(value.action)&&backgroundRetryAt>Date.now())return;
+    if((retryStates.get(value.eventId)?.next||0)>Date.now()||!immediate&&!timeSensitive(value.action)&&backgroundRetryAt>Date.now())return;
     if(delivering.has(value.eventId)||(!independent(value.action)&&deliveringCalls.has(value.externalCallId)))return;delivering.add(value.eventId);if(!independent(value.action))deliveringCalls.add(value.externalCallId);
-    try{const response=await callback(value,terminal(value.action)?AbortSignal.timeout(8000):undefined);if(response.ok){const result=await response.json();if(!result.syncPending)retryStates.delete(value.eventId);
+    try{const response=await callback(value,timeSensitive(value.action)?AbortSignal.timeout(value.action==='recording'?3000:8000):undefined);if(response.ok){const result=await response.json();if(!result.syncPending)retryStates.delete(value.eventId);
       const active=[...calls.values()].find(c=>c.callId===value.callId&&c.externalCallId===value.externalCallId);
       if(active&&value.action==='retry-sync'){
         active.syncHandoffPending=Boolean(result.transferPending||result.transferUncertain||result.awaitingHuman);
@@ -97,7 +98,7 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
   function event(c,action,extra={},scheduled=false){
     if(action==='retry-sync'){c.syncWanted=true;if(deliveringCalls.has(c.externalCallId)){if(!scheduled)c.syncDirty=true;scheduleSync(c);return;}}
     const value=action==='retry-sync'&&pendingSync.get(c.externalCallId)||{action,eventId:crypto.randomUUID(),externalCallId:c.externalCallId,callId:c.callId,...extra};if(action==='retry-sync')pendingSync.set(c.externalCallId,value);persistEvent(value);
-    if(urgent(action)||action==='retry-sync'){void deliverEvent(value,path.join(spoolDir,`${value.eventId}.event.json`),urgent(action));if(action==='retry-sync')scheduleSync(c);}else void flushEvents();
+    if(independent(action)||action==='retry-sync'){void deliverEvent(value,path.join(spoolDir,`${value.eventId}.event.json`),independent(action));if(action==='retry-sync')scheduleSync(c);}else void flushEvents();
   }
   function finishRecording(c){
     closeListeners(c);
@@ -461,13 +462,16 @@ function createBridge({siteUrl,connectionId,secret,spoolDir,fetchImpl=fetch,logg
       try {
       const admission={action:'connected',eventId:crypto.randomUUID(),externalCallId:metadata.externalCallId,agentUser:metadata.agentUser,...(metadata.audioUuid?{audioUuid:metadata.audioUuid}:{}),...(metadata.asteriskUniqueid?{asteriskUniqueid:metadata.asteriskUniqueid}:{}),...(metadata.asteriskLinkedid?{asteriskLinkedid:metadata.asteriskLinkedid}:{})};
       admissionStage='assignment';
-      let response;
+      let response,data;
       for(let attempt=0;;attempt++){
         try{response=await callback(admission,admissionAbort.signal);}catch(error){if(attempt>=2||closing)throw error;await delay(250*(attempt+1));continue;}
-        if(response.status<500&&response.status!==429||attempt>=2||closing)break;
-        await response.body?.cancel();await delay(250*(attempt+1));
+        data=await response.json().catch(()=>({}));
+        const retryable=!data.callId&&(response.status>=500||response.status===429||
+          (response.status===409&&data.retryable===true));
+        if(!retryable||attempt>=2||closing)break;
+        await delay(250*(attempt+1));
       }
-      const data=await response.json();if(!response.ok){if(data.callId)persistEvent({action:'recover',eventId:crypto.randomUUID(),externalCallId:metadata.externalCallId,callId:data.callId});throw Error('Answered call was not accepted');}
+      if(!response.ok){if(data.callId)persistEvent({action:'recover',eventId:crypto.randomUUID(),externalCallId:metadata.externalCallId,callId:data.callId});throw Error('Answered call was not accepted');}
       if(!data.callId||data.status==='FAILED'||data.status==='COMPLETED')throw Error('Call unavailable');
       fs.writeFileSync(path.join(spoolDir,`${metadata.externalCallId}.handoff.json`),JSON.stringify({callId:data.callId,externalCallId:metadata.externalCallId}),{mode:0o600});
       c={...metadata,socket,callId:data.callId,admissionMs:Date.now()-acceptedAt,queue:[],outputCarry:Buffer.alloc(0),frames:[],pre:[],preRoll:[],voiceFrames:0,silent:0,started:Date.now(),lastSpeech:Date.now(),silenceStep:0,silenceClock:new ConversationSilence(),openingResponse:new OpeningResponseTimeout(30000),processing:false,hold:false,epoch:0,captureInput:Buffer.alloc(0),recorder:createAiRecording(recordingDir,uuid)};calls.set(uuid,c);

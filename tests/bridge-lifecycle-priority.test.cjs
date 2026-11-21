@@ -114,6 +114,7 @@ test('accepted transfer flushes only the AI end frame and admits the next socket
   await command('handoff-prepare');
   await command('detach-ai');
   await waitFor(()=>events.some(event=>event.action==='ended'&&event.callId===first));
+  await waitFor(()=>events.some(event=>event.action==='recording'&&event.callId===first));
   assert.deepEqual(Buffer.concat(received),packet(0));
   assert.equal(old.writableEnded,false,'the peer has not sent its own FIN');
   await open();await waitFor(()=>admissions===2);

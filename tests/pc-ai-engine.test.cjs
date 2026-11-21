@@ -23,6 +23,19 @@ test('PC transport restricts destinations and operations and strips caller crede
     process.env.SHAHVEX_PC_AI_URL='http://ai.example.com';
     await assert.rejects(mod.exports.pcAiEngine(8767,'/voices'));
     assert.equal(calls,1);
+    process.env.SHAHVEX_PC_AI_URL='http://127.0.0.1:8774';
+    global.fetch=async(url,init)=>{
+      assert.equal(url.href,'http://127.0.0.1:8774/tester/start');
+      assert.equal(init.headers.get('CF-Access-Client-Id'),null);
+      assert.equal(init.headers.get('CF-Access-Client-Secret'),null);
+      assert.equal(init.headers.get('x-shahvex-ai-key'),'s'.repeat(32));
+      return Response.json({id:'test-session'});
+    };
+    delete process.env.SHAHVEX_CF_CLIENT_ID;
+    delete process.env.SHAHVEX_CF_CLIENT_SECRET;
+    assert.equal((await mod.exports.pcAiRequest('/tester/start')).status,200);
+    process.env.SHAHVEX_PC_AI_URL='https://ai.example.com';
+    await assert.rejects(mod.exports.pcAiRequest('/tester/start'));
   } finally {global.fetch=previous;for(const n of names)if(before[n]===undefined)delete process.env[n];else process.env[n]=before[n];}
 });
 test('compressed upstream JSON is forwarded decoded without stale encoding or length headers',async()=>{

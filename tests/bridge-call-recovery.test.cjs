@@ -8,13 +8,22 @@ test('standalone bridge resolves a configured prefix and retries the same admiss
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-resolve-')),uuid='3548'+crypto.randomUUID().slice(4),external='direct-'+uuid.replaceAll('-',''),events=[];let socket,bytes=0;
  const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'resolve-fixture-'.repeat(4),spoolDir:dir,logger:()=>{},fetchImpl:async(_url,init)=>{
   const e=JSON.parse(init.body);events.push(e);
-  if(e.action==='resolve-prefix')return Response.json({uuid,audioUuid:uuid,agentUser:'78618',externalCallId:external});
-  if(e.action==='connected'){if(events.filter(v=>v.action==='connected').length===1)return Response.json({error:'Temporary database failure'},{status:503});return Response.json({callId:crypto.randomUUID(),mediaReady:true});}
+  if(e.action==='resolve-prefix'){
+   if(events.filter(v=>v.action==='resolve-prefix').length===1)return Response.json({error:'The assigned audio-line agent is not ready',retryable:true},{status:409});
+   return Response.json({uuid,audioUuid:uuid,agentUser:'78618',externalCallId:external});
+  }
+  if(e.action==='connected'){
+   const attempt=events.filter(v=>v.action==='connected').length;
+   if(attempt===1)return Response.json({error:'Temporary database failure'},{status:503});
+   if(attempt===2)return Response.json({error:'Assignment is awaiting voice readiness',retryable:true},{status:409});
+   return Response.json({callId:crypto.randomUUID(),mediaReady:true});
+  }
   if(e.action==='turn')return new Response(pcm());
   return Response.json({saved:true});
  }});
  try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>bytes+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(uuid.replaceAll('-',''),'hex')));await until(()=>bytes>0);
-  const admissions=events.filter(e=>e.action==='connected');assert.equal(admissions.length,2);assert.equal(admissions[0].eventId,admissions[1].eventId);assert(admissions.every(e=>e.audioUuid===uuid&&e.agentUser==='78618'));
+  assert.equal(events.filter(e=>e.action==='resolve-prefix').length,2);
+  const admissions=events.filter(e=>e.action==='connected');assert.equal(admissions.length,3);assert.equal(new Set(admissions.map(e=>e.eventId)).size,1);assert(admissions.every(e=>e.audioUuid===uuid&&e.agentUser==='78618'));
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
 test('greeting and listening backchannels leave played audio uninterrupted',async()=>{

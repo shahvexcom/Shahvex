@@ -21,6 +21,9 @@ type Call = {
 };
 const active = (call: Call) => ["INITIATED", "RINGING", "ANSWERED"].includes(call.status);
 
+const transferred = (call: Call) => call.transfer_status === "SUBMITTED" || call.transfer_status === "ANSWERED" || call.conversation_state === "HANDED_OFF";
+const callFilters = { all: "All calls", live: "Live", ended: "Ended", transfer: "Transfer" } as const;
+
 function callStatus(call: Call) {
   if (!active(call)) return call.status === "FAILED" ? "Failed" : "Ended";
   if (call.ending_requested) return "Ending";
@@ -69,7 +72,7 @@ function AgentAvatar({ name, url, large = false, live = false }: {name: string; 
 
 export default function LiveConversationMonitor({ portal }: { portal: "admin" | "bpo" }) {
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "live" | "ended">("all");
+  const [filter, setFilter] = useState<keyof typeof callFilters>("all");
   const [source, setSource] = useState<"campaign" | "local">("campaign");
   const [calls, setCalls] = useState<Call[]>([]);
   const [history, setHistory] = useState<Call[]>([]);
@@ -237,7 +240,14 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
       return a.id === b.id ? 0 : a.id < b.id ? 1 : -1;
     });
   }, [calls, history]);
-  const visible = allCalls.filter(item => (filter === "all" || (filter === "live" ? active(item) : !active(item))) && [recordingReference(item,source === "local"),item.agent_name,item.lead_name,item.lead_number,item.direct_audio_line,item.vicidial_agent_user,item.external_campaign_id].join(" ").toLowerCase().includes(query.toLowerCase().trim()));
+  const matchesFilter = (item: Call) => {
+    if (filter === "transfer") return transferred(item);
+    if (filter === "live") return active(item);
+    if (filter === "ended") return !active(item);
+    return true;
+  };
+  const serialReady = serialResult && (serialResult.download_url || allCalls.some(item => item.id === serialResult.id && item.ai_recording_id));
+  const visible = allCalls.filter(item => matchesFilter(item) && [recordingReference(item,source === "local"),item.agent_name,item.lead_name,item.lead_number,item.direct_audio_line,item.vicidial_agent_user,item.external_campaign_id].join(" ").toLowerCase().includes(query.toLowerCase().trim()));
   const call = visible.find(item => item.id === selected) || visible[0];
   useEffect(() => {
     if (listening && (call?.id !== listening.id || call.status !== "ANSWERED" || call.ai_leg_released)) { listener.current?.stop(); setListening(null); }
@@ -278,19 +288,22 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
         </div>
         <span className="monitor-toolbar-note"><FiCheckCircle /> Transcript updates automatically</span>
       </div>
-      {source === "campaign" && <div className="monitor-serial-lookup"><form onSubmit={event => {event.preventDefault();void findRecording();}}><label htmlFor="recording-serial-search">Find recording by serial</label><input id="recording-serial-search" placeholder="REC-000123" value={serialQuery} onChange={event=>setSerialQuery(event.target.value)} required maxLength={30} /><button disabled={serialBusy}>{serialBusy?"Finding…":"Find recording"}</button></form>{serialResult && <p role="status"><strong>{serialResult.serial}</strong> · {serialResult.agent_name} {serialResult.detail_url && <Link href={serialResult.detail_url}>Open call</Link>} {serialResult.download_url ? <button type="button" disabled={!!pending} onClick={()=>void download(serialResult)}>Download recording</button> : <span>Recording not ready yet.</span>}</p>}</div>}
+      {source === "campaign" && <div className="monitor-serial-lookup"><form onSubmit={event => {event.preventDefault();void findRecording();}}><label htmlFor="recording-serial-search">Find recording by serial</label><input id="recording-serial-search" placeholder="REC-000123" value={serialQuery} onChange={event=>setSerialQuery(event.target.value)} required maxLength={30} /><button disabled={serialBusy}>{serialBusy?"Finding…":"Find recording"}</button></form>{serialResult && <p role="status"><strong>{serialResult.serial}</strong> · {serialResult.agent_name} {serialResult.detail_url && <Link href={serialResult.detail_url}>Open call</Link>} {serialReady ? <button type="button" disabled={!!pending} onClick={()=>void download(serialResult)}>Download recording</button> : <span>Recording not ready yet.</span>}</p>}</div>}
       {source === "local" && <LiveMonitorSetup portal={portal} />}
       <div className="monitor-layout">
         <aside className="monitor-roster" aria-label="Calls">
           <div className="monitor-roster-heading"><div><h2>Conversations</h2><p>Select a call to follow along</p></div><span>{visible.length}</span></div>
           <label className="monitor-search"><FiSearch /><input aria-label="Search conversations" placeholder="Search agent, customer, or line" value={query} onChange={event => setQuery(event.target.value)} /></label>
-          <div className="monitor-filters" role="group" aria-label="Call status">{(["all","live","ended"] as const).map(value => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === "all" ? "All calls" : value === "live" ? "Live" : "Ended"}</button>)}</div>
+          <div className="monitor-filters" role="group" aria-label="Call status">{(Object.keys(callFilters) as (keyof typeof callFilters)[]).map(value => <button key={value} aria-pressed={filter === value} onClick={() => setFilter(value)}>{callFilters[value]}</button>)}</div>
           <div className="monitor-call-list" ref={roster}>
             {error && <div role="alert" className="monitor-error">{error} Retrying automatically.</div>}
             {!visible.length && (loading || (source === "campaign" && filter !== "live" && !historyReady && !historyError)) ? <div className="monitor-list-loading" role="status">Loading conversations…</div> : !visible.length && (error || historyError) ? null : !visible.length ? <div className="monitor-list-empty"><FiPhoneOff /><strong>{allCalls.length ? "No matching calls" : "No calls just yet"}</strong><p>{allCalls.length ? "Try another search or status filter." : "Your live and recently ended calls will appear here."}</p></div> : visible.map(item => <div className="monitor-call-row" key={item.id}><button className="monitor-call" onClick={() => setSelected(item.id)} aria-pressed={call?.id === item.id}>
               <AgentAvatar name={item.agent_name} url={item.agent_avatar} live={active(item)} />
               <span className="monitor-call-info"><strong>{item.agent_name}</strong><span>{item.lead_name ? `${item.lead_name} · ` : ""}{item.lead_number || "Unavailable"}</span><small>{item.external_campaign_id || (source === "local" ? "Local test" : "Campaign")}{item.direct_audio_line ? ` · ${item.direct_audio_line}` : ""} · {elapsed(item, now)}{!active(item) && outcomeLabel(item) ? ` · ${outcomeLabel(item)}` : ""}</small></span>
-              <span className={active(item) ? "monitor-call-state live" : "monitor-call-state"}>{callStatus(item)}</span>
+              <span className="monitor-call-badges">
+                <span className={active(item) ? "monitor-call-state live" : "monitor-call-state"}>{callStatus(item)}</span>
+                {!active(item) && transferred(item) && <span className="monitor-call-state transfer">Transfer</span>}
+              </span>
             </button>{active(item) && !item.native_only && <span className="monitor-row-actions"><button className={listening?.id === item.id ? "monitor-row-listen listening" : "monitor-row-listen"} aria-label={`${listening?.id === item.id ? "Stop listening to" : "Listen live to"} ${item.agent_name}`} title={listening?.id === item.id ? "Stop listening" : "Listen live · microphone off"} disabled={item.status !== "ANSWERED" || item.ai_leg_released} onClick={() => toggleListen(item)}>{listening?.id === item.id ? <FiSquare /> : <FiHeadphones />}</button><button className="monitor-row-end" aria-label={`End call for ${item.agent_name}`} title="End this call only" disabled={!!pending || item.ending_requested} onClick={() => void control(item,"hangup")}><FiPhoneOff /></button></span>}</div>)}
             {source === "campaign" && filter !== "live" && hasMore && (
               historyError ? <div role="alert" className="monitor-error">{historyError} <button type="button" onClick={() => void loadHistory()}>Retry</button></div>

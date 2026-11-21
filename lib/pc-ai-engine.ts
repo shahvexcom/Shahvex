@@ -16,14 +16,18 @@ export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: 
   const key = process.env.SHAHVEX_PC_AI_SECRET;
   const clientId = process.env.SHAHVEX_CF_CLIENT_ID;
   const clientSecret = process.env.SHAHVEX_CF_CLIENT_SECRET;
-  if (base.protocol !== "https:" || base.username || base.password || base.pathname !== "/" || base.search || base.hash || !key || key.length < 32 || !clientId || !clientSecret) throw Error("Secure PC AI connection is not configured");
+  const localAdapter = base.origin === "http://127.0.0.1:8774";
+  const remoteAdapter = base.protocol === "https:" && clientId && clientSecret;
+  if ((!localAdapter && !remoteAdapter) || base.username || base.password || base.pathname !== "/" || base.search || base.hash || !key || key.length < 32) throw Error("Secure PC AI connection is not configured");
   const headers = new Headers();
   // Do not forward cookies, user authorization or arbitrary caller headers.
   const contentType = new Headers(init.headers).get("content-type");
   if (contentType) headers.set("content-type", contentType);
   headers.set("x-shahvex-ai-key", key);
-  headers.set("CF-Access-Client-Id", clientId);
-  headers.set("CF-Access-Client-Secret", clientSecret);
+  if (remoteAdapter) {
+    headers.set("CF-Access-Client-Id", clientId);
+    headers.set("CF-Access-Client-Secret", clientSecret);
+  }
   if (owner) headers.set("x-shahvex-owner", owner);
   // Session handles and turn IDs are separate, validated gateway headers.
   for (const name of ["x-shahvex-session", "x-shahvex-turn", "x-shahvex-turn-final", "x-shahvex-completed-turn"]) {
