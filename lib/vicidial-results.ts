@@ -2303,6 +2303,7 @@ export async function transferVicidialCall(callId: string) {
       !call ||
       call.status !== "ANSWERED" ||
       call.conversation_busy ||
+      call.ending_requested ||
       !call.handoff_ready ||
       !hasCurrentQualification(call) ||
       !call.transfer_consent ||
@@ -2373,7 +2374,7 @@ export async function transferVicidialCall(callId: string) {
     if (prepared.accepted !== true)
       throw Error("AI media bridge did not prepare the handoff");
     const reserved = await pool.query(
-      "UPDATE agent_calls SET transfer_status='UNCERTAIN',updated_at=NOW() WHERE id=$1 AND status='ANSWERED' AND transfer_status='PREPARING' RETURNING id",
+      "UPDATE agent_calls SET transfer_status='UNCERTAIN',updated_at=NOW() WHERE id=$1 AND status='ANSWERED' AND transfer_status='PREPARING' AND NOT ending_requested RETURNING id",
       [callId],
     );
     if (reserved.rowCount === 0)

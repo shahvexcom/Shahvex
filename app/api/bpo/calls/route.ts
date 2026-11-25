@@ -1,3 +1,4 @@
+import { isSameRequestOrigin } from "@/lib/request-origin";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { bpoEntitlements, bpoLeadUsage } from "@/lib/bpo-entitlements";
@@ -5,7 +6,10 @@ import { db } from "@/lib/database";
 import { requireApprovedBpo } from "@/lib/bpo-session";
 import { CallStartError, startAgentCall } from "@/lib/call-start";
 import { agentCallCommand, agentCallDetail, saveAgentCallNotes } from "@/lib/agent-call-detail";
+import { missingVicidialSetup, vicidialLiveConfig } from "@/lib/vicidial-config";
 import { decryptCredential } from "@/lib/credential-crypto";
+
+export const maxDuration = 300;
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Use a valid 24-hour time.");
 const startSchema = z.object({ action: z.literal("start-agent"), agentId: z.string().uuid() });
@@ -78,19 +82,29 @@ async function dialingAgents(bpoId: string, mode: Mode, usage: Awaited<ReturnTyp
       COALESCE(s.lead_headers,'[]'::jsonb) lead_headers,COALESCE(s.lead_rows,'[]'::jsonb) lead_rows,COALESCE(s.script_text,'') script_text,
       COALESCE(NULLIF(tc.config->>'outboundNumber',''),NULLIF(tc.config->>'outbound_number',''),NULLIF(tc.config->>'phoneNumber',''), '') outbound_number,
       EXISTS(SELECT 1 FROM agent_credentials x WHERE x.agent_id=a.id AND x.provider='TELNYX') has_telnyx,
-      EXISTS(SELECT 1 FROM voip_agent_assignments va JOIN voip_connections vc ON vc.id=va.connection_id AND vc.owner_id=va.owner_id WHERE va.agent_id=a.id AND vc.live_config->>'enabled'='true') uses_vicidial,
-      EXISTS(SELECT 1 FROM voip_agent_assignments va JOIN voip_connections vc ON vc.id=va.connection_id AND vc.owner_id=va.owner_id WHERE va.agent_id=a.id AND vc.enabled=TRUE AND vc.status='CONNECTED' AND vc.media_verified_at IS NOT NULL AND vc.live_config->>'enabled'='true' AND va.direction='OUTBOUND') vicidial_ready,
-      EXISTS(SELECT 1 FROM vicidial_pool_agents q WHERE q.agent_id=a.id) is_queued,
+      a.local_voice_id, vca.campaign_id, vca.direction, vc.live_config,
+      vc.id connection_id, vc.enabled connection_enabled, vc.deleted_at connection_deleted_at,
+      vc.status connection_status, vc.media_verified_at, vc.bridge_secret_ciphertext IS NOT NULL has_bridge_secret,
+      ca.enabled campaign_assignment_enabled,d.id mapped_campaign_id,d.name campaign_name,d.script campaign_script,d.enabled campaign_enabled,
+      d.deleted_at campaign_deleted_at,d.intake_state,d.validated_at,
+      d.connection_id mapped_connection_id,d.external_campaign_id mapped_external_id,
+      EXISTS(SELECT 1 FROM vicidial_pool_agents q
+        JOIN ai_agent_runtime_states r ON r.agent_id=q.agent_id
+        WHERE q.agent_id=a.id AND q.ready AND r.state IN ('READY','RESERVED','BUSY')) is_queued,
       EXISTS(SELECT 1 FROM agent_credentials x WHERE x.agent_id=a.id AND x.provider='GROQ') has_knowledge,
       (SELECT c.id FROM agent_calls c WHERE c.agent_id=a.id AND c.status IN ('INITIATED','RINGING','ANSWERED') ORDER BY c.created_at DESC LIMIT 1) live_call_id,
       (SELECT c.status FROM agent_calls c WHERE c.agent_id=a.id AND c.status IN ('INITIATED','RINGING','ANSWERED') ORDER BY c.created_at DESC LIMIT 1) live_call_status,
       (SELECT COUNT(*)::int FROM agent_calls c WHERE c.agent_id=a.id AND c.call_type='LEAD') calls_made
       FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id
+      LEFT JOIN voip_agent_assignments vca ON vca.agent_id=a.id AND vca.owner_id=b.bpo_id
+      LEFT JOIN voip_connections vc ON vc.id=vca.connection_id AND vc.owner_id=vca.owner_id
+      LEFT JOIN campaign_agent_assignments ca ON ca.agent_id=a.id AND ca.owner_id=b.bpo_id
+      LEFT JOIN campaign_definitions d ON d.id=ca.campaign_id AND d.owner_id=ca.owner_id
       LEFT JOIN local_voice_registry lv ON lv.id=a.local_voice_id AND (lv.is_global=TRUE OR lv.owner_id=b.bpo_id)
       LEFT JOIN admin_voices v ON v.id=b.voice_id LEFT JOIN bpo_voice_assignments x ON x.bpo_id=b.bpo_id AND x.voice_id=b.voice_id
       LEFT JOIN agent_credentials at ON at.agent_id=a.id AND at.provider='TELNYX' LEFT JOIN ai_credentials tc ON tc.id=at.credential_id
       LEFT JOIN LATERAL (SELECT lead_file_name,script_file_name,lead_headers,lead_rows,script_text FROM script_assignments WHERE agent_id=a.id ORDER BY created_at DESC LIMIT 1) s ON TRUE
-      WHERE b.bpo_id=$1 AND b.dialing_mode IN ($2,'BOTH') ORDER BY b.created_at DESC`, [bpoId, mode]),
+      WHERE b.bpo_id=$1 AND a.deleted_at IS NULL AND b.dialing_mode IN ($2,'BOTH') ORDER BY b.created_at DESC`, [bpoId, mode]),
     client.query("SELECT lead_number FROM lead_claims UNION SELECT phone_number AS lead_number FROM do_not_call"),
   ]);
   const unavailableNumbers = new Set(claimed.rows.map(row => String(row.lead_number || "")));
@@ -100,23 +114,49 @@ async function dialingAgents(bpoId: string, mode: Mode, usage: Awaited<ReturnTyp
     const nextCustomer = rows.map(values => ({ name: customerValue(values, headers, ["name", "fullname", "client", "customer"]), number: e164(customerValue(values, headers, ["phone", "mobile", "telephone", "number"])) })).find(customer => customer.number && !unavailableNumbers.has(customer.number));
     const quotaReason = !usage.limits.calls || !usage.remaining.calls ? "Your purchased call allowance has been reached."
       : !usage.limits.minutes || !usage.remaining.minutes ? "Your purchased minute allowance has been reached." : "";
+    const usesVicidial = Boolean(row.live_config?.enabled || row.mapped_campaign_id);
+    const live = usesVicidial ? vicidialLiveConfig.safeParse(row.live_config) : null;
+    const line = live?.success ? live.data.directAudioLines.find(item => item.agentId === row.id) : undefined;
+    const missing = usesVicidial ? missingVicidialSetup(row.live_config, row.has_bridge_secret) : [];
+    const campaignNeedsStart = Boolean(row.mapped_campaign_id && row.intake_state !== "RUNNING");
+    const vicidialBlocker = !row.connection_enabled || row.connection_deleted_at || row.direction !== "OUTBOUND"
+      ? "Assign an enabled outbound VICIdial connection in VoIP."
+      : !row.campaign_id?.trim() ? "Assign this agent to a VICIdial campaign in VoIP."
+      : row.connection_status !== "CONNECTED" ? "Verify the VICIdial API connection in VoIP."
+      : !row.media_verified_at ? "Test the audio bridge in VoIP."
+      : missing.length ? `Complete VoIP setup: ${missing.join(", ")}.`
+      : live?.success && live.data.directAudioMode && (!line || !live.data.remoteUsers.includes(line.remoteUser))
+        ? "Assign a dedicated extension and Remote Agent ID on this connection."
+      : row.mapped_campaign_id && (row.mapped_connection_id !== row.connection_id || row.mapped_external_id !== row.campaign_id)
+        ? "Match the assigned campaign to this VICIdial connection and campaign ID."
+      : row.mapped_campaign_id && (row.campaign_deleted_at || !row.campaign_enabled || !row.validated_at)
+        ? "Enable and verify the assigned campaign in VoIP."
+      : !row.mapped_campaign_id ? "Assign this agent to a saved VICIdial campaign in VoIP."
+      : !row.campaign_script?.trim() ? "Save the script on the assigned campaign in VoIP."
+      : !row.local_voice_id || !row.voice_workspace_active || row.voice_status !== "ACTIVE"
+        ? "Assign an active local voice to this agent."
+      : "";
     const blockedReason = row.live_call_id ? "This agent already has a live call."
       : quotaReason ? quotaReason
       : !row.is_active || row.status !== "APPROVED" ? "Activate this agent first."
-      : row.voice_status !== "ACTIVE" || !row.voice_workspace_active ? "The assigned voice is inactive."
       : row.is_queued ? "Waiting for a VICIdial answered call."
-      : row.uses_vicidial && !row.vicidial_ready ? "Complete VICIdial API and audio bridge verification in VoIP."
-      : (!row.uses_vicidial && (!row.has_telnyx || !row.has_knowledge || !String(row.script_text || "").trim())) ? "AI credentials and an agent script are required."
-      : !row.uses_vicidial && !e164(row.outbound_number) ? "A valid VoIP outbound number is required."
-      : !row.uses_vicidial && !nextCustomer ? "No eligible customer remains in this customer sheet."
+      : usesVicidial && vicidialBlocker ? vicidialBlocker
+      : campaignNeedsStart && !row.campaign_assignment_enabled ? "Enable this agent’s campaign assignment in VoIP."
+      : campaignNeedsStart ? "The assigned VICIdial campaign is stopped or paused."
+      : !usesVicidial && (row.voice_status !== "ACTIVE" || !row.voice_workspace_active) ? "The assigned voice is inactive."
+      : (!usesVicidial && (!row.has_telnyx || !row.has_knowledge || !String(row.script_text || "").trim())) ? "AI credentials and an agent script are required."
+      : !usesVicidial && !e164(row.outbound_number) ? "A valid VoIP outbound number is required."
+      : !usesVicidial && !nextCustomer ? "No eligible customer remains in this customer sheet."
       : "";
-    return { is_queued:Boolean(row.is_queued), id: row.id, name: row.name, avatar_url: row.avatar_url, dialing_mode: row.dialing_mode, customer_sheet_name: row.uses_vicidial ? "Customers managed in VICIdial" : row.customer_sheet_name, script_name: row.script_name, calls_made: number(row.calls_made), live_call: row.live_call_id ? { id: row.live_call_id, status: row.live_call_status } : null, next_customer: nextCustomer ? { name: nextCustomer.name || "Unnamed customer", number: nextCustomer.number } : null, ready: !blockedReason, blocked_reason: blockedReason };
+    return { is_queued:Boolean(row.is_queued), id: row.id, name: row.name, avatar_url: row.avatar_url, dialing_mode: row.dialing_mode, customer_sheet_name: usesVicidial ? "Customers managed in VICIdial" : row.customer_sheet_name, script_name: usesVicidial ? row.campaign_script?.trim() ? "From VICIdial campaign" : "" : row.script_name,
+      campaign_to_start: mode === "MANUAL" && campaignNeedsStart && row.campaign_assignment_enabled && !vicidialBlocker && !row.live_call_id && !row.is_queued && !quotaReason && row.is_active && row.status === "APPROVED" ? row.mapped_campaign_id : null,
+      vicidial: usesVicidial ? { campaign: row.campaign_name || row.campaign_id || "", extension: line?.prefix || "", remoteUser: line?.remoteUser || "" } : null, calls_made: number(row.calls_made), live_call: row.live_call_id ? { id: row.live_call_id, status: row.live_call_status } : null, next_customer: !usesVicidial && nextCustomer ? { name: nextCustomer.name || "Unnamed customer", number: nextCustomer.number } : null, ready: !blockedReason, blocked_reason: blockedReason };
   });
 }
 
 async function callProgressFor(bpoId: string, mode: Mode) {
   const result = await (await db()).query(`SELECT c.recording_serial,c.id,c.status,c.lead_name,c.lead_number,c.duration_seconds,c.created_at,c.dialing_source,c.summary,c.notes,c.transcript,
-    COALESCE(s.script_text,'') script_text FROM agent_calls c JOIN bpo_created_agents b ON b.agent_id=c.agent_id
+    COALESCE(NULLIF(c.script_snapshot->>'script',''),s.script_text,'') script_text FROM agent_calls c JOIN bpo_created_agents b ON b.agent_id=c.agent_id
     LEFT JOIN LATERAL (SELECT script_text FROM script_assignments WHERE agent_id=c.agent_id ORDER BY created_at DESC LIMIT 1) s ON TRUE
     WHERE b.bpo_id=$1 AND c.dialing_source=$2 ORDER BY c.created_at DESC LIMIT 30`, [bpoId, mode]);
   return result.rows.map(row => ({ id: row.id, status: row.status, customer_name: row.lead_name || "Unnamed customer", customer_number: row.lead_number || "", duration_seconds: number(row.duration_seconds), created_at: row.created_at, progress: taskProgress(row) }));
@@ -216,9 +256,65 @@ export async function POST(request: Request) {
       const result = await runAutoDialer(session.agentId);
       return Response.json({ message: result.started ? `${result.started} auto call${result.started === 1 ? "" : "s"} started.` : result.reason, ...result });
     }
+    if (body?.action === "start-all") {
+      if (!isSameRequestOrigin(request)) return Response.json({ message: "Same-origin request required." }, { status: 403 });
+      const usage = await planUsageFor(session.agentId);
+      const roster = await dialingAgents(session.agentId, "MANUAL", usage);
+      const agents = roster.filter(agent => agent.ready);
+      const campaigns = new Map<string, string>();
+      for (const agent of roster) {
+        if (agent.campaign_to_start && agent.vicidial) {
+          campaigns.set(agent.campaign_to_start, agent.vicidial.campaign);
+        }
+      }
+
+      const started: string[] = [];
+      const failed: { name: string; reason: string }[] = [];
+      let campaignAgentsStarted = 0;
+      for (const [campaignId, name] of campaigns) {
+        try {
+          const { postCampaigns } = await import("@/lib/campaign-controller");
+          const response = await postCampaigns(new Request(request.url, {
+            method: "POST",
+            headers: request.headers,
+            body: JSON.stringify({ action: "start", campaignId }),
+          }), "bpo");
+          const result = await response.json();
+          if (!response.ok) {
+            failed.push({ name, reason: result.error || "Campaign could not start." });
+            continue;
+          }
+          campaignAgentsStarted += Number(result.confirmed || 0);
+          if (response.status === 207) {
+            failed.push({ name, reason: result.message || "Some campaign agents could not start." });
+          }
+        } catch (error) {
+          console.error("BPO bulk campaign start failed", { campaignId, name: error instanceof Error ? error.name : undefined });
+          failed.push({ name, reason: "Campaign startup could not be confirmed." });
+        }
+      }
+      for (const agent of agents) {
+        try {
+          const call = await startAgentCall(agent.id, { bpoId: session.agentId, dialingSource: "MANUAL" });
+          started.push(call.name);
+        } catch (error) {
+          failed.push({ name: agent.name, reason: error instanceof CallStartError ? bpoMessage(error.message) : "Call could not start." });
+        }
+      }
+      const startedCount = started.length + campaignAgentsStarted;
+      const message = startedCount
+        ? `${startedCount} agent(s) started. VICIdial agents wait for answered calls.`
+        : failed[0]?.reason || "No manual dialing agents could start. Check their campaign assignments.";
+      return Response.json({ message, started, startedCount, failed }, {
+        status: startedCount ? failed.length ? 207 : 201 : 409,
+      });
+    }
     if (start.success) {
       const owned = await (await db()).query(`SELECT b.agent_id FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id WHERE b.agent_id=$1 AND b.bpo_id=$2 AND b.is_active=TRUE AND b.dialing_mode IN ${manualModes} AND a.status='APPROVED'`, [start.data.agentId, session.agentId]);
       if (!owned.rows[0]) return Response.json({ message: "Choose an active agent enabled for manual dialing." }, { status: 403 });
+      const roster = await dialingAgents(session.agentId, "MANUAL", await planUsageFor(session.agentId));
+      const agent = roster.find(agent => agent.id === start.data.agentId);
+      if (!agent?.ready) return Response.json({ message: agent?.blocked_reason || "Agent is unavailable." }, { status: 409 });
       const call = await startAgentCall(start.data.agentId, { bpoId: session.agentId, dialingSource: "MANUAL" });
       return Response.json({ message: "queued" in call ? `${call.name} is ready for VICIdial answered calls.` : `${call.name} is calling the next customer.`, callId: "queued" in call ? undefined : call.id, queued: "queued" in call }, { status: 201 });
     }

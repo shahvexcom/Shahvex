@@ -26,21 +26,28 @@ test('standalone bridge resolves a configured prefix and retries the same admiss
   const admissions=events.filter(e=>e.action==='connected');assert.equal(admissions.length,3);assert.equal(new Set(admissions.map(e=>e.eventId)).size,1);assert(admissions.every(e=>e.audioUuid===uuid&&e.agentUser==='78618'));
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
 });
-test('greeting and listening backchannels leave played audio uninterrupted',async()=>{
- for(const signal of ['Hello','Hmm','Yep']){
+test('short questions and substantive answers interrupt while greetings and backchannels preserve playback',async()=>{
+ for(const signal of ['Hello','Who is this?', 'Can you transfer me?', 'Medicaid', 'Hmm','Yep']){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-resume-'));let socket,bytes=0,interrupts=0,reply,probes=0;
   const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'resume-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},fetchImpl:async(_url,init)=>{
    const e=JSON.parse(init.body);
    if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true});
-   if(e.action==='listen'){probes++;return Response.json({text:signal});}
+   if(e.action==='listen'){probes++;return Response.json({text:signal,...(signal==='Medicaid'?{confidence:0.2}:{})});}
    if(e.action==='interrupt'){interrupts++;return Response.json({interrupted:true});}
-   if(e.action==='turn'){if(!e.opening)reply=e.text;return new Response(pcm());}
+   if(e.action==='turn'){if(!e.opening)reply=e.text;return new Response(pcm().replace('{"type":"done"}',JSON.stringify({type:'done',turnId:e.eventId})));}
    return Response.json({saved:true});
   }});
   try{await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',buf=>bytes+=buf.length);socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await until(()=>bytes>0);
    const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);
    socket.write(Buffer.concat([...Array.from({length:20},()=>packet(0x10,voice)),...Array.from({length:30},()=>packet(0x10,Buffer.alloc(320)))]));
-   await until(()=>probes>=2);await wait(60);assert.equal(reply,undefined,signal);assert.equal(interrupts,0,signal);
+   await until(()=>probes>=2);
+   const interrupting=['Who is this?','Can you transfer me?','Medicaid'].includes(signal);
+   if(interrupting)await until(()=>reply===signal,900);
+   else {
+    await wait(60);assert.equal(reply,undefined,signal);
+    if(signal==='Hello')await until(()=>reply===signal);
+   }
+   assert.equal(interrupts,interrupting?1:0,signal);
   }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
  }
 });
@@ -142,5 +149,143 @@ test('failed or empty final speech probes cannot bypass transcript filtering',as
  await new Promise(r=>b.audio.listen(0,'127.0.0.1',r));socket=net.connect(b.audio.address().port,'127.0.0.1');socket.on('data',()=>{});socket.on('error',()=>{});await new Promise(r=>socket.once('connect',r));socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));await wait(100);
  const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(i%4?3000:-3000,i);socket.write(Buffer.concat(Array.from({length:8},()=>packet(0x10,voice))));await until(()=>logs.some(text=>text.includes(mode==='http'?'http_503':'empty_transcript')));assert.equal(committed.length,0);assert.equal(socket.destroyed,false);
  }finally{socket?.destroy();b.close();await wait(60);fs.rmSync(dir,{recursive:true,force:true});}
+ }
+});
+
+test('short script deadlines preserve calls with a valid outcome and end unresolved idle calls',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-business-watchdog-'));
+ const sockets=[],events=[],realNow=Date.now;
+ const started=realNow(), configs=new Map();
+ const at=ms=>{offset=started+ms-realNow();};
+ let offset=0;
+ Date.now=()=>realNow()+offset;
+ const b=createBridge({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'script-deadline-fixture-'.repeat(4),spoolDir:dir,logger:()=>{},createSpeechScorer:()=>async()=>0.4,
+  resolveRegistration:async uuid=>({uuid,audioUuid:uuid,agentUser:'78618',externalCallId:'direct-'+uuid.replaceAll('-','')}),
+  fetchImpl:async(_url,init)=>{
+   const e=JSON.parse(init.body);events.push(e);
+   const config=configs.get(e.externalCallId);
+   if(e.action==='connected')return Response.json({callId:config.id,first:'customer',mediaReady:true,maxCallDurationSeconds:config.limit});
+   if(e.action==='listen'&&config.engaged)return Response.json({text:'Why do you need to know that?',confidence:0.95});
+   if(e.action==='turn'&&config.limit)return new Response(new ReadableStream());
+   if(e.action==='call-state')return Response.json({connectedAt:new Date(started).toISOString(),businessQuestionCount:config.count,businessOutcome:config.outcome});
+   if(e.action==='hangup')return Response.json({ended:true});
+   return Response.json({saved:true});
+  },
+ });
+ async function connect(count,outcome=false,spoken=true,limit=0,engaged=false){
+  const uuid=crypto.randomUUID(),external='direct-'+uuid.replaceAll('-',''),id=crypto.randomUUID();
+  configs.set(external,{id,count,outcome,limit,engaged});
+  const socket=net.connect(b.audio.address().port,'127.0.0.1');sockets.push(socket);
+  await new Promise((resolve,reject)=>{socket.once('connect',resolve);socket.once('error',reject);});
+  socket.write(packet(1,Buffer.from(uuid.replaceAll('-',''),'hex')));
+  if(spoken){
+   const input=Buffer.alloc(320);
+   for(let i=0;i<320;i+=2)input.writeInt16LE(3000*Math.sin(i/10),i);
+   socket.write(Buffer.concat(Array.from({length:8},()=>packet(0x10,input))));
+  }
+  return {id,socket};
+ }
+ try{
+  await new Promise((resolve,reject)=>{b.audio.once('error',reject);b.audio.listen(0,'127.0.0.1',resolve);});
+  const one=await connect(1),two=await connect(2),three=await connect(3,true),valid=await connect(2,true),empty=await connect(0),silent=await connect(3,false,false),busy=await connect(0,false,true,87),engaged=await connect(2,false,false,0,true);
+  await until(()=>events.filter(e=>e.action==='call-state').length>=8);
+  const calls=()=>events.filter(e=>e.action==='hangup');
+  at(8400);
+  const quietVoice=Buffer.alloc(320);
+  for(let i=0;i<320;i+=2)quietVoice.writeInt16LE(Math.round(1900*Math.sin(i/10)),i);
+  const utterance=Buffer.concat([...Array.from({length:26},()=>packet(0x10,quietVoice)),...Array.from({length:20},()=>packet(0x10,Buffer.alloc(320)))]);
+  const engagedTurns=()=>events.filter(e=>e.action==='turn'&&e.callId===engaged.id&&e.text==='Why do you need to know that?');
+  engaged.socket.write(utterance);
+  await until(()=>engagedTurns().length===1);
+  assert.equal(calls().length,0);
+  at(10300);await until(()=>calls().length===1);
+  assert.equal(calls()[0].callId,silent.id);
+  assert.equal(calls()[0].endInitiation.reason,'no_customer_speech_deadline');
+  at(87500);await until(()=>calls().length===2);
+  assert.equal(calls()[1].callId,busy.id);
+  assert.equal(calls()[1].endInitiation.reason,'call_duration_limit');
+  at(88700);
+  engaged.socket.write(utterance);
+  await until(()=>engagedTurns().length===2);
+  at(90000);await until(()=>calls().length===4);
+  assert.deepEqual(new Set(calls().slice(2).map(e=>e.callId)),new Set([one.id,two.id]));
+  await wait(160);
+  at(120000);await wait(300);
+  assert.equal(calls().length,4);
+  assert(!valid.socket.destroyed);
+  assert(!engaged.socket.destroyed);
+  assert(!three.socket.destroyed);
+  assert(calls().slice(2).every(e=>e.endInitiation.reason==='script_duration_limit'));
+  assert(!empty.socket.destroyed);
+  assert(!empty.socket.destroyed,'a different audio session remains connected');
+ }finally{
+  for(const socket of sockets)socket.destroy();
+  b.close();Date.now=realNow;await wait(50);fs.rmSync(dir,{recursive:true,force:true});
+ }
+});
+
+test('opening recognition corroborates short answers without guessing after a failed probe', async () => {
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'bridge-corroborated-speech-'));
+ const turns=[],probes=[],logs=[];
+ const replies=[
+  {error:'Unavailable'},
+  {text:'Yes.',confidence:0.02},
+  {text:'No.',confidence:0.03},
+  {text:'Yes.',confidence:0.02},
+  {text:'I think so.',confidence:0.03},
+  {text:'No.',confidence:0.02},
+  {text:'No, but maybe.',confidence:0.03},
+  {text:'Yes.',confidence:0.02},
+  {text:'Yeah.',confidence:0.01},
+ ];
+ const bridge=createBridge({
+  siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),
+  secret:'corroborated-speech-fixture-'.repeat(3),spoolDir:dir,testOnly:true,
+  allowUnregisteredManualAudio:true,createSpeechScorer:()=>async()=>0.9,
+  enforceInitialSilence:true,speech:{debug:true},logger:line=>logs.push(line),
+  fetchImpl:async(_url,init)=>{
+   const event=JSON.parse(init.body);
+   if(event.action==='connected')return Response.json({callId:crypto.randomUUID(),mediaReady:true,first:'customer'});
+   if(event.action==='listen'){
+    probes.push(Buffer.from(event.audio,'base64'));
+    const reply=replies.shift();
+    return Response.json(reply,{status:reply?.error?503:200});
+   }
+   if(event.action==='turn'){turns.push(event.text);return new Response('{"type":"done"}\n');}
+   return Response.json({saved:true});
+  },
+ });
+ let socket;
+ try{
+  await new Promise(resolve=>bridge.audio.listen(0,'127.0.0.1',resolve));
+  socket=net.connect(bridge.audio.address().port,'127.0.0.1');
+  socket.on('data',()=>{});
+  await new Promise(resolve=>socket.once('connect',resolve));
+  socket.write(packet(1,Buffer.from(crypto.randomUUID().replaceAll('-',''),'hex')));
+  await wait(100);
+  const frame=Buffer.alloc(320);
+  for(let i=0;i<frame.length;i+=2)frame.writeInt16LE(i%4?2800:-2800,i);
+  const utterance=Buffer.concat([
+   ...Array.from({length:28},()=>packet(0x10,frame)),
+   ...Array.from({length:18},()=>packet(0x10,Buffer.alloc(320))),
+  ]);
+  socket.write(utterance);
+  await until(()=>logs.some(line=>line.includes('http_503')));
+  assert.deepEqual(turns,[]);
+  for(let count=1;count<=3;count++){
+   socket.write(utterance);
+   await until(()=>logs.filter(line=>line.includes('low_confidence')).length===count);
+   assert.deepEqual(turns,[]);
+  }
+  socket.write(utterance);
+  await until(()=>turns.length===1);
+  assert.deepEqual(turns,['Yes.']);
+  assert.equal(probes.length,9);
+  assert.equal(probes[8].readUInt32LE(24),16000);
+  assert.equal(probes[8].length,probes[7].length+16000);
+  assert.deepEqual(probes[8].subarray(8044,-8000),probes[7].subarray(44));
+ }finally{
+  socket?.destroy();bridge.close();await wait(60);
+  fs.rmSync(dir,{recursive:true,force:true});
  }
 });

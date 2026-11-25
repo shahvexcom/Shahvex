@@ -1,6 +1,45 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto'),net=require('node:net');
 const {createBridge,packet}=require('../deployment/vicidial-bridge/server.cjs');
 const config=folder=>({siteUrl:'https://fixture.invalid/',connectionId:crypto.randomUUID(),secret:'outage-fixture-secret-'.repeat(3),spoolDir:folder,logger:()=>{}});
+test('an interruption left on disk after a call ended is discarded without calling the website', async () => {
+ const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'shahvex-stale-interrupt-'));
+ const event = {action:'interrupt',eventId:crypto.randomUUID(),externalCallId:'fixture-ended',callId:crypto.randomUUID()};
+ const file = path.join(folder, event.eventId + '.event.json');
+ fs.writeFileSync(file, JSON.stringify(event));
+ let attempts = 0;
+ const bridge = createBridge({...config(folder),fetchImpl:async()=>{attempts++;return Response.json({}, {status:409});}});
+ try {
+  await bridge.flushEvents();
+  assert.equal(attempts, 0);
+  assert.equal(fs.existsSync(file), false);
+ } finally {
+  bridge.close();
+  fs.rmSync(folder, {recursive:true,force:true});
+ }
+});
+test('a pending dialer confirmation is retried in under one second and keeps its event ID', async () => {
+ const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'shahvex-fast-confirmation-'));
+ const event = {action:'ended',eventId:crypto.randomUUID(),externalCallId:'fixture-ended',callId:crypto.randomUUID()};
+ const file = path.join(folder, event.eventId + '.event.json');
+ fs.writeFileSync(file, JSON.stringify(event));
+ const attempts = [];
+ const bridge = createBridge({...config(folder),fetchImpl:async(_url,init)=>{
+  attempts.push({id:JSON.parse(init.body).eventId,at:Date.now()});
+  return Response.json(attempts.length===1?{saved:true,syncPending:true,cleanupPending:true}:{saved:true});
+ }});
+ try {
+  await bridge.flushEvents();
+  const deadline = Date.now() + 900;
+  while (attempts.length < 2 && Date.now() < deadline) await new Promise(r=>setTimeout(r,10));
+  assert.equal(attempts.length, 2);
+  assert.ok(attempts[1].at-attempts[0].at<900);
+  assert.ok(attempts.every(attempt=>attempt.id===event.eventId));
+  assert.equal(fs.existsSync(file), false);
+ } finally {
+  bridge.close();
+  fs.rmSync(folder, {recursive:true,force:true});
+ }
+});
 test('database outage retries are bounded and preserve every saved event',async()=>{
  const folder=fs.mkdtempSync(path.join(os.tmpdir(),'shahvex-outage-'));let attempts=0;
  for(let i=0;i<12;i++){const value={action:'retry-sync',eventId:crypto.randomUUID(),externalCallId:'fixture-'+i,callId:crypto.randomUUID()};fs.writeFileSync(path.join(folder,value.eventId+'.event.json'),JSON.stringify(value));}

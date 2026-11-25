@@ -50,7 +50,7 @@ export function LocalMonitorConnect({ portal }: { portal: "admin" | "bpo" }) {
         <label>Who speaks first?<select value={form.first} onChange={event => setForm({ ...form, first: event.target.value })}><option value="ai">Agent</option><option value="customer">Customer</option></select></label>
       </fieldset>
       <button disabled={busy}>{busy ? "Connecting…" : "Connect localhost"}</button>
-      <p>Choose Lissa, Emma or Olivia, then click Connect localhost to apply it to the next incoming test call. Dial your configured Asterisk extension. Finish an active call before changing the voice or script.</p>
+      <p>Choose a local voice, then click Connect localhost to apply it to the next incoming test call. Dial your configured Asterisk extension. Finish an active call before changing the voice or script.</p>
     </form>
   </details>;
 }

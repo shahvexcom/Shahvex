@@ -9,11 +9,11 @@ import { createSpeechRenderer } from "../gateway/speech-text.cjs";
 import { speechBoundary } from "../gateway/speech-boundary.cjs";
 import { createEmotionSelector, expressionCapabilityReply, identityVoiceReply } from "../gateway/voice-emotion.cjs";
 type Engine = (port: number, path: string, init?: RequestInit) => Promise<Response>;
-type Options = { salutation?: string; allowQuestion?: (speech: string) => boolean; answerOnly?: boolean; requirePurpose?: boolean; responsePrefix?: string; allowRephrase?: boolean; openingAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
+type Options = { filterSpeech?: (speech: string) => string; onSpeechPcm?: (speech: string) => void; salutation?: string; allowQuestion?: (speech: string) => boolean; answerOnly?: boolean; requirePurpose?: boolean; responsePrefix?: string; allowRephrase?: boolean; openingAudio?: boolean; preparedAudio?: boolean; cacheAudio?: boolean; maxStatementSentences?: number; outbound?: boolean; completedQuestions?: string[]; introducedName?: string; repetitionRetry?: boolean; allowTimePermission?: boolean; customerText?: string; emotionState?: { turn: number; lastTurn?: number; total?: number }; messages: unknown[]; voice: string; signal: AbortSignal; engine: Engine; send: (event: object) => Promise<void>; timing: (stage: string, details?: object) => Promise<void>; onText: (text: string) => void; phraseStreaming?: boolean; fixedSpeech?: string };
 
 // Runtime status is never model-authored dialogue, even when copied from history.
 function withoutInterruptionMarkers(text: string) {
-  return text.replace(/\[\s*(?:interrupted(?: by (?:user|customer))?|interupted|interrupt)\s*\]/gi, "");
+  return text.replace(/\[\s*(?:interrupted(?: by (?:user|customer))?|interupted|interrupt|NEXT|TRANSFER|END|DNC|CALLBACK|WAIT|REPEAT)\s*\]/gi, "");
 }
 
 /** Remove the unwanted stock filler before text, memory and speech. */
@@ -26,6 +26,10 @@ function isTimePermission(text: string) {
   return /\b(?:(?:is|would|will)\s+(?:it|this|that|now|right now|this time|the time)\b[^.!?]{0,100}\b(?:good|okay|ok|convenient|right|bad)\b[^.!?]{0,40}\btime|(?:is|would)\s+(?:now|this|that|it)\b[^.!?]{0,60}\b(?:okay|ok|convenient)\b|(?:do|would|can|could|may|have|are)\s+(?:you|I|we)\b[^.!?]{0,60}\b(?:minute|moment|time to (?:talk|chat|speak)|time for (?:a|this)|time right now|time now|have (?:the |some |any |a little )?time|free to (?:talk|chat)|available to (?:talk|chat))|(?:can|may|could)\s+(?:I|we)\s+(?:talk|speak|chat)|is\s+(?:the\s+)?time\s+(?:good|okay|ok|convenient))\b/i.test(text);
 }
 
+function isInboundHelpPrompt(text: string) {
+  return /\b(?:how (?:can|could|may) (?:I|we) (?:help|assist|support)|what (?:can|could|may) (?:I|we) (?:do for you|help you with))\b/i.test(text);
+}
+
 function isIdleReply(text: string) {
   return /\b(?:my last point was|can you hear me|are you (?:still )?there)\b/i.test(text) || /^(?:yes[, ]+)?I(?:'m| am) (?:here(?: and listening)?|with you)[.! ]*$|^please go ahead[.! ]*$|^let me know if you have (?:any )?(?:other |more )?questions[.! ]*$/i.test(text.trim());
 }
@@ -36,15 +40,15 @@ function purposeStatement(text: string) {
 }
 
 /** A single ordered synthesis worker runs independently of the Ollama reader. */
-export async function streamAgentReply({ salutation, allowQuestion, answerOnly = false, requirePurpose = false, responsePrefix, allowRephrase = false, messages, voice, signal: turnSignal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
+export async function streamAgentReply({ salutation, allowQuestion, filterSpeech, onSpeechPcm, answerOnly = false, requirePurpose = false, responsePrefix, allowRephrase = false, messages, voice, signal: turnSignal, engine, send, timing, onText, fixedSpeech, customerText, emotionState, allowTimePermission = true, completedQuestions = [], maxStatementSentences, outbound=false, introducedName, repetitionRetry = false, openingAudio = false, preparedAudio = false, cacheAudio = process.env.SHAHVEX_TTS_PCM_CACHE === "1", phraseStreaming = (process.env.SHAHVEX_PHRASE_STREAM ?? process.env.SHAHVEX_TEST_PHRASE_STREAM) === "1" }: Options) {
   const speechAbort = new AbortController();
   const signal = AbortSignal.any([turnSignal, speechAbort.signal]);
   const questionAllowed = (speech: string) => !allowQuestion ||
     (!speech.includes("?") && !/^\s*(?:(?:please|and|so|now)[, ]+)*(?:tell me|give me|share|provide|confirm|what|which|where|when|who|how|do you|are you|have you|can you|could you|would you)\b/i.test(speech)) ||
     allowQuestion(speech);
   const addressCustomer = (text: string) => salutation === undefined ? text : applySalutation(text, salutation);
-  const audioCache = openingAudio ? openingPcmCache : pcmCache;
-  if (openingAudio) cacheAudio = true;
+  const audioCache = openingAudio || preparedAudio ? openingPcmCache : pcmCache;
+  if (openingAudio || preparedAudio) cacheAudio = true;
   // Inspect complete questions before either transcript or audio is emitted.
   const key=(text:string)=>text.toLowerCase().replace(/^(?:\s*(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks|so|and|coming back to (?:your|the) question)[,:.! ]+)+/i,'').replace(/\b(?:please|currently|at the moment)\b/g,'').replace(/[^a-z0-9 ]/g,'').replace(/\s+/g,' ').trim();
   const questionKey=(text:string)=>/\b(?:may|can|could|mind if)\b.*\b(?:I|we) ask\b/i.test(text)?'permission-to-ask':key(text);
@@ -63,7 +67,7 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
   const replayGuard=createReplayGuard(messages as {role:string;content:string}[],customerText);
   let statementSentences=0,statementWords=0;
   const overStatementBudget=(text:string)=>{if(text.includes("?")||maxStatementSentences===undefined)return false;statementWords+=text.trim().split(/\s+/).length;return ++statementSentences>maxStatementSentences||statementWords>60;};
-  const queue: string[] = [];
+  const queue: {text: string; source: string}[] = [];
   const selectEmotion = createEmotionSelector({ voice, customerText, state: emotionState, enabled: process.env.SHAHVEX_LISSA_EMOTIONS === "1" && (fixedSpeech === undefined || expressionCapabilityReply(customerText || "") === fixedSpeech || identityVoiceReply(customerText || "", fixedSpeech)) });
   const renderSpeech = createSpeechRenderer({ voice, expressive: process.env.SHAHVEX_LISSA_EXPRESSIVE === "1" && process.env.SHAHVEX_LISSA_EMOTIONS !== "1" });
   let finished = false, failure: unknown, wake: (() => void) | undefined, space: (() => void) | undefined;
@@ -74,8 +78,11 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
     try {
       while (!finished || queue.length) {
         signal.throwIfAborted();
-        const text = queue.shift(); space?.(); space = undefined;
-        if (!text) { await new Promise<void>(resolve => { wake = resolve; }); continue; }
+        const item = queue.shift(); space?.(); space = undefined;
+        if (!item) { await new Promise<void>(resolve => { wake = resolve; }); continue; }
+        const {text, source} = item;
+        let reported = false;
+        const reportPcm = (audible: boolean) => { if (audible && !reported) { reported = true; onSpeechPcm?.(source); } };
         const index = sentenceIndex++;
         const emotion = selectEmotion(text);
         await timing("tts-request-started", { sentenceIndex: index, characters: text.length, ...(emotion !== "neutral" ? { emotion } : {}) });
@@ -87,7 +94,7 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
           ? Math.min(700, wordCount * 70) * 48
           : /^how are you doing today[?!.]*$/i.test(text.trim()) ? 3840 : 2;
         for (let attempt = 0; attempt < 3; attempt++) {
-          const cacheKey=audioCache.key({text,voice,emotion});
+          const cacheKey=audioCache.key({text,voice:voice === "lauren" ? "lauren:reference-flow-v1" : voice,emotion});
           const cachedPcm=cacheAudio?audioCache.get(cacheKey):undefined;
           const cached=attempt===0 && cachedPcm && cachedPcm.length>=minimumBytes ? cachedPcm : undefined;
           const synthesisSignal = AbortSignal.any([signal, AbortSignal.timeout(25000)]);
@@ -108,7 +115,7 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
               signal.throwIfAborted();
               for (let i = 0; i < 1920 && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
               if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
-              await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 1920).toString("base64") }); carry = carry.subarray(1920);
+              await send({ type: "pcm", sampleRate: rate, data: carry.subarray(0, 1920).toString("base64") }); reportPcm(audible); carry = carry.subarray(1920);
             }
           }
           if (bytes > 0 && bytes < minimumBytes && attempt < 2) {
@@ -120,8 +127,9 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
           if (carry.length) {
             signal.throwIfAborted();
             for (let i = 0; i < carry.length && !audible; i += 2) if (Math.abs(carry.readInt16LE(i)) > 3) audible = true;
-            if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
+              if (firstPCM) { firstPCM = false; await timing("first-pcm-received"); }
             await send({ type: "pcm", sampleRate: rate, data: carry.toString("base64") });
+            reportPcm(audible);
           }
           if (!bytes || !audible) throw Error("CosyVoice returned empty or silent audio");
           if(cacheAudio&&!cached&&captureBytes<=audioCache.maxEntryBytes){signal.throwIfAborted();audioCache.put(cacheKey,Buffer.concat(captured));}
@@ -139,7 +147,7 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
       let at = spoken.length <= 480 ? spoken.length : spoken.lastIndexOf(" ", 450);
       if (at <= 0) at = 450;
       while (queue.length >= 32 && !failure) { signal.throwIfAborted(); await new Promise<void>(resolve => { space = resolve; }); }
-      if (failure) throw failure; signal.throwIfAborted(); queue.push(spoken.slice(0, at).trim()); notify();
+      if (failure) throw failure; signal.throwIfAborted(); queue.push({text:spoken.slice(0, at).trim(),source:text}); notify();
       spoken = spoken.slice(at).trim();
     }
   };
@@ -148,14 +156,30 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
     // Trusted server-selected presence checks use the same ordered, cancellable
     // voice path, without inventing a customer utterance or invoking the LLM.
     if (fixedSpeech !== undefined) {
-      const speech = addressCustomer(fixedSpeech);
+      const addressed = addressCustomer(withoutInterruptionMarkers(fixedSpeech));
+      let speech = addressed;
+      if (filterSpeech || outbound && isInboundHelpPrompt(addressed)) {
+        const filter = (unit: string) => outbound && isInboundHelpPrompt(unit) ? "" : (filterSpeech?.(unit) ?? unit).trim();
+        const units: string[] = [];
+        let remaining = addressed, boundary: number;
+        while ((boundary = speechBoundary(remaining, false, true))) {
+          units.push(filter(remaining.slice(0, boundary)));
+          remaining = remaining.slice(boundary).trimStart();
+        }
+        if (remaining) units.push(filter(remaining));
+        speech = units.filter(Boolean).join(" ");
+      }
       signal.throwIfAborted(); onText(speech);
       if (speech.trim()) await send({ type: "delta", text: speech });
-      // Start the short introduction as soon as its first sentence is ready.
-      let remaining=speech;
-      let boundary:number;
-      while((boundary=speechBoundary(remaining, false, true))){await enqueue(remaining.slice(0,boundary));remaining=remaining.slice(boundary).trimStart();}
-      if(remaining)await enqueue(remaining);
+      if (openingAudio && voice === "lauren") {
+        // One model utterance keeps the introduction and greeting on the same cadence.
+        await enqueue(speech.replace(/\.\s+(?=How are you)/i, ", "));
+      } else {
+        let remaining=speech;
+        let boundary:number;
+        while((boundary=speechBoundary(remaining, false, true))){await enqueue(remaining.slice(0,boundary));remaining=remaining.slice(boundary).trimStart();}
+        if(remaining)await enqueue(remaining);
+      }
       finished = true; notify(); await worker;
       if (failure) throw failure;
       await timing("total-synthesis-completed");
@@ -189,7 +213,9 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
           if(answerOnly&&part.includes("?"))continue;
           if (isTransferOffer({role:"assistant",content:part}) && handoffSpokenInTurn) continue;
           if (requirePurpose && !answer.trim() && !purposeStatement(part)) continue;
-          if (!part.trim() || outbound && rejectedSpeech(part) || outbound&&isIdleReply(part) || outbound&&/\bhow can I (?:help|assist|support)\b/i.test(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part) || !questionAllowed(part)) continue;
+          if (!part.trim() || outbound && rejectedSpeech(part) || outbound&&isIdleReply(part) || outbound&&isInboundHelpPrompt(part) || overStatementBudget(part) || repeatedIntroduction(part) || alreadyAnswered(part) || !(allowRephrase || replayGuard.allow(part)) || !allowTimePermission && isTimePermission(part) || !questionAllowed(part)) continue;
+          if (filterSpeech) part = filterSpeech(part);
+          if (!part.trim()) continue;
           if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(part.trim())){fillerPrefix=part;continue;}
           if(fillerPrefix){part=fillerPrefix+' '+part.trimStart();fillerPrefix='';}
           if (!answer && responsePrefix) part = responsePrefix + part.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
@@ -210,22 +236,25 @@ export async function streamAgentReply({ salutation, allowQuestion, answerOnly =
     await consume(pending + decoder.decode()); if (!done) throw Error("Incomplete model response");
     phrase = addressCustomer(firstTransferWording(groundedReplyText(withoutPatienceFiller(withoutInterruptionMarkers(phrase)),customerText)));
     if(/^(?:mm[ -]?hmm|okay|ok|got it|thank you|thanks)[.! ,]*$/i.test(phrase.trim())){fillerPrefix=phrase;phrase='';}
-    if (phrase && !(outbound && rejectedSpeech(phrase)) && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&/\bhow can I (?:help|assist|support)\b/i.test(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase)) && questionAllowed(phrase)) {
-      if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}
-      if (!answer && responsePrefix) phrase = responsePrefix + phrase.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
-      answer += phrase; onText(answer);
-      await send({ type: "delta", text: phrase });
-      await enqueue(phrase);
+    if (phrase && !(outbound && rejectedSpeech(phrase)) && !(answerOnly&&phrase.includes("?")) && !(handoffSpokenInTurn && isTransferOffer({role:"assistant",content:phrase})) && !(requirePurpose && !answer.trim() && !purposeStatement(phrase)) && !(outbound&&isIdleReply(phrase)) && !(outbound&&isInboundHelpPrompt(phrase)) && !overStatementBudget(phrase) && !repeatedIntroduction(phrase) && !alreadyAnswered(phrase) && (allowRephrase || replayGuard.allow(phrase)) && (allowTimePermission || !isTimePermission(phrase)) && questionAllowed(phrase)) {
+      if (filterSpeech) phrase = filterSpeech(phrase);
+      if (phrase.trim()) {
+        if(fillerPrefix){phrase=fillerPrefix+' '+phrase.trimStart();fillerPrefix='';}
+        if (!answer && responsePrefix) phrase = responsePrefix + phrase.replace(/^\s*(?:sir|ma['’]?am|madam)[, .!]+/i, '');
+        answer += phrase; onText(answer);
+        await send({ type: "delta", text: phrase });
+        await enqueue(phrase);
+      }
     }
     finished = true; notify(); await worker;
     if (failure) throw failure;
     await timing("total-synthesis-completed");
     if (!answer.trim() && !repetitionRetry) {
       const retryMessages=(messages as {role:string;content:string}[]).map((m,i)=>i===0&&m.role==='system'?{...m,content:m.content+"\nYour previous response replayed conversation history or contained only an acknowledgment and was not spoken. Answer ONLY the latest customer message. Do not copy earlier assistant statements or customer dialogue. Give a substantive response to the customer and continue the unresolved script step. Continue from the next applicable unanswered script step, respecting branches and refusals. If no questions remain, close or follow the supported consented handoff. Never re-ask these answered questions: "+JSON.stringify(completedQuestions)}:m);
-      await streamAgentReply({salutation,allowQuestion,answerOnly,requirePurpose,messages:retryMessages,allowRephrase,responsePrefix,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
+      await streamAgentReply({salutation,allowQuestion,filterSpeech,onSpeechPcm,answerOnly,requirePurpose,messages:retryMessages,allowRephrase,responsePrefix,voice,signal,engine,send,timing,onText,customerText,emotionState,allowTimePermission,completedQuestions,maxStatementSentences,outbound,introducedName,repetitionRetry:true,phraseStreaming,cacheAudio});
     } else if (!answer.trim() && repetitionRetry) {
       const recovery = answerOnly ? "" : recoveryReply(messages);
-      if (recovery) await streamAgentReply({salutation,messages:[],fixedSpeech:recovery,voice,signal,engine,send,timing,onText,customerText,emotionState,phraseStreaming,cacheAudio});
+      if (recovery) await streamAgentReply({salutation,filterSpeech,onSpeechPcm,messages:[],fixedSpeech:recovery,voice,signal,engine,send,timing,onText,customerText,emotionState,phraseStreaming,cacheAudio});
     }
   } finally { speechAbort.abort(); finished = true; queue.length = 0; notify(); await worker; signal.removeEventListener("abort", abort); }
 }

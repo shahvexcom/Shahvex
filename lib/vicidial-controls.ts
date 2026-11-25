@@ -12,6 +12,7 @@ export async function vicidialCallCommand(
   agentId?: string,
   controllerOnly = false,
   nativeOnly = false,
+  disposition?: string,
 ) {
   const pool = await db();
   const a = (
@@ -69,6 +70,8 @@ export async function vicidialCallCommand(
     if (action === "hangup") {
       if (a.customer_ended || ["PREPARING", "UNCERTAIN", "SUBMITTED", "ANSWERED"].includes(a.transfer_status))
         throw Error("This AI call is no longer eligible for native hangup");
+      if (!a.vicidial_call_id || !a.vicidial_agent_user)
+        throw Error("Native call identity is pending");
       const response = await vicidialRequest(
           a.server_url,
           a.username,
@@ -78,21 +81,28 @@ export async function vicidialCallCommand(
             agent_user: a.vicidial_agent_user,
             value: a.vicidial_call_id,
             stage: "HANGUP",
+            ...(disposition ? { status: disposition } : {}),
           },
           true,
+          4000,
         );
       // The exact historical caller-code fences a retry from a newer call.
       const nativeAlreadyEnded = /ERROR:.*no active call found/i.test(response);
       if (!nativeAlreadyEnded) requireVicidialSuccess(response, "ra_call_control");
-      if (a.telephony_provider === "AUDIOSOCKET" && !nativeOnly) {
-        const live = vicidialLiveConfig.parse(a.live_config);
-        const closed = await requestBridge(live.bridgeUrl,decryptCredential(a.bridge_secret_ciphertext),"/command",{callId:id,action:"close-audio"});
-        if (closed.accepted !== true) throw Error("Native hangup submitted. AI audio closure is not yet confirmed");
-      }
       await pool.query(
-        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,end_initiation=COALESCE(end_initiation,$2::jsonb),updated_at=NOW() WHERE id=$1",
-        [id, nativeAlreadyEnded ? null : hangupInitiation],
+        "UPDATE agent_calls SET ending_requested=TRUE,conversation_state=CASE WHEN status IN ('COMPLETED','FAILED') THEN conversation_state ELSE 'ENDING' END,end_initiation=CASE WHEN $3::text IS NOT NULL AND end_initiation->>'reason'='call_answer_detection' THEN jsonb_set(end_initiation,'{nativeSubmitted}','true'::jsonb) ELSE COALESCE(end_initiation,$2::jsonb) END,outcome=COALESCE($3,outcome),updated_at=NOW() WHERE id=$1",
+        [id, nativeAlreadyEnded ? null : hangupInitiation, nativeAlreadyEnded ? null : disposition ?? null],
       );
+      if (a.telephony_provider === "AUDIOSOCKET" && !nativeOnly) {
+        // VICIdial accepted the hangup. Closing the local socket is supplemental.
+        try {
+          const live = vicidialLiveConfig.parse(a.live_config);
+          await requestBridge(live.bridgeUrl, decryptCredential(a.bridge_secret_ciphertext),
+            "/command", { callId: id, action: "close-audio" }, 750);
+        } catch {
+          // PBX hangup and native confirmation can proceed without the bridge.
+        }
+      }
       return Response.json({
         message: "Ending call; waiting for VICIdial confirmation.",
       });

@@ -21,14 +21,12 @@ import {
   FiSend,
 } from "react-icons/fi";
 import { FaWhatsapp, FaInstagram, FaFacebookMessenger } from "react-icons/fa6";
-import BpoScriptPanel from "./bpo-script-workspace";
 import BpoHistory from "./bpo-history";
 import BpoAccountSettings from "./bpo-account-settings";
 
 import BpoPlansWorkspace from "./bpo-plans-workspace";
 import BpoAgentsWorkspace from "./bpo-agents-workspace";
 import BpoDialingWorkspace from "./bpo-dialing-workspace";
-
 
 import "./bpo-workspace.css";
 import "./bpo-layout-fix.css";
@@ -37,26 +35,40 @@ import "./bpo-final-grid.css";
 import "./bpo-height-fix.css";
 import "./bpo-2fa-modal.css";
 import "./bpo-account-fixes.css";
-type User = { name: string; email?: string; username?: string; avatar_url?: string; two_factor_enabled?: boolean; remaining_credits?: number };
-type CreditContacts = { whatsappUrl: string; instagramUrl: string; messengerUrl: string };
+type User = {
+  name: string;
+  email?: string;
+  username?: string;
+  avatar_url?: string;
+  two_factor_enabled?: boolean;
+  remaining_credits?: number;
+};
+type CreditContacts = {
+  whatsappUrl: string;
+  instagramUrl: string;
+  messengerUrl: string;
+};
 const defaultCreditContacts: CreditContacts = {
   whatsappUrl: process.env.NEXT_PUBLIC_BPO_WHATSAPP || "https://wa.me/",
-  instagramUrl: process.env.NEXT_PUBLIC_BPO_INSTAGRAM || "https://instagram.com/",
+  instagramUrl:
+    process.env.NEXT_PUBLIC_BPO_INSTAGRAM || "https://instagram.com/",
   messengerUrl: process.env.NEXT_PUBLIC_BPO_MESSENGER || "https://m.me/",
 };
-const dialing = ["VoIP", "Create Agent", "Auto Dialing", "Manual Dialing"];
-const availableTabs = ["Script", "History", "Plans", "Settings", ...dialing];
+const dialing = ["VoIP", "Auto Dialing", "Manual Dialing"];
+const availableTabs = ["Agent", "History", "Plans", "Settings", ...dialing];
 export default function BpoWorkspace({ user }: { user: User }) {
   const { formatMoney } = useCurrency();
   const [liveUser, setLiveUser] = useState(user);
   const [creditContacts, setCreditContacts] = useState(defaultCreditContacts);
   const [creditContactsLoading, setCreditContactsLoading] = useState(false);
-  const [active, setActive] = useState("Script"),
+  const [active, setActive] = useState("Agent"),
     [menu, setMenu] = useState(false),
     [dialingOpen, setDialingOpen] = useState(false),
     [logoutOpen, setLogoutOpen] = useState(false),
     [creditsOpen, setCreditsOpen] = useState(false),
-    [creditTab, setCreditTab] = useState<"crypto" | "manual" | "contact">("contact"),
+    [creditTab, setCreditTab] = useState<"crypto" | "manual" | "contact">(
+      "contact",
+    ),
     [mobileNavOpen, setMobileNavOpen] = useState(false);
   const profileRef = useRef<HTMLDivElement>(null);
   const initials = user.name
@@ -71,7 +83,8 @@ export default function BpoWorkspace({ user }: { user: User }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (requested === "manual") setActive("Manual Dialing");
     else if (requested === "auto") setActive("Auto Dialing");
-    else if (requested === "quick") setActive("Script");
+    else if (requested === "quick") setActive("Agent");
+    else if (saved === "Script" || saved === "Create Agent") setActive("Agent");
     else if (saved && availableTabs.includes(saved)) setActive(saved);
     else if (saved) localStorage.removeItem("bpo-active-tab");
   }, []);
@@ -82,7 +95,9 @@ export default function BpoWorkspace({ user }: { user: User }) {
       if (syncing || document.visibilityState === "hidden") return;
       syncing = true;
       try {
-        const response = await fetch("/api/auth/me?portal=bpo", { cache: "no-store" });
+        const response = await fetch("/api/auth/me?portal=bpo", {
+          cache: "no-store",
+        });
         if (response.status === 401 || response.status === 404) {
           window.location.replace("/bpo/login");
           return;
@@ -94,7 +109,7 @@ export default function BpoWorkspace({ user }: { user: User }) {
           return;
         }
         if (mounted) {
-          setLiveUser(current => ({
+          setLiveUser((current) => ({
             ...current,
             name: data.agent.name ?? current.name,
             email: data.agent.email ?? current.email,
@@ -110,7 +125,9 @@ export default function BpoWorkspace({ user }: { user: User }) {
         syncing = false;
       }
     };
-    const syncWhenVisible = () => { if (document.visibilityState === "visible") void syncAccount(); };
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") void syncAccount();
+    };
     const interval = window.setInterval(() => void syncAccount(), 3000);
     window.addEventListener("focus", syncAccount);
     document.addEventListener("visibilitychange", syncWhenVisible);
@@ -124,28 +141,44 @@ export default function BpoWorkspace({ user }: { user: User }) {
   }, []);
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (profileRef.current && !profileRef.current.contains(event.target as Node)) setMenu(false);
-      if (!(event.target as Element).closest(".bpo-dialing-menu")) setDialingOpen(false);
+      if (
+        profileRef.current &&
+        !profileRef.current.contains(event.target as Node)
+      )
+        setMenu(false);
+      if (!(event.target as Element).closest(".bpo-dialing-menu"))
+        setDialingOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
-    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    return () =>
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
   }, []);
   const select = (tab: string) => {
     setActive(tab);
     setMobileNavOpen(false);
     setDialingOpen(false);
     localStorage.setItem("bpo-active-tab", tab);
-    const query = tab === "Manual Dialing" ? "?tab=manual" : tab === "Auto Dialing" ? "?tab=auto" : "";
+    const query =
+      tab === "Manual Dialing"
+        ? "?tab=manual"
+        : tab === "Auto Dialing"
+          ? "?tab=auto"
+          : "";
     window.history.replaceState(null, "", `/bpo${query}`);
   };
   const openCredits = async () => {
     setCreditsOpen(true);
     setCreditContactsLoading(true);
     try {
-      const response = await fetch("/api/bpo/credit-contacts", { cache: "no-store" });
+      const response = await fetch("/api/bpo/credit-contacts", {
+        cache: "no-store",
+      });
       const data = await response.json();
       if (response.ok && data.creditContacts) {
-        setCreditContacts(current => ({ ...current, ...data.creditContacts }));
+        setCreditContacts((current) => ({
+          ...current,
+          ...data.creditContacts,
+        }));
       }
     } catch {
       // Keep the last available links if refreshing them temporarily fails.
@@ -161,15 +194,13 @@ export default function BpoWorkspace({ user }: { user: User }) {
         </Link>
         <nav className={`bpo-tabs ${mobileNavOpen ? "mobile-open" : ""}`}>
           <button
-            className={active === "Script" ? "active" : ""}
-            onClick={() => select("Script")}
+            className={active === "Agent" ? "active" : ""}
+            onClick={() => select("Agent")}
           >
-            <FiFileText />
-            Script
+            <FiUserPlus />
+            Agent
           </button>
-          <div
-            className="bpo-dialing-menu"
-          >
+          <div className="bpo-dialing-menu">
             <button
               className={
                 dialing.includes(active) || active === "Dialing" ? "active" : ""
@@ -192,8 +223,8 @@ export default function BpoWorkspace({ user }: { user: User }) {
                       setDialingOpen(false);
                     }}
                   >
-                    {item === "VoIP" ? (<FiPhone/>) : item === "Create Agent" ? (
-                      <FiUserPlus />
+                    {item === "VoIP" ? (
+                      <FiPhone />
                     ) : item === "Auto Dialing" ? (
                       <FiZap />
                     ) : item === "Manual Dialing" ? (
@@ -220,12 +251,15 @@ export default function BpoWorkspace({ user }: { user: User }) {
             Plans
           </button>
         </nav>
-        <div className="bpo-actions"><CurrencySelector />
+        <div className="bpo-actions">
+          <CurrencySelector />
           <div className="bpo-credits">
             <span>
               <FiCreditCard /> Balance
             </span>
-            <strong aria-live="polite">{formatMoney(liveUser.remaining_credits || 0)}</strong>
+            <strong aria-live="polite">
+              {formatMoney(liveUser.remaining_credits || 0)}
+            </strong>
             <button aria-label="Add funds" onClick={() => void openCredits()}>
               <FiPlus />
             </button>
@@ -238,7 +272,13 @@ export default function BpoWorkspace({ user }: { user: User }) {
               onClick={() => setMenu(!menu)}
             >
               {liveUser.avatar_url ? (
-                <img src={liveUser.avatar_url} alt="" onError={() => setLiveUser(current => ({ ...current, avatar_url: "" }))} />
+                <img
+                  src={liveUser.avatar_url}
+                  alt=""
+                  onError={() =>
+                    setLiveUser((current) => ({ ...current, avatar_url: "" }))
+                  }
+                />
               ) : (
                 <span>{initials}</span>
               )}
@@ -247,7 +287,16 @@ export default function BpoWorkspace({ user }: { user: User }) {
               <div className="bpo-menu">
                 <div className="bpo-menu-user">
                   {liveUser.avatar_url ? (
-                    <img src={liveUser.avatar_url} alt="" onError={() => setLiveUser(current => ({ ...current, avatar_url: "" }))} />
+                    <img
+                      src={liveUser.avatar_url}
+                      alt=""
+                      onError={() =>
+                        setLiveUser((current) => ({
+                          ...current,
+                          avatar_url: "",
+                        }))
+                      }
+                    />
                   ) : (
                     <span>{initials}</span>
                   )}
@@ -257,7 +306,12 @@ export default function BpoWorkspace({ user }: { user: User }) {
                   </div>
                 </div>
                 <hr />
-                <button onClick={() => { setMenu(false); select("Settings"); }}>
+                <button
+                  onClick={() => {
+                    setMenu(false);
+                    select("Settings");
+                  }}
+                >
                   <FiUser />
                   Account settings
                 </button>
@@ -281,41 +335,178 @@ export default function BpoWorkspace({ user }: { user: User }) {
           </button>
         </div>
       </header>
-      {active === "Settings" ? <BpoAccountSettings initial={{name:liveUser.name,email:liveUser.email||"",username:liveUser.username||"",avatar_url:liveUser.avatar_url||"",two_factor_enabled:!!liveUser.two_factor_enabled}} onUserUpdated={(next) => setLiveUser({...liveUser,...next})} /> : active === "Script" ? (
-        <BpoScriptPanel />
+      {active === "Settings" ? (
+        <BpoAccountSettings
+          initial={{
+            name: liveUser.name,
+            email: liveUser.email || "",
+            username: liveUser.username || "",
+            avatar_url: liveUser.avatar_url || "",
+            two_factor_enabled: !!liveUser.two_factor_enabled,
+          }}
+          onUserUpdated={(next) => setLiveUser({ ...liveUser, ...next })}
+        />
+      ) : active === "Agent" ? (
+        <BpoAgentsWorkspace />
       ) : active === "History" ? (
         <BpoHistory />
       ) : active === "Plans" ? (
-        <BpoPlansWorkspace onAddCredits={() => void openCredits()} onBalanceUpdated={(remaining_credits) => setLiveUser(current => ({ ...current, remaining_credits }))} />
-      ) : active === "VoIP" ? (<VoipManager portal="bpo"/>) : active === "Create Agent" ? (
-        <BpoAgentsWorkspace />
-
+        <BpoPlansWorkspace
+          onAddCredits={() => void openCredits()}
+          onBalanceUpdated={(remaining_credits) =>
+            setLiveUser((current) => ({ ...current, remaining_credits }))
+          }
+        />
+      ) : active === "VoIP" ? (
+        <VoipManager portal="bpo" />
       ) : active === "Auto Dialing" ? (
-        <BpoDialingWorkspace mode="AUTO" />
+        <BpoDialingWorkspace mode="AUTO" openVoip={() => select("VoIP")} />
       ) : active === "Manual Dialing" ? (
-        <BpoDialingWorkspace mode="MANUAL" />
+        <BpoDialingWorkspace mode="MANUAL" openVoip={() => select("VoIP")} />
       ) : (
         <main className="bpo-main">
           <h1>{active}</h1>
           <p>Manage your calling workspace from one place.</p>
         </main>
       )}
-      {logoutOpen && <SignOutConfirmation portal="bpo" onCancel={() => setLogoutOpen(false)} />}
-      {creditsOpen && <div className="bpo-credit-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setCreditsOpen(false)}>
-        <section className="bpo-credit-modal" role="dialog" aria-modal="true" aria-labelledby="credit-title">
-          <button className="bpo-credit-close" onClick={() => setCreditsOpen(false)} aria-label="Close"><FiX /></button>
-          <p className="bpo-eyebrow">ACCOUNT BALANCE</p><h2 id="credit-title">Add funds</h2>
-          <p className="bpo-credit-intro">Choose a payment method to recharge your BPO account.</p>
-          <div className="bpo-credit-tabs">
-            <button className={creditTab === "crypto" ? "active" : ""} onClick={() => setCreditTab("crypto")}><FiCreditCard /> Crypto</button>
-            <button className={creditTab === "manual" ? "active" : ""} onClick={() => setCreditTab("manual")}><FiFileText /> Manual</button>
-            <button className={creditTab === "contact" ? "active" : ""} onClick={() => setCreditTab("contact")}><FiMessageCircle /> Contact <em>Recommended</em></button>
-          </div>
-          {creditTab === "crypto" && <div className="bpo-credit-panel bpo-coming-soon"><div className="bpo-qr-placeholder">QR</div><h3>Crypto payments are coming soon</h3><p>NOWPayments checkout and QR payments will be available here shortly.</p><span>Coming soon</span></div>}
-          {creditTab === "manual" && <div className="bpo-credit-panel bpo-coming-soon"><div className="bpo-qr-placeholder bpo-manual-placeholder"><FiFileText /></div><h3>Manual payments are coming soon</h3><p>Manual recharge with JazzCash, Easypaisa and payment proof will be available here shortly.</p><span>Coming soon</span></div>}
-          {creditTab === "contact" && <div className="bpo-credit-panel" aria-busy={creditContactsLoading}><p>Need a quick recharge? Contact our support team and share the amount you want to add.</p>{creditContactsLoading ? <div className="bpo-credit-contact-loading"><i /><i /><i /></div> : <><a className="bpo-contact-option whatsapp" href={creditContacts.whatsappUrl} target="_blank" rel="noopener noreferrer"><FaWhatsapp /><span><strong>WhatsApp</strong><small>Recommended · fastest response</small></span><FiSend /></a><a className="bpo-contact-option instagram" href={creditContacts.instagramUrl} target="_blank" rel="noopener noreferrer"><FaInstagram /><span><strong>Instagram</strong><small>Message us on Instagram</small></span><FiSend /></a><a className="bpo-contact-option messenger" href={creditContacts.messengerUrl} target="_blank" rel="noopener noreferrer"><FaFacebookMessenger /><span><strong>Messenger</strong><small>Chat with support</small></span><FiSend /></a></>}</div>}
-        </section>
-      </div>}
+      {logoutOpen && (
+        <SignOutConfirmation
+          portal="bpo"
+          onCancel={() => setLogoutOpen(false)}
+        />
+      )}
+      {creditsOpen && (
+        <div
+          className="bpo-credit-backdrop"
+          onMouseDown={(e) =>
+            e.target === e.currentTarget && setCreditsOpen(false)
+          }
+        >
+          <section
+            className="bpo-credit-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="credit-title"
+          >
+            <button
+              className="bpo-credit-close"
+              onClick={() => setCreditsOpen(false)}
+              aria-label="Close"
+            >
+              <FiX />
+            </button>
+            <p className="bpo-eyebrow">ACCOUNT BALANCE</p>
+            <h2 id="credit-title">Add funds</h2>
+            <p className="bpo-credit-intro">
+              Choose a payment method to recharge your BPO account.
+            </p>
+            <div className="bpo-credit-tabs">
+              <button
+                className={creditTab === "crypto" ? "active" : ""}
+                onClick={() => setCreditTab("crypto")}
+              >
+                <FiCreditCard /> Crypto
+              </button>
+              <button
+                className={creditTab === "manual" ? "active" : ""}
+                onClick={() => setCreditTab("manual")}
+              >
+                <FiFileText /> Manual
+              </button>
+              <button
+                className={creditTab === "contact" ? "active" : ""}
+                onClick={() => setCreditTab("contact")}
+              >
+                <FiMessageCircle /> Contact <em>Recommended</em>
+              </button>
+            </div>
+            {creditTab === "crypto" && (
+              <div className="bpo-credit-panel bpo-coming-soon">
+                <div className="bpo-qr-placeholder">QR</div>
+                <h3>Crypto payments are coming soon</h3>
+                <p>
+                  NOWPayments checkout and QR payments will be available here
+                  shortly.
+                </p>
+                <span>Coming soon</span>
+              </div>
+            )}
+            {creditTab === "manual" && (
+              <div className="bpo-credit-panel bpo-coming-soon">
+                <div className="bpo-qr-placeholder bpo-manual-placeholder">
+                  <FiFileText />
+                </div>
+                <h3>Manual payments are coming soon</h3>
+                <p>
+                  Manual recharge with JazzCash, Easypaisa and payment proof
+                  will be available here shortly.
+                </p>
+                <span>Coming soon</span>
+              </div>
+            )}
+            {creditTab === "contact" && (
+              <div
+                className="bpo-credit-panel"
+                aria-busy={creditContactsLoading}
+              >
+                <p>
+                  Need a quick recharge? Contact our support team and share the
+                  amount you want to add.
+                </p>
+                {creditContactsLoading ? (
+                  <div className="bpo-credit-contact-loading">
+                    <i />
+                    <i />
+                    <i />
+                  </div>
+                ) : (
+                  <>
+                    <a
+                      className="bpo-contact-option whatsapp"
+                      href={creditContacts.whatsappUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <FaWhatsapp />
+                      <span>
+                        <strong>WhatsApp</strong>
+                        <small>Recommended · fastest response</small>
+                      </span>
+                      <FiSend />
+                    </a>
+                    <a
+                      className="bpo-contact-option instagram"
+                      href={creditContacts.instagramUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <FaInstagram />
+                      <span>
+                        <strong>Instagram</strong>
+                        <small>Message us on Instagram</small>
+                      </span>
+                      <FiSend />
+                    </a>
+                    <a
+                      className="bpo-contact-option messenger"
+                      href={creditContacts.messengerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <FaFacebookMessenger />
+                      <span>
+                        <strong>Messenger</strong>
+                        <small>Chat with support</small>
+                      </span>
+                      <FiSend />
+                    </a>
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
       <footer className="bpo-footer mt-20!">
         © 2026 Shahvex. All rights reserved.
       </footer>

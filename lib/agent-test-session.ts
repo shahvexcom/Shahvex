@@ -1,7 +1,8 @@
-import { healthSideTopic, isGeneralHealthQuestion, GENERAL_HEALTH_RULES } from "../gateway/health-side-topic.cjs";
-import { canonicalQuestion, answersAffirmatively, suppliedParts, memoryQuestionKey } from "../gateway/question-memory.cjs";
+import { repeatIntent, scenarioDecision, scenarioAnnouncement } from "../gateway/scenario-policy.cjs";
+import { healthSideTopic, personalSideReply, medicalFallback, isGeneralHealthQuestion, GENERAL_HEALTH_RULES } from "../gateway/health-side-topic.cjs";
+import { canonicalQuestion, answersAffirmatively, suppliedParts, memoryQuestionKey, missingQuestion } from "../gateway/question-memory.cjs";
 import { isPresenceConfirmation } from "../gateway/turn-completion.cjs";
-import { FLOW_REVISION, repairTurn, repairInstruction, introductionOnly, applySalutation, knownSalutation, isListeningSignal, isWellbeingReply } from "../gateway/conversation-resume.cjs";
+import { FLOW_REVISION, repairTurn, repairInstruction, introductionOnly, applySalutation, knownSalutation, isListeningSignal, isWellbeingReply, rephraseQuestion, questionContinuation, conversationalPolarity } from "../gateway/conversation-resume.cjs";
 import { asksCallingPurpose, scriptPurpose } from "../gateway/conversation-flow.cjs";
 import { isCustomerQuestion, recoveryReply } from "../gateway/conversation-recovery.cjs";
 import { scriptQuestionProgress, configuredQuestionOutcome, questionKey, customerFloorReply } from "../gateway/reply-integrity.cjs";
@@ -29,7 +30,7 @@ import {
 // @ts-ignore -- Explicit current TS voice source; no change to tsconfig or other routes.
 } from "./agent-test.ts";
 const rebateQuestionExplanation = "Your rebate, coverage, and age help us know what to check in a Medicare rebate review.";
-const questionReason = /\bwhy (?:exactly )?(?:(?:do|did) you (?:need to )?ask|are you asking)\s+(?:me\s+)?(?:(?:all|any) (?:of )?)?(?:(?:these|those|the|so many) )?questions?\b/i;
+const questionReason = /\bwhy (?:(?:should|would|do|must|can) i (?:have to |need to )?(?:tell|answer|say|share|give)|i tell)\b|\bwhy (?:exactly )?(?:(?:do|did) you (?:need to )?ask|are you asking)\s+(?:me\s+)?(?:(?:all|any) (?:of )?)?(?:(?:these|those|the|so many) )?questions?\b/i;
 const explanationAcknowledgment = /^(?:okay|ok|alright|all right|got it|understood|(?:I )?see)(?:[,.! ]+(?:thanks|thank you))?[.! ]*$/i;
 const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -49,7 +50,7 @@ export async function handleTestSession(
       return json({ error: "Test session expired. Start again." }, 404);
     session.lastSeen = Date.now();
     if (action === "ping") return json({ active: true });
-    if (session.transferAnnouncementTurn && (action === "listen" || action === "interrupt"))
+    if (session.transferAnnouncementTurn && action === "interrupt")
       return json({error:"Call is no longer handled by AI",handoffPending:true},409);
     if (action === "listen") {
       const bytes=new Uint8Array(await request.arrayBuffer());
@@ -160,7 +161,7 @@ export async function handleTestSession(
     if (session.transferAnnouncementTurn && action === "turn") {
       const body = request.headers.get("content-type")?.startsWith("application/json")
         ? await request.clone().json().catch(() => null) : null;
-      if (!owner.startsWith("vici-") || body?.handoffFailed !== true)
+      if (!owner.startsWith("vici-") || body?.handoffFailed !== true && body?.interruptedHandoff !== session.transferAnnouncementTurn)
         return json({error:"Call is no longer handled by AI",handoffPending:true},409);
     }
     if (session.endedReason) return json({ error: "This call has ended.", code: "CALL_ENDED" }, 409);
@@ -229,22 +230,73 @@ export async function handleTestSession(
             console.info("[Shahvex agent test]", { turnId, ...event });
             await send(event);
           };
+          const nativeHandoff = session.requirePlaybackAck && owner.startsWith("vici-");
+          const nativeAsks = nativeHandoff ? session.nativeQuestionAsks ??= new Map<string,string>() : undefined;
+          const configuredPurpose = nativeHandoff ? scriptPurpose(session.config) : undefined;
+          const purposeUnit = (speech: string) => Boolean(configuredPurpose &&
+            (speech.includes(configuredPurpose) || session.speechPhase === "purpose" &&
+              /\b(?:I(?:'m| am) calling|the reason for my call)\b/i.test(speech)));
+          const presencePrompt = /\b(?:(?:can|could|do) you hear me|are you (?:still )?there|is (?:the audio|my voice) clear)\b[^?]*\?/i;
+          const planned = nativeHandoff ? scriptQuestionProgress(session.config.script, {completed:[]}, {
+            instructions:session.config.instructions, knowledge:session.config.knowledge,
+          }) : [];
+          const identifyQuestion = (speech: string) => {
+            const canonical = canonicalQuestion(speech,planned.map(step=>step.question));
+            const key = questionKey(speech);
+            return planned.find(step => step.question === canonical || nativeAsks?.get(step.id) === key ||
+              step.parts.length && key === questionKey(missingQuestion(step.question,step.parts,session.questionLedger?.get(step.id)?.parts)));
+          };
+          let text = "", silenceStep = 0;
           let introductionSignaled = false;
           const streamAgentReply = async (options: Parameters<typeof streamReply>[0]) => {
+            options = { ...options, outbound: true };
             if (session.speechPhase === "introduction" && !introductionSignaled) {
               introductionSignaled = true;
               await send({type:"introduction"});
             }
-            return streamReply({...options, salutation:knownSalutation(session.messages)});
+            if (!nativeAsks) return streamReply({...options, salutation:knownSalutation(session.messages)});
+            const selected = new Set<string>();
+            let selectedPresence = false;
+            return streamReply({...options, salutation:knownSalutation(session.messages),
+              filterSpeech(speech) {
+                if (presencePrompt.test(speech)) {
+                  if (session.nativePresenceAttempted || selectedPresence || silenceStep === 0) return "";
+                  selectedPresence = true;
+                }
+                const step = identifyQuestion(speech);
+                if (step) {
+                  const prior = nativeAsks.get(step.id);
+                  const parts = session.questionLedger?.get(step.id)?.parts;
+                  const missing = missingQuestion(step.question,step.parts,parts);
+                  const remaining = parts?.size && missing !== step.question && questionKey(speech) === questionKey(missing);
+                  if (selected.has(step.id) || (step.id !== repeatQuestionId && prior && (!remaining || prior === questionKey(speech)))) return "";
+                  selected.add(step.id);
+                }
+                if (purposeUnit(speech) && session.nativePurposeAttempted && !asksCallingPurpose(text)) return "";
+                return speech;
+              },
+              onSpeechPcm(speech) {
+                if (presencePrompt.test(speech)) {
+                  session.nativePresenceAttempted = true;
+                  session.awaitingHearingConfirmation = true;
+                }
+                const step = identifyQuestion(speech);
+                if (step) nativeAsks.set(step.id,questionKey(speech));
+                if (purposeUnit(speech)) session.nativePurposeAttempted = true;
+              },
+            });
           };
           let answer = "";
+          let retryFailedSpeech = false;
+          let interruptedHandoff = false;
+          let repeatQuestionId: string | undefined;
           let repairSource: string | undefined;
           let resumedSpeech: typeof session.hearingResume;
           const speakResumed = async (target: NonNullable<typeof session.hearingResume>, prefix = "") => {
             resumedSpeech = target;
             repairSource = target.question;
             session.speechPhase = target.phase;
-            await streamAgentReply({messages:[],fixedSpeech:prefix+target.speech,voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+            await streamAgentReply({messages:[],fixedSpeech:prefix+target.speech,preparedAudio:session.config.voice === "lauren" && Boolean(target.question) && prefix === "Of course, ",voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
           };
           const memoryHistory = (history: typeof session.messages) => history.map((turn,index) => {
             if (turn.role === "user" && turn.businessResponse) return {...turn,content:turn.businessResponse,conversationOnly:false};
@@ -267,8 +319,9 @@ export async function handleTestSession(
           const scriptMemory = (history: typeof session.messages) => {
             const memory = questionMemory(memoryHistory(history));
             if (session.requirePlaybackAck) {
-              // The call ledger includes clear replies received before playback acknowledgment.
-              const complete = new Map(memory.completed
+              // Native qualification uses the ledger, including answers before playback acknowledgment.
+              if (nativeAsks) memory.parts.clear();
+              const complete = new Map((nativeAsks ? [] : memory.completed)
                 .filter(item => plan({completed:[]}).some(step=>step.id===questionKey(item.question)))
                 .map(item=>[questionKey(item.question),item]));
               for (const {question,id} of plan({completed:[]})) {
@@ -321,6 +374,7 @@ export async function handleTestSession(
             if (introduction) {
               await streamAgentReply({messages:[],fixedSpeech:introduction,openingAudio:true,cacheAudio:true,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               session.introRestartPending = false;
+              if (nativeHandoff && pcmBytes > 0) session.introRephrased = true;
               return;
             }
             if(repair.kind==="purpose"){
@@ -329,7 +383,7 @@ export async function handleTestSession(
               if(purpose){
                 const reciprocal=/\b(?:how are you|how about (?:you|yourself)|what about you|and you|and yourself)\b/i.test(session.purposeReplyTo || customerText);
                 const greeting=(reciprocal?"I'm doing well, thank you for asking. ":"Great, ")+knownSalutation(session.messages);
-                await streamAgentReply({messages:[],fixedSpeech:greeting+purpose,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                await streamAgentReply({messages:[],fixedSpeech:greeting+purpose,preparedAudio:session.config.voice === "lauren",voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                 if (!session.requirePlaybackAck) session.purposeDelivered=true;
                 return;
               }
@@ -338,7 +392,7 @@ export async function handleTestSession(
               const next = unfinished(session.messages.slice(1));
               if (next) {
                 repairSource = next.speech;
-                await streamAgentReply({messages:[],fixedSpeech:next.speech,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                await streamAgentReply({messages:[],fixedSpeech:next.speech,cacheAudio:nativeHandoff || undefined,voice:session.config.voice,customerText,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               }
               return;
             }
@@ -357,7 +411,41 @@ export async function handleTestSession(
             if (repair.kind === "introduction") session.introRestartPending = false;
             if (!session.requirePlaybackAck && (repair.kind === "purpose" || repair.kind === "purpose-clarification")) session.purposeDelivered = true;
           };
-          let text = "", silenceStep = 0;
+          const skipQuestion = async (id: string, outcome: "unclear" | "unanswered") => {
+            questionOutcomes.set(id,outcome);
+            await send({type:"question-disposition",questionId:id,outcome});
+          };
+          const advanceNative = async (prefix = "", moveToTransfer = true) => {
+            const next = unfinished(session.messages.slice(1));
+            if (next) {
+              await streamAgentReply({messages:[],fixedSpeech:[prefix,next.speech].filter(Boolean).join(" "),preparedAudio:session.config.voice === "lauren" && ["","Great,","Got it,"].includes(prefix),cacheAudio:!prefix || undefined,
+                voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              return;
+            }
+            if (prefix) {
+              await streamAgentReply({messages:[],fixedSpeech:prefix,voice:session.config.voice,
+                signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              return;
+            }
+            if (!moveToTransfer || plan(scriptMemory(session.messages.slice(1))).some(step=>step.applicability==="unresolved" && step.status!=="answered") ||
+                session.handoffDeclined || handoffWaiting(session.messages)) return;
+            const offer = configuredTransferOffer(session.config.script);
+            const announcement = configuredTransferAnnouncement(session.config.script);
+            const hasBusinessAnswer = scriptMemory(session.messages.slice(1)).completed.length > 0;
+            if (offer || announcement && hasBusinessAnswer &&
+                !requiresTransferAcceptance(session.config.script + "\n" + session.config.instructions)) {
+              if (!offer) {
+                session.scenarioHandoff = undefined;
+                session.transferAnnouncementTurn = turnId;
+                await send({type:"handoff-announcement",turnId,announcement:applySalutation(announcement,knownSalutation(session.messages))});
+              }
+              const preceding = answer;
+              if (preceding) await send({type:"delta",text:" "});
+              await streamAgentReply({messages:[],fixedSpeech:offer || announcement,preparedAudio:session.config.voice === "lauren",voice:session.config.voice,
+                signal:abort.signal,engine,send,timing,onText:value=>{answer=[preceding,value].filter(Boolean).join(" ");}});
+
+            }
+          };
           try {
             await timing("flow-ready",{revision:FLOW_REVISION});
             if (request.headers.get("content-type")?.startsWith("audio/wav")) {
@@ -416,13 +504,20 @@ export async function handleTestSession(
               const body = JSON.parse(raw);
               if (body.handoffFailed === true && owner.startsWith("vici-") && session.transferAnnouncementTurn) {
                 session.transferAnnouncementTurn = undefined;
+                session.scenarioHandoff = undefined;
                 session.handoffDeclined = true;
                 await streamAgentReply({messages:[],fixedSpeech:"I couldn't connect you to the specialist. I'm still here.",voice:session.config.voice,
                   signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                 await send({type:"done"});return;
               }
+              if (nativeHandoff && session.transferAnnouncementTurn && body.interruptedHandoff === session.transferAnnouncementTurn) {
+                interruptedHandoff = true;
+                session.transferAnnouncementTurn = undefined;
+              }
               text = typeof body.text === "string" ? body.text.trim() : "";
-              if(body.opening===true && session.config.first==="customer" && !session.messages.some(m=>m.role==="user")){
+              const silenceOpening = body.silenceOpening === true &&
+                (nativeHandoff || owner.startsWith("manual-audio-")) && session.messages.length === 1;
+              if(body.opening===true && session.config.first==="customer" && !silenceOpening && !session.messages.some(m=>m.role==="user")){
                 session.speechPhase=previousSpeechPhase;await send({type:"done"});return;
               }
               if (body.silenceStep !== undefined) {
@@ -435,6 +530,7 @@ export async function handleTestSession(
                 )
                   throw Error("Invalid silence event");
                 silenceStep = body.silenceStep;
+                retryFailedSpeech = silenceStep === 1 && body.retryFailedSpeech === true;
               }
               if (
                 !text &&
@@ -448,8 +544,23 @@ export async function handleTestSession(
             }
             abort.signal.throwIfAborted();
             if (text) abandonPlayback();
-            if (silenceStep && handoffWaiting(session.messages)) {
+            if (silenceStep && (handoffWaiting(session.messages) || nativeHandoff && session.awaitingEndDecision)) {
               await send({type:'done'});return;
+            }
+            if (silenceStep && nativeHandoff && !retryFailedSpeech) {
+              if (!session.purposeDelivered) {
+                if (session.introPlaybackComplete && !session.nativePurposeAttempted)
+                  await speakRepair({kind:"purpose"});
+              } else {
+                const next = unfinished(session.messages.slice(1));
+                if (next && nativeAsks?.has(next.id)) await skipQuestion(next.id,"unanswered");
+                await advanceNative("",false);
+              }
+              await send({type:"done"});return;
+            }
+            if (nativeHandoff && silenceStep && session.failedSpeech?.question) {
+              session.failedSpeech = undefined;
+              await send({type:"done"});return;
             }
             if (silenceStep) {
               if (silenceStep === 1) {
@@ -511,7 +622,7 @@ export async function handleTestSession(
                     : "typed",
                   committed: true,
                 });
-              const conversationOnly=Boolean(acknowledgesExplanation || healthSideTopic(text)||isGeneralHealthQuestion(text) ||
+              const conversationOnly=Boolean(interruptedHandoff || acknowledgesExplanation || healthSideTopic(text)||personalSideReply(text)||isGeneralHealthQuestion(text) ||
                 hearingIntent || confirmingPresence || session.requirePlaybackAck && (!session.purposeDelivered || !session.purposeAcknowledged));
               session.messages.push({ role: "user", content: text,...(conversationOnly?{conversationOnly:true}:{}) });
               await send({
@@ -533,7 +644,27 @@ export async function handleTestSession(
               await send({type:'end_call',reason:'voicemail'});
               await send({type:'done'});return;
             }
+            const activeQuestion = nativeAsks?.size ? unfinished(session.messages.slice(1,-1)) : undefined;
+            const currentQuestion = activeQuestion && nativeAsks?.has(activeQuestion.id) ? activeQuestion : undefined;
+            const scenario = nativeHandoff && text ? scenarioDecision(currentQuestion?.question, text) : undefined;
+            const speakFixed = (fixedSpeech: string, preparedAudio = false) => streamAgentReply({messages:[],fixedSpeech,preparedAudio,
+              voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+            const closeScenario = async (goodbye: string) => {
+              session.endedReason = "customer_request";
+              await speakFixed(goodbye);
+              await send({type:"end_call",reason:"customer_request"});
+              await send({type:"done"});
+            };
             const conduct = conductDecision(text, session.conductWarned === true, session.endOfferMade === true, session.awaitingEndDecision === true);
+            if (scenario?.action === "DNC" && !(conduct?.kind === "end" && conduct.reason === "abusive_language")) {
+              await send({type:"dnc-request"});
+              await closeScenario("Understood. Goodbye.");
+              return;
+            }
+            if (scenario?.action === "END" && (!conduct || conduct.kind === "offer")) {
+              await closeScenario("Thank you for your time. Goodbye.");
+              return;
+            }
             if (conduct) {
               if (conduct.kind === "offer") {
                 endOffer = true;
@@ -574,9 +705,9 @@ export async function handleTestSession(
               await speakRepair(question ? {kind:"question",source:question} : {kind:session.purposeDelivered ? "continue" : "purpose"}, text);
               await send({type:'done'});return;
             }
-            if(asksToWait(text)){await streamAgentReply({messages:[],fixedSpeech:'Of course, take your time.',voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});await send({type:'done'});return;}
+            if(scenario?.action === "WAIT" || !scenario && asksToWait(text)){await streamAgentReply({messages:[],fixedSpeech:'Of course, take your time.',voice:session.config.voice,customerText:text,emotionState:(session.voiceEmotionState??={turn:0}),signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});await send({type:'done'});return;}
             const flowHistory=memoryHistory(session.messages.slice(1,-1));
-            const spokenPurpose = session.requirePlaybackAck ? scriptPurpose(session.config) : undefined;
+            const spokenPurpose = nativeAsks ? configuredPurpose : session.requirePlaybackAck ? scriptPurpose(session.config) : undefined;
             const questions = plan({completed: []});
             const ledger = session.questionLedger ??= new Map();
             for (const {question} of questions) {
@@ -590,44 +721,110 @@ export async function handleTestSession(
             const explicitTransfer = customerRequestsHuman(text, flowHistory) ||
               Boolean(previousAssistant && isTransferOffer(previousAssistant) &&
                 affirmativeTransferConsent(text) && transferConsent(session.messages.slice(1)));
-            const nativeHandoff = session.requirePlaybackAck && owner.startsWith("vici-");
             const configuredAnnouncement = configuredTransferAnnouncement(session.config.script);
-            const announceHandoff = async (announcement: string) => {
-              await send({type:"handoff-announcement",turnId,announcement:applySalutation(announcement,knownSalutation(session.messages))});
-              await streamAgentReply({messages:[],fixedSpeech:announcement,voice:session.config.voice,
-                customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+            const announceHandoff = async (announcement: string, scenarioHandoff?: "assistance" | "requested" | "repeat") => {
+              session.transferAnnouncementTurn = turnId;
+              session.scenarioHandoff = scenarioHandoff;
+              await send({type:"handoff-announcement",turnId,scenarioHandoff,announcement:applySalutation(announcement,knownSalutation(session.messages))});
+              const preceding = answer;
+              await streamAgentReply({messages:[],fixedSpeech:announcement,preparedAudio:session.config.voice === "lauren",voice:session.config.voice,
+                customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=[preceding,value].filter(Boolean).join(" ");}});
               await send({type:"done"});
-              if (synthesized) session.transferAnnouncementTurn = turnId;
+
             };
-            if (nativeHandoff && explicitTransfer) {
-              if (scriptIncomplete()) {
-                const next = firstUnanswered();
-                if (next && session.purposeDelivered) {
-                  session.purposeAcknowledged = true;
-                  await speakRepair({kind:"question",source:next.speech},text);
-                } else {
-                  await speakRepair({kind:session.purposeDelivered ? "continue" : "purpose"},text);
-                }
-                await send({type:"done"});
-                return;
+            if (interruptedHandoff) {
+              if (withdrawsHumanRequest(text) || /^(?:no|nope|not now)[.! ]*$/i.test(text)) {
+                session.handoffDeclined = true;
+                session.scenarioHandoff = undefined;
+                await streamAgentReply({messages:[],fixedSpeech:"Of course. We can continue here.",voice:session.config.voice,
+                  signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                await send({type:"done"});return;
               }
-              await announceHandoff(requestedTransferAnnouncement(session.config.script));
+              const reply = handoffExplanationReply(text,flowHistory,session.config.script) ||
+                configuredRepresentativeReply(session.config,text,flowHistory) ||
+                (asksCallingPurpose(text) ? configuredPurpose : undefined);
+              await streamAgentReply({messages:[],fixedSpeech:reply || "I don't have that detail. The receiving agent can help.",voice:session.config.voice,
+                signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+              const reason = session.scenarioHandoff;
+              const announcement = reason ? scenarioAnnouncement(session.config.script,reason) :
+                transferConsent(session.messages.slice(1)) ? requestedTransferAnnouncement(session.config.script) : configuredAnnouncement;
+              if (announcement) await announceHandoff(announcement,reason);
+              else await send({type:"done"});
+              return;
+            }
+            const requestedRepeat = nativeHandoff && (scenario?.action === "REPEAT" || repeatIntent(text));
+            if (nativeHandoff && (explicitTransfer || scenario?.direct) && !withdrawsHumanRequest(text) && !confirmingPresence) {
+              const retained = scenario?.answer;
+              if (retained && currentQuestion) {
+                const customerTurn = session.messages.at(-1);
+                if (customerTurn?.role === "user") customerTurn.businessResponse = retained;
+                await send({type:"business-answer",response:retained});
+              }
+              const reason = scenario?.assistance ? "assistance" : "requested";
+              await announceHandoff(scenarioAnnouncement(session.config.script,reason),reason);
+              return;
+            }
+            if (requestedRepeat) {
+              if (currentQuestion) {
+                const repeated = session.rephrasedQuestions ??= new Set<string>();
+                if (!repeated.has(currentQuestion.id)) {
+                  repeated.add(currentQuestion.id);
+                  repeatQuestionId = currentQuestion.id;
+                  await speakResumed({
+                    speech: rephraseQuestion(currentQuestion.speech),
+                    phase: "conversation",
+                    question: currentQuestion.question,
+                  }, "Of course, ");
+                } else {
+                  await skipQuestion(currentQuestion.id,"unclear");
+                  await advanceNative("",false);
+                  if (!answer) await speakFixed("I understand. Let's leave that one for now.");
+                }
+              } else if (!session.purposeDelivered && !session.introRephrased &&
+                  (previousSpeechPhase === "introduction" || session.introRestartPending)) {
+                await speakRepair({kind:"introduction"},text);
+              } else if (!session.purposeDelivered && !session.nativePurposeAttempted) {
+                await speakRepair({kind:"purpose"},text);
+              } else {
+                await speakFixed("Of course. " + (spokenPurpose || "Let me move on."));
+              }
+              await send({type:"done"});return;
+            }
+            if (scenario?.action === "CALLBACK") {
+              await closeScenario("I can't schedule a callback on this call. Thank you for your time. Goodbye.");
               return;
             }
             const greetingOnly = isGreetingOnly(text);
+            if (nativeHandoff && greetingOnly && previousSpeechPhase === "introduction" && !session.purposeDelivered) {
+              await speakRepair({kind:session.introRephrased ? "purpose" : "introduction"},text);
+              await send({type:"done"});return;
+            }
             if (greetingOnly && (session.purposeDelivered || session.purposeReplyTo !== undefined)) {
               if (session.purposeDelivered) {
                 session.purposeAcknowledged = true;
                 const next = firstUnanswered();
-                if (next && ledger.get(next.id)?.status !== "delivered")
+                if (next && !nativeAsks?.has(next.id) && ledger.get(next.id)?.status !== "delivered")
                   await speakRepair({kind:"question",source:next.speech},text);
+              }
+              await send({type:"done"});return;
+            }
+            if (nativeAsks && planned.length && confirmingPresence && !handoffWaiting(flowHistory) && !session.awaitingEndDecision) {
+              if (!session.purposeDelivered && !session.nativePurposeAttempted) {
+                if (session.introPlaybackComplete) await speakRepair({kind:"purpose"},text);
+                else if (session.hearingResume?.phase === "introduction") await speakResumed(session.hearingResume);
+              } else {
+                session.purposeDelivered = true;
+                session.purposeAcknowledged = true;
+                const next = firstUnanswered();
+                if (next && nativeAsks.get(next.id) === questionKey(next.speech)) await skipQuestion(next.id,"unanswered");
+                await advanceNative("",planned.length > 0);
               }
               await send({type:"done"});return;
             }
             if (hearingIntent && !handoffWaiting(flowHistory) && !session.awaitingEndDecision) {
               const resumable = session.hearingResume;
               const saved = session.purposeDelivered && resumable?.phase === "purpose" ? undefined : resumable;
-              const question = session.purposeAcknowledged ? firstUnanswered()?.speech : undefined;
+              const question = !nativeHandoff && session.purposeAcknowledged ? firstUnanswered()?.speech : undefined;
               const prefix = hearingIntent === "complaint" ? "Let me repeat that. " :
                 hearingIntent === "check" ? "Yes, I can hear you. " : "";
               let target = question ? {speech:question,phase:"conversation" as const,question:firstUnanswered()?.question} : saved?.question ? undefined : saved;
@@ -642,7 +839,15 @@ export async function handleTestSession(
               else if (prefix) await streamAgentReply({messages:[],fixedSpeech:prefix.trim(),voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:"done"});return;
             }
-            const representativeReply = (input: string) => configuredRepresentativeReply(session.config, input, flowHistory);
+            const representativeReply = (input: string) => configuredRepresentativeReply(session.config, input, flowHistory) ||
+              (nativeHandoff && /\b(?:are you (?:a )?(?:robot|automated|AI|real person|human)|is this (?:a )?(?:robot|real person))\b/i.test(input)
+                ? "I'm an automated assistant." : undefined) ||
+              (nativeHandoff && /\b(?:how|where) did you get my (?:phone )?number\b/i.test(input)
+                ? "I don't have verified information about where your number came from." : undefined) ||
+              (nativeHandoff && /\b(?:what is|what's|what do you mean by) (?:Medicare )?Part B\b/i.test(input)
+                ? "Part B is Medicare medical coverage." : undefined) ||
+              (nativeHandoff && /\b(?:do you need|should I give you) my (?:Medicare|card|Social Security) number\b/i.test(input)
+                ? "Please keep that number private." : undefined);
             let representative = representativeReply(text);
             let answered = false;
             if (session.purposeAcknowledged && !confirmingPresence && !acknowledgesExplanation) {
@@ -652,17 +857,23 @@ export async function handleTestSession(
               const lastAssistant = flowHistory.findLast(turn => turn.role === "assistant" &&
                 turn.content.includes("?") && !/\b(?:can you hear me|are you still there)\?/i.test(turn.content) &&
                 canonicalQuestion(turn.content, [current || ""]));
-              if (current && currentStep && entry && lastAssistant) {
-                const identityAfterAnswer = text.match(/^((?:yes|no|yeah|nope|yep)[,.!]?)\s+(.+)$/i);
+              if (current && currentStep && entry && lastAssistant && (!nativeAsks || entry.status === "delivered" || nativeAsks.has(currentStep.id))) {
+                const answerThenSide = text.match(/^((?:yes|no|yeah|nope|yep)[,.!]?)\s+(.+)$/i);
                 const parts = text.match(/^([\s\S]+?)[,;]\s+((?:why|what|who|how|where|when)\b.+)$/i) || text.match(/^([\s\S]+?[.!])\s+([\s\S]+)$/) || text.match(/^((?:yes|no|yeah|nope|yep)),\s*(.+)$/i) ||
-                  (identityAfterAnswer && (asksCompanyLocation(identityAfterAnswer[2]) || representativeReply(identityAfterAnswer[2])) ? identityAfterAnswer : null);
+                  (answerThenSide && (asksCompanyLocation(answerThenSide[2]) || representativeReply(answerThenSide[2]) ||
+                    healthSideTopic(answerThenSide[2]) || personalSideReply(answerThenSide[2]) || isCustomerQuestion(answerThenSide[2]))
+                    ? answerThenSide : null);
                 const sideRepresentative = parts && representativeReply(parts[2]);
-                const sideQuestion = parts && (sideRepresentative || isCustomerQuestion(parts[2])) ? parts[2] : undefined;
+                const sideQuestion = parts && (sideRepresentative || isCustomerQuestion(parts[2]) || healthSideTopic(parts[2]) || personalSideReply(parts[2])) ? parts[2] : undefined;
                 const trailingAnswer = /^(.+?[?.!])\s+((?:yes|no|yeah|nope|yep)[.!]?)$/i.exec(text);
                 const leadingRepresentative = trailingAnswer && representativeReply(trailingAnswer[1]);
                 representative = sideRepresentative || leadingRepresentative || representative;
-                const response = leadingRepresentative && trailingAnswer ? trailingAnswer[2] :
+                const spokenResponse = leadingRepresentative && trailingAnswer ? trailingAnswer[2] :
                   sideQuestion && parts ? (questionReason.test(sideQuestion) ? parts[1].replace(/[.!]$/, "") : parts[1]) : text;
+                const polarity = nativeHandoff && currentQuestion?.id === currentStep.id &&
+                  /^(?:are|is|am|do|does|did|have|has|can|could|would|will|was|were|should)\b/i.test(current)
+                  ? conversationalPolarity(spokenResponse) : undefined;
+                const response = polarity === "yes" ? "Yes." : polarity === "no" ? "No." : spokenResponse;
                 const coverageQuestion = /\b(?:Part A|Part B|Medicaid)\b/i.test(current);
                 const passive = /^(?:okay|ok|sure|right|hmm|hm|mm|mhm|mm[- ]?hmm)[.!? ]*$/i.test(response);
                 const recognizedCoverage = /\b(?:medicare|medicaid|part [ab]|(?:no|not|without|don['’]t have) (?:any )?coverage)\b|^(?:yes|no|yeah|yep|nope|correct|that['’]s right)\b/i.test(response) ||
@@ -672,10 +883,18 @@ export async function handleTestSession(
                 const previousParts = scriptMemory(session.messages.slice(1,-1)).parts.get(memoryQuestionKey(current));
                 const partsAfter = suppliedParts(currentStep.parts,response,previousParts,entry.status==="delivered");
                 const gainedPart = partsAfter.size > (previousParts?.size || 0);
-                answered = (!representative || Boolean(sideRepresentative || leadingRepresentative)) && !passive && (!coverageQuestion || recognizedCoverage) &&
+                const asksInstead = isCustomerQuestion(response) || Boolean(healthSideTopic(response) || personalSideReply(response)) || /\?/.test(response) || Boolean(scenario?.assistance && !scenario.answer);
+                const rebateQuestion = /\b(?:rebate|refund|money back)\b/i.test(current);
+                const rebateAnswer = !rebateQuestion || /^(?:yes|no|yeah|yep|yup|nope|correct)\b|\b(?:rebate|refund|money back|on (?:my|a|the) card|(?:get|receive|getting|receiving) (?:\$?\d+|nothing))\b/i.test(response)
+                  || answersAffirmatively(current,response);
+                answered = (!nativeAsks || !asksInstead && rebateAnswer) &&
+                  (!representative || Boolean(sideRepresentative || leadingRepresentative)) && !passive && (!coverageQuestion || recognizedCoverage || scenario?.action === "TRANSFER") &&
                   (currentStep.parts.length ? currentStep.parts.every(part=>partsAfter.has(part.id)) :
-                    (entry.status === "delivered" || clearBeforeAck) &&
-                    questionMemory([{role:"assistant",content:current},{role:"user",content:response}]).completed.length > 0);
+                    (!nativeAsks || !/^(?:yes|no|yeah|yep|nope|correct)\b/i.test(response) ||
+                       /^(?:are|is|am|do|does|did|have|has|can|could|would|will|was|were|should)\b/i.test(current)) &&
+                    (entry.status === "delivered" || nativeAsks?.has(currentStep.id) || clearBeforeAck) &&
+                    (scenario?.action === "NEXT" || scenario?.action === "TRANSFER" && !scenario.assistance ||
+                     questionMemory([{role:"assistant",content:current},{role:"user",content:response}]).completed.length > 0));
                 const outcome = !representative && configuredQuestionOutcome(session.config.script,session.config.instructions,session.config.knowledge,current,response);
                 if (outcome) {
                   questionOutcomes.set(currentStep.id,outcome);
@@ -687,6 +906,9 @@ export async function handleTestSession(
                   await send({type:"conversation-only"});
                 }
                 if (answered || gainedPart && (!representative || Boolean(sideRepresentative || leadingRepresentative))) {
+                  if (nativeAsks && !outcome)
+                    await send({type:"business-outcome"});
+
                   if (currentStep.parts.length) entry.parts = partsAfter;
                   if (answered && !outcome) {
                     entry.status = "answered";
@@ -697,10 +919,86 @@ export async function handleTestSession(
                   if (customerTurn?.role === "user") {
                     customerTurn.businessResponse = response;
                     customerTurn.conversationOnly = false;
-                    if (sideQuestion || leadingRepresentative || answered && !outcome && entry.response !== response) await send({type:"business-answer",response:answered ? entry.response : response});
+                    if (nativeAsks || sideQuestion || leadingRepresentative || answered && !outcome && entry.response !== response) await send(polarity
+                      ? {type:"business-answer",response:spokenResponse,interpretedAs:polarity}
+                      : {type:"business-answer",response:answered ? entry.response : response});
                     text = leadingRepresentative && trailingAnswer ? trailingAnswer[1] : sideQuestion ?? text;
                   }
                 }
+              }
+            }
+            if (nativeAsks && planned.length && session.purposeDelivered &&
+                (session.purposeAcknowledged || representative || asksCallingPurpose(text))) {
+              session.purposeAcknowledged = true;
+              const previous = currentQuestion;
+              const preparedSideReply = healthSideTopic(text)?.answer || personalSideReply(text);
+              const healthQuestion = isGeneralHealthQuestion(text);
+              const sideQuestion = isCustomerQuestion(text) || Boolean(preparedSideReply) || healthQuestion || questionReason.test(text) || /\?/.test(text);
+              const sideReply = representative || (asksCallingPurpose(text) ? spokenPurpose : undefined);
+              const pending = unfinished(session.messages.slice(1));
+              const sideTurn = !isListeningSignal(text) && !handoffWaiting(flowHistory) &&
+                (sideQuestion || !answered && previous && !session.messages.at(-1)?.businessResponse);
+              if ((pending || answered || preparedSideReply || healthQuestion) && sideTurn && !requestedRepeat) {
+                const customerTurn = session.messages.at(-1);
+                if (customerTurn?.role === "user" && !customerTurn.businessResponse && !customerTurn.conversationOnly) {
+                  customerTurn.conversationOnly = true;
+                  await send({type:"conversation-only"});
+                }
+                const asksIdentity = /\b(?:who are you|who is this|your name|what company|which company)\b/i.test(text);
+                const identity = asksIdentity ? voiceIdentity(session.config) : undefined;
+                const knownReply = sideReply ||
+                  (identity ? `I'm ${identity.name}${identity.company ? " from " + identity.company : ""}.` : undefined) ||
+                  (questionReason.test(text) ? "It helps me understand which part of the review applies to you." : undefined) ||
+                  preparedSideReply ||
+                  await contextualQuestionReply(session.config,text,flowHistory,{signal:abort.signal});
+                if (knownReply) {
+                  await speakFixed(knownReply, session.config.voice === "lauren" && Boolean(preparedSideReply || questionReason.test(text)));
+                } else if (sideQuestion || !/^(?:um|uh|hmm|hm|mm)[.! ]*$/i.test(text)) {
+                  try { await streamAgentReply({
+                    messages:[{role:"system",content:healthQuestion ? GENERAL_HEALTH_RULES : session.messages[0].content +
+                      "\nRespond to what the customer just said in one short, natural statement. A light question can get a playful phrase, and a sad disclosure deserves a soft acknowledgement. Keep the clone's usual pace. Never invent a spouse, family, age, hobbies or personal experiences. Use supplied facts for business details. If you lack the answer, say so briefly. Do not claim eligibility, make promises, offer transfer, restart the pitch, or ask a question. The server handles the next script step."},
+                      ...flowHistory.slice(-6),{role:"user",content:text}],
+                    answerOnly:true,repetitionRetry:true,maxStatementSentences:1,voice:session.config.voice,customerText:text,
+                    signal:abort.signal,engine:(port,path,init) => port === 11434
+                      ? engine(port,path,{...init,signal:AbortSignal.any([init?.signal || abort.signal,AbortSignal.timeout(1500)])})
+                      : engine(port,path,init),
+                    send,timing,onText:value=>{answer=value;},
+                  }); } catch { abort.signal.throwIfAborted(); }
+                }
+                if (!answer.trim()) await speakFixed(healthQuestion ? medicalFallback :
+                  sideQuestion ? "I don't have that information." : "I understand.", healthQuestion && session.config.voice === "lauren");
+                if (!pending) {
+                  if (answered) await advanceNative();
+                  await send({type:"done"});return;
+                }
+                const reply = answer;
+                const asked = nativeAsks.has(pending.id);
+                const resume = asked ? rephraseQuestion(pending.speech) : pending.speech;
+                const continuation = asked ? questionContinuation(pending.speech) : resume;
+                if (asked) {
+                  repeatQuestionId = pending.id;
+                  resumedSpeech = {speech:continuation,phase:"conversation",question:pending.question};
+                }
+                if (reply) await send({type:"delta",text:" "});
+                await streamAgentReply({messages:[],fixedSpeech:continuation,preparedAudio:session.config.voice === "lauren",voice:session.config.voice,
+                  customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=[reply,value].filter(Boolean).join(" ");}});
+                await send({type:"done"});return;
+              }
+              if (answered && scenario?.action === "TRANSFER" && !withdrawsHumanRequest(text) &&
+                  !scriptIncomplete() && !requiresTransferAcceptance(session.config.script + "\n" + session.config.instructions)) {
+                await announceHandoff(requestedTransferAnnouncement(session.config.script));
+                return;
+              }
+              if (sideReply && !customerRequestsHuman(text,flowHistory)) {
+                await advanceNative(sideReply);
+                await send({type:"done"});return;
+              }
+              if (!requestedRepeat && !isCustomerQuestion(text) && !handoffWaiting(flowHistory) &&
+                  !questionReason.test(text) && (unfinished(session.messages.slice(1)) || previous && !answered)) {
+                const courtesy = session.config.voice === "lauren" && answered && pending
+                  ? /^(?:yes|yeah|yep|yup)\b/i.test(session.messages.at(-1)?.businessResponse || text) ? "Great," : "Got it," : "";
+                await advanceNative(courtesy);
+                await send({type:"done"});return;
               }
             }
             const flowMemory=scriptMemory(session.messages.slice(1));
@@ -710,7 +1008,10 @@ export async function handleTestSession(
               const opening=briefAgentOpening(session.config);
               if(opening){session.speechPhase="introduction";session.introPlaybackComplete=false;await streamAgentReply({messages:[],fixedSpeech:opening,openingAudio:true,cacheAudio:true,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});await send({type:"done"});return;}
             }
-            if(!session.purposeDelivered && isWellbeingReply(text) && !affirmativeTransferConsent(text) && (previousSpeechPhase==="introduction" || session.introRestartPending)){
+            const introWellbeing = isWellbeingReply(text) || (nativeHandoff &&
+              /\b(?:at|and|how|about)[.! ]*$/i.test(text) &&
+              isWellbeingReply(text.replace(/\s+(?:at|and(?: how(?: about)?)?|how(?: about)?|about)[.! ]*$/i,"")));
+            if(!session.purposeDelivered && introWellbeing && !affirmativeTransferConsent(text) && (previousSpeechPhase==="introduction" || session.introRestartPending)){
               // A real wellbeing answer proves the caller heard the intro question, even if
               // its playback acknowledgment is still in flight. Deliver the purpose once.
               session.introRestartPending=false;
@@ -721,7 +1022,7 @@ export async function handleTestSession(
             const openingQuestion = awaitingPurposeAcknowledgment && !isListeningSignal(text) &&
               (/\?/.test(text) || /^(?:who|what|why|where|when|how|are you|do you|can you|could you)\b/i.test(text) ||
                 /\b(?:how about|what about) (?:you|yourself)\b/i.test(text));
-            if (!representative && !locationQuestion && !session.purposeDelivered && (session.introRestartPending || previousSpeechPhase==="introduction" && session.requirePlaybackAck && !session.introPlaybackComplete) && !openingQuestion && !customerRequestsHuman(text,flowHistory) && !healthSideTopic(text) && !isGeneralHealthQuestion(text)) {
+            if (!representative && !locationQuestion && !session.purposeDelivered && (session.introRestartPending || previousSpeechPhase==="introduction" && session.requirePlaybackAck && !session.introPlaybackComplete) && !openingQuestion && !customerRequestsHuman(text,flowHistory) && !healthSideTopic(text) && !personalSideReply(text) && !isGeneralHealthQuestion(text)) {
               await speakRepair({kind:"introduction"},text);await send({type:'done'});return;
             }
             const identityQuestion=/\b(?:who (?:are you|you are|is this)|who am I (?:talking|speaking) (?:to|with)|your name|what company|which company)\b/i.test(text);
@@ -735,7 +1036,8 @@ export async function handleTestSession(
               if(!next&&!session.purposeDelivered){const identityText=answer;await speakRepair({kind:"purpose"},text);answer=identityText+" "+answer;}
               await send({type:'done'});return;
             }
-            const side=healthSideTopic(text),healthQuestion=isGeneralHealthQuestion(text);
+            const personal = personalSideReply(text);
+            const side=healthSideTopic(text) || (personal ? {answer:personal,meal:false} : null),healthQuestion=isGeneralHealthQuestion(text);
             if(!representative && (side||healthQuestion)){
               const interruptedIntro=session.introRestartPending || previousSpeechPhase==="introduction" && session.requirePlaybackAck && !session.introPlaybackComplete;
               const next=interruptedIntro||awaitingPurposeAcknowledgment?undefined:businessResume(flowHistory);
@@ -743,7 +1045,7 @@ export async function handleTestSession(
                 let speech=side.answer;
                 if(interruptedIntro){const identity=voiceIdentity(session.config);speech+=` Hi, this is ${identity.name}${identity.company?" from "+identity.company:""}. How are you doing today?`;session.speechPhase="introduction";session.introPlaybackComplete=false;session.introRestartPending=false;}
                 else if(next){speech+=" "+(side.meal?"If you have a moment, "+next[0].toLowerCase()+next.slice(1):next);repairSource=next;}
-                await streamAgentReply({messages:[],fixedSpeech:speech,voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                await streamAgentReply({messages:[],fixedSpeech:speech,preparedAudio:session.config.voice === "lauren" && speech === side.answer,voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               }else{
                 await streamAgentReply({messages:[{role:"system",content:GENERAL_HEALTH_RULES},{role:"user",content:text}],answerOnly:true,outbound:true,maxStatementSentences:2,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                 if(!answer.trim())await streamAgentReply({messages:[],fixedSpeech:"I can't reliably answer that medical question. A qualified clinician can help with advice specific to your health.",voice:session.config.voice,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
@@ -771,7 +1073,7 @@ export async function handleTestSession(
               const courtesy = deliverPurpose ? knownReply?.replace(spokenPurpose,"").trim() : knownReply;
               const spokenAnswer = answer;
               const fixedSpeech = [courtesy,deliverPurpose ? spokenPurpose : undefined].filter(Boolean).join(" ");
-              if (fixedSpeech) await streamAgentReply({messages:[],fixedSpeech,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,
+              if (fixedSpeech) await streamAgentReply({messages:[],fixedSpeech,cacheAudio:nativeHandoff || undefined,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,
                 onText:value=>{answer=[spokenAnswer,value].filter(Boolean).join(" ");}});
               await send({type:"done"});return;
             }
@@ -801,7 +1103,7 @@ export async function handleTestSession(
             const readyToTransition = answered || session.purposeDelivered && affirmativeTransferConsent(text);
             if (configuredOffer && readyToTransition && !scriptIncomplete() && !explicitAcceptance &&
                 !session.handoffDeclined && !withdrawsHumanRequest(text) && !isCustomerQuestion(text)) {
-              await streamAgentReply({messages:[],fixedSpeech:configuredOffer,voice:session.config.voice,
+              await streamAgentReply({messages:[],fixedSpeech:configuredOffer,preparedAudio:session.config.voice === "lauren",voice:session.config.voice,
                 customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:"done"});return;
             }
@@ -878,7 +1180,7 @@ export async function handleTestSession(
                     const needsAge = /\b(?:your age|how old)\b/i.test(item.question) && !answered;
                     if (partialNow || state !== "delivered" || confirmingPresence || isPresenceCheck(text) || needsAge && receptive) {
                       repairSource = next;
-                      await streamAgentReply({messages:[],fixedSpeech:next,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
+                      await streamAgentReply({messages:[],fixedSpeech:next,preparedAudio:nativeHandoff && session.config.voice === "lauren",cacheAudio:nativeHandoff || undefined,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
                     }
                     await send({type:"done"});return;
                   }
@@ -928,7 +1230,8 @@ export async function handleTestSession(
               await streamAgentReply({messages:[],fixedSpeech:reply,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
             }
-            const repeatQuestion=questionToRepeat(flowHistory,text) && businessResume(session.messages.slice(1));
+            const repeatedQuestion=!nativeHandoff && questionToRepeat(flowHistory,text);
+            const repeatQuestion=repeatedQuestion && (nativeAsks ? repeatedQuestion.replace(/\s*\[interrupted\]/g,"") : businessResume(session.messages.slice(1)));
             if(repeatQuestion){
               await streamAgentReply({messages:[],fixedSpeech:repeatQuestion,voice:session.config.voice,customerText:text,signal:abort.signal,engine,send,timing,onText:value=>{answer=value;}});
               await send({type:'done'});return;
@@ -1118,7 +1421,7 @@ export async function handleTestSession(
               repairSource=pending;
             }
             if (session.requirePlaybackAck && !answer.trim()) {
-              const question = session.purposeAcknowledged ? firstUnanswered()?.speech : undefined;
+              const question = !nativeHandoff && session.purposeAcknowledged ? firstUnanswered()?.speech : undefined;
               const saved = session.hearingResume;
               if (question && ledger.get(firstUnanswered()!.id)?.status !== "delivered") {
                 await speakResumed({speech:question,phase:"conversation",question:firstUnanswered()?.question});
@@ -1139,6 +1442,8 @@ export async function handleTestSession(
                     : "Local AI service failed",
               });
           } finally {
+            if (!synthesized && !abort.signal.aborted && session.transferAnnouncementTurn === turnId)
+              session.transferAnnouncementTurn = undefined;
             if ((!synthesized || abort.signal.aborted) && session.speechPhase === "introduction" && !session.introPlaybackComplete) session.introRestartPending = true;
             if (answer.trim()) {
               const complete = synthesized && !abort.signal.aborted;
@@ -1154,10 +1459,11 @@ export async function handleTestSession(
                 session.questionAliases ??= new Map();
                 session.questionAliases.set(answer, sourceQuestion);
               }
-              if (session.requirePlaybackAck && !silenceStep && (sourceQuestion || phase !== "conversation")) {
+              const trackScriptDelivery = !silenceStep || (nativeHandoff && !retryFailedSpeech);
+              if (session.requirePlaybackAck && trackScriptDelivery && (sourceQuestion || phase !== "conversation")) {
                 session.hearingResume = resumedSpeech || {speech:answer,phase,question:sourceQuestion};
               }
-              const retry: typeof session.failedSpeech = session.requirePlaybackAck && !silenceStep && !session.endedReason && (sourceQuestion || phase !== "conversation")
+              const retry: typeof session.failedSpeech = session.requirePlaybackAck && trackScriptDelivery && !session.endedReason && (sourceQuestion || phase !== "conversation")
                 ? {speech:answer,phase,question:sourceQuestion} : undefined;
               if (retry && !complete) session.failedSpeech = retry;
               // Handoff offers retain their independent consent and execution rules.

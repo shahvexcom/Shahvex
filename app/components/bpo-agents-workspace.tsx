@@ -1,18 +1,60 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
-import { FiVolume2, FiChevronDown, FiCamera, FiCheck, FiEdit3, FiFileText, FiKey, FiMic, FiPause, FiPhoneCall, FiPlay, FiRefreshCw, FiUserPlus, FiUsers, FiX } from "react-icons/fi";
+import {
+  FiVolume2,
+  FiChevronDown,
+  FiCamera,
+  FiCheck,
+  FiEdit3,
+  FiFileText,
+  FiKey,
+  FiPause,
+  FiPlay,
+  FiRefreshCw,
+  FiTrash2,
+  FiUserPlus,
+  FiUsers,
+  FiX,
+} from "react-icons/fi";
 import { conversationStyles } from "@/lib/agent-script-details";
 import { CustomDropdown } from "./custom-dropdown";
 import "./bpo-agents-workspace.css";
 import "./bpo-agent-form-polish.css";
 import "./bpo-agent-activity.css";
 import "./bpo-agent-progress.css";
+import "./agent-script-categories.css";
 
-type Voice = { is_local?:boolean;selectable?:boolean; id: string; name: string; gender: string; accent: string; telnyx_label: string | null; groq_label: string | null };
-type Script = { id: string; script_file_name: string; lead_file_name: string; created_at: string };
-type CallingAgent = {conversation_style?:string;speaks_first?:string;campaign_name?:string;category_name?:string;campaign_definition_id?:string; connection_id?:string;campaign_id?:string;
+type Voice = {
+  is_local?: boolean;
+  selectable?: boolean;
   id: string;
+  name: string;
+  gender: string;
+  accent: string;
+  telnyx_label: string | null;
+  groq_label: string | null;
+};
+type Script = {
+  id: string;
+  script_file_name: string;
+  lead_file_name: string;
+  created_at: string;
+};
+type CallingAgent = {
+  conversation_style?: string;
+  speaks_first?: string;
+  campaign_name?: string;
+  category_name?: string;
+  campaign_definition_id?: string;
+  connection_id?: string;
+  campaign_id?: string;
+  id: string;
+  username: string;
+  remote_user?: string;
+  extension_route?: string;
+  daily_call_limit?: number;
+  call_limit_minutes?: number;
   name: string;
   gender: "MALE" | "FEMALE" | "OTHER";
   accent: string;
@@ -30,23 +72,110 @@ type CallingAgent = {conversation_style?:string;speaks_first?:string;campaign_na
   voice_status: "ACTIVE" | "INACTIVE";
   telnyx_label: string | null;
   groq_label: string | null;
-  progress: { calls: number; leadsCompleted: number; leadsTotal: number; leadsPercent: number; tasksCompleted: number; tasksTotal: number; tasksPercent: number };
+  progress: {
+    calls: number;
+    leadsCompleted: number;
+    leadsTotal: number;
+    leadsPercent: number;
+    tasksCompleted: number;
+    tasksTotal: number;
+    tasksPercent: number;
+  };
 };
-type Form = {conversationStyle?:string;speaksFirst?:string;campaignDefinitionId?:string; connectionId:string;campaignId:string; name: string; gender: "MALE" | "FEMALE" | "OTHER"; voiceId: string; scriptId: string; leadSheetId: string; dialingMode: "AUTO" | "MANUAL" | "BOTH"; avatarUrl: string };
+type Form = {
+  conversationStyle?: string;
+  speaksFirst?: string;
+  campaignDefinitionId?: string;
+  connectionId: string;
+  campaignId: string;
+  name: string;
+  gender: "MALE" | "FEMALE" | "OTHER";
+  voiceId: string;
+  scriptId: string;
+  leadSheetId: string;
+  dialingMode: "AUTO" | "MANUAL" | "BOTH";
+  avatarUrl: string;
+};
 
-const genderLabel = (gender: string) => gender.charAt(0) + gender.slice(1).toLowerCase();
-const initialForm: Form = {connectionId:"",campaignId:"", name: "", gender: "OTHER", voiceId: "", scriptId: "", leadSheetId: "", dialingMode: "BOTH", avatarUrl: "" };
-const dialingLabel = (mode: CallingAgent["dialing_mode"]) => mode === "AUTO" ? "Auto dialing" : mode === "MANUAL" ? "Manual dialing" : "Auto + manual";
+const initialForm: Form = {
+  connectionId: "",
+  campaignId: "",
+  name: "",
+  gender: "OTHER",
+  voiceId: "",
+  scriptId: "",
+  leadSheetId: "",
+  dialingMode: "BOTH",
+  avatarUrl: "",
+};
+const dialingLabel = (mode: CallingAgent["dialing_mode"]) =>
+  mode === "AUTO"
+    ? "Auto dialing"
+    : mode === "MANUAL"
+      ? "Manual dialing"
+      : "Auto + manual";
 
 export default function BpoAgentsWorkspace() {
   const [agents, setAgents] = useState<CallingAgent[]>([]);
-  const [previewing,setPreviewing]=useState(false);const previewAudio=useRef<HTMLAudioElement|null>(null),previewURL=useRef(''),previewAbort=useRef<AbortController|null>(null);
-  const stopPreview=useCallback(()=>{previewAbort.current?.abort();previewAudio.current?.pause();previewAudio.current=null;if(previewURL.current)URL.revokeObjectURL(previewURL.current);previewURL.current='';setPreviewing(false);},[]);
-  useEffect(()=>()=>{previewAbort.current?.abort();previewAudio.current?.pause();if(previewURL.current)URL.revokeObjectURL(previewURL.current);},[]);
-  const previewVoice=async()=>{stopPreview();setPreviewing(true);const abort=new AbortController();previewAbort.current=abort;try{const r=await fetch('/api/bpo/voice-preview',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({voice:form.voiceId}),signal:abort.signal});if(!r.ok)throw Error((await r.json()).error);const blob=await r.blob();if(abort.signal.aborted)return;previewURL.current=URL.createObjectURL(blob);const audio=new Audio(previewURL.current);previewAudio.current=audio;audio.onended=stopPreview;audio.onerror=stopPreview;await audio.play();}catch(e){if(!abort.signal.aborted){stopPreview();setError(e instanceof Error?e.message:'Preview unavailable');}}};
-  const [connections,setConnections]=useState<{id:string;name:string;enabled:boolean;status:string;live_config?:{enabled?:boolean}}[]>([]);
+  const [previewing, setPreviewing] = useState(false);
+  const previewAudio = useRef<HTMLAudioElement | null>(null),
+    previewURL = useRef(""),
+    previewAbort = useRef<AbortController | null>(null);
+  const stopPreview = useCallback(() => {
+    previewAbort.current?.abort();
+    previewAudio.current?.pause();
+    previewAudio.current = null;
+    if (previewURL.current) URL.revokeObjectURL(previewURL.current);
+    previewURL.current = "";
+    setPreviewing(false);
+  }, []);
+  useEffect(
+    () => () => {
+      previewAbort.current?.abort();
+      previewAudio.current?.pause();
+      if (previewURL.current) URL.revokeObjectURL(previewURL.current);
+    },
+    [],
+  );
+  const previewVoice = async () => {
+    stopPreview();
+    setPreviewing(true);
+    const abort = new AbortController();
+    previewAbort.current = abort;
+    try {
+      const r = await fetch("/api/bpo/voice-preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voice: form.voiceId }),
+        signal: abort.signal,
+      });
+      if (!r.ok) throw Error((await r.json()).error);
+      const blob = await r.blob();
+      if (abort.signal.aborted) return;
+      previewURL.current = URL.createObjectURL(blob);
+      const audio = new Audio(previewURL.current);
+      previewAudio.current = audio;
+      audio.onended = stopPreview;
+      audio.onerror = stopPreview;
+      await audio.play();
+    } catch (e) {
+      if (!abort.signal.aborted) {
+        stopPreview();
+        setError(e instanceof Error ? e.message : "Preview unavailable");
+      }
+    }
+  };
+  const [connections, setConnections] = useState<
+    {
+      id: string;
+      name: string;
+      enabled: boolean;
+      status: string;
+      live_config?: { enabled?: boolean };
+    }[]
+  >([]);
   const [voices, setVoices] = useState<Voice[]>([]);
-  const [voiceServiceReady,setVoiceServiceReady]=useState(true);
+  const [voiceServiceReady, setVoiceServiceReady] = useState(true);
   const [scripts, setScripts] = useState<Script[]>([]);
   const [agentLimit, setAgentLimit] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -55,6 +184,14 @@ export default function BpoAgentsWorkspace() {
   const [showForm, setShowForm] = useState(false);
   const [editingAgent, setEditingAgent] = useState<CallingAgent | null>(null);
   const [form, setForm] = useState<Form>(initialForm);
+  const [deleteAgent, setDeleteAgent] = useState<CallingAgent | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
+  const deleteDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (deleteAgent) deleteDialog.current?.showModal();
+  }, [deleteAgent]);
+  const [route, setRoute] = useState({ remoteUser: "", prefix: "" });
   const [busy, setBusy] = useState(false);
   const [avatarPreview, setAvatarPreview] = useState("");
   const [avatarUploading, setAvatarUploading] = useState(false);
@@ -66,33 +203,58 @@ export default function BpoAgentsWorkspace() {
     try {
       const response = await fetch("/api/bpo/agents", { cache: "no-store" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || "Unable to load calling agents.");
+      if (!response.ok)
+        throw new Error(data.message || "Unable to load calling agents.");
       setAgents(Array.isArray(data.agents) ? data.agents : []);
-      setConnections(Array.isArray(data.connections)?data.connections:[]);
-      setVoices(Array.isArray(data.voices) ? data.voices : []);setVoiceServiceReady(data.voiceServiceReady!==false);
+      setConnections(Array.isArray(data.connections) ? data.connections : []);
+      setVoices(Array.isArray(data.voices) ? data.voices : []);
+      setVoiceServiceReady(data.voiceServiceReady !== false);
       setScripts(Array.isArray(data.scripts) ? data.scripts : []);
       setAgentLimit(Number(data.agentLimit || 0));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to load calling agents.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to load calling agents.",
+      );
     } finally {
       if (showLoading) setLoading(false);
     }
   }, []);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const remainingSlots = Math.max(0, agentLimit - agents.length);
-  const readyAgents = agents.filter(agent => agent.is_active&&agent.voice_status==="ACTIVE").length;
-  const assignedScripts = agents.filter(agent => Boolean(agent.campaign_name)).length;
+  const readyAgents = agents.filter(
+    (agent) => agent.is_active && agent.voice_status === "ACTIVE",
+  ).length;
+  const assignedScripts = agents.filter((agent) =>
+    Boolean(agent.campaign_name),
+  ).length;
   const canCreate = remainingSlots > 0 && voices.length > 0;
-  const blocker = !agentLimit?'Buy a plan with agent slots to create an agent.':!remainingSlots?'All plan agent slots are in use.':!voices.length?'No approved voices are available.':'';
+  const blocker = !agentLimit
+    ? "Buy a plan with agent slots to create an agent."
+    : !remainingSlots
+      ? "All plan agent slots are in use."
+      : !voices.length
+        ? "No approved voices are available."
+        : "";
 
   const openForm = () => {
     if (!canCreate) return;
     setMessage("");
     setEditingAgent(null);
-    setForm({ ...initialForm, connectionId:connections.find(c=>c.enabled)?.id||"",voiceId: voices[0]?.id || "", scriptId: scripts[0]?.id || "", leadSheetId: scripts[0]?.id || "" });
+    setRoute({ remoteUser: "", prefix: "" });
+    setForm({
+      ...initialForm,
+      connectionId: connections.find((c) => c.enabled)?.id || "",
+      voiceId: voices[0]?.id || "",
+      scriptId: scripts[0]?.id || "",
+      leadSheetId: scripts[0]?.id || "",
+    });
     setAvatarPreview("");
     setShowForm(true);
   };
@@ -101,7 +263,23 @@ export default function BpoAgentsWorkspace() {
     setMessage("");
     setError("");
     setEditingAgent(agent);
-    setForm({ conversationStyle:agent.conversation_style||"Professional",speaksFirst:agent.speaks_first||"customer",connectionId:agent.connection_id||"",campaignId:agent.campaign_id||"",name: agent.name, gender: agent.gender, voiceId: agent.voice_id, scriptId: agent.source_script_id||"", leadSheetId: agent.source_lead_id || agent.source_script_id, dialingMode: agent.dialing_mode, avatarUrl: agent.avatar_url || "" });
+    setRoute({
+      remoteUser: agent.remote_user || "",
+      prefix: agent.extension_route || "",
+    });
+    setForm({
+      conversationStyle: agent.conversation_style || "Professional",
+      speaksFirst: agent.speaks_first || "customer",
+      connectionId: agent.connection_id || "",
+      campaignId: agent.campaign_id || "",
+      name: agent.name,
+      gender: agent.gender,
+      voiceId: agent.voice_id,
+      scriptId: agent.source_script_id || "",
+      leadSheetId: agent.source_lead_id || agent.source_script_id,
+      dialingMode: agent.dialing_mode,
+      avatarUrl: agent.avatar_url || "",
+    });
     setAvatarPreview(agent.avatar_url || "");
     setShowForm(true);
   };
@@ -126,16 +304,50 @@ export default function BpoAgentsWorkspace() {
     try {
       const body = new FormData();
       body.append("avatar", file);
-      const response = await fetch("/api/upload/avatar", { method: "POST", body });
+      const response = await fetch("/api/upload/avatar", {
+        method: "POST",
+        body,
+      });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || "Picture upload failed.");
-      setForm(current => ({ ...current, avatarUrl: String(data.url || "") }));
+      if (!response.ok)
+        throw new Error(data.message || "Picture upload failed.");
+      setForm((current) => ({ ...current, avatarUrl: String(data.url || "") }));
       setAvatarPreview(String(data.url || temporaryPreview));
     } catch (cause) {
       setAvatarPreview(form.avatarUrl);
-      setError(cause instanceof Error ? cause.message : "Picture upload failed.");
+      setError(
+        cause instanceof Error ? cause.message : "Picture upload failed.",
+      );
     } finally {
       setAvatarUploading(false);
+    }
+  };
+
+  const removeAgent = async () => {
+    if (!deleteAgent || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      const response = await fetch("/api/bpo/agents", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId: deleteAgent.id }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok)
+        throw new Error(data.message || "Unable to delete this agent.");
+      setAgents((current) =>
+        current.filter((agent) => agent.id !== deleteAgent.id),
+      );
+      setMessage(data.message || "Agent deleted.");
+      setDeleteAgent(null);
+      await load(false);
+    } catch (cause) {
+      setDeleteError(
+        cause instanceof Error ? cause.message : "Unable to delete this agent.",
+      );
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -144,19 +356,47 @@ export default function BpoAgentsWorkspace() {
     setBusy(true);
     setError("");
     try {
+      const routeChanged =
+        (route.remoteUser || route.prefix) &&
+        (!editingAgent ||
+          route.remoteUser !== (editingAgent.remote_user || "") ||
+          route.prefix !== (editingAgent.extension_route || ""));
       const response = await fetch("/api/bpo/agents", {
         method: editingAgent ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({profileOnly:true,name:form.name,gender:form.gender,voiceId:form.voiceId,conversationStyle:form.conversationStyle||"Professional",speaksFirst:form.speaksFirst||"customer",avatarUrl:form.avatarUrl,...(editingAgent?{action:"edit",agentId:editingAgent.id}:{})}),
+        body: JSON.stringify({
+          profileOnly: true,
+          name: form.name,
+          gender: form.gender,
+          voiceId: form.voiceId,
+          conversationStyle: form.conversationStyle || "Professional",
+          speaksFirst: form.speaksFirst || "customer",
+          avatarUrl: form.avatarUrl,
+          ...(routeChanged
+            ? { route: { connectionId: form.connectionId, ...route } }
+            : {}),
+          ...(editingAgent ? { action: "edit", agentId: editingAgent.id } : {}),
+        }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || `Unable to ${editingAgent ? "update" : "create"} calling agent.`);
-      setMessage(data.message || `Calling agent ${editingAgent ? "updated" : "created"}.`);
+      if (!response.ok)
+        throw new Error(
+          data.message ||
+            `Unable to ${editingAgent ? "update" : "create"} calling agent.`,
+        );
+      setMessage(
+        data.message ||
+          `Calling agent ${editingAgent ? "updated" : "created"}.`,
+      );
       setShowForm(false);
       setEditingAgent(null);
       await load(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to create calling agent.");
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to create calling agent.",
+      );
     } finally {
       setBusy(false);
     }
@@ -167,73 +407,636 @@ export default function BpoAgentsWorkspace() {
     setActivityBusy(agent.id);
     setError("");
     try {
-      const response = await fetch("/api/bpo/agents", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "activity", agentId: agent.id, isActive }) });
+      const response = await fetch("/api/bpo/agents", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "activity",
+          agentId: agent.id,
+          isActive,
+        }),
+      });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || "Unable to update agent status.");
-      setAgents(current => current.map(item => item.id === agent.id ? { ...item, is_active: isActive, status: isActive ? "APPROVED" : "SUSPENDED" } : item));
+      if (!response.ok)
+        throw new Error(data.message || "Unable to update agent status.");
+      setAgents((current) =>
+        current.map((item) =>
+          item.id === agent.id
+            ? {
+                ...item,
+                is_active: isActive,
+                status: isActive ? "APPROVED" : "SUSPENDED",
+              }
+            : item,
+        ),
+      );
       setMessage(data.message || "Agent status updated.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Unable to update agent status.");
-    } finally { setActivityBusy(""); }
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Unable to update agent status.",
+      );
+    } finally {
+      setActivityBusy("");
+    }
   };
 
-  if (loading) return <main className="bpo-agent-page"><div className="bpo-agent-title-skeleton bpo-agent-shimmer" /><section className="bpo-agent-kpis">{[1, 2, 3, 4].map(item => <article className="bpo-agent-shimmer" key={item} />)}</section><section className="bpo-agent-grid">{[1, 2].map(item => <article className="bpo-agent-shimmer" key={item} />)}</section></main>;
+  if (loading)
+    return (
+      <main className="bpo-agent-page">
+        <div className="bpo-agent-title-skeleton bpo-agent-shimmer" />
+        <section className="bpo-agent-kpis">
+          {[1, 2, 3, 4].map((item) => (
+            <article className="bpo-agent-shimmer" key={item} />
+          ))}
+        </section>
+        <section className="managed-agent-grid">
+          {[1, 2].map((item) => (
+            <article className="bpo-agent-shimmer" key={item} />
+          ))}
+        </section>
+      </main>
+    );
 
-  return <main className="bpo-agent-page">
-    <div className="bpo-agent-heading">
-      <div><p className="bpo-eyebrow">DIALING TEAM</p><h1>Create calling agents</h1><p>Create an AI agent with a voice and conversation style. Assign campaigns in VoIP.</p></div>
-      <div className="bpo-agent-heading-actions"><button type="button" className="bpo-agent-refresh" onClick={() => void load()}><FiRefreshCw /> Refresh</button><button type="button" className="bpo-agent-create" disabled={!canCreate} data-tooltip={blocker} onClick={openForm}><FiUserPlus /> Create agent</button></div>
-    </div>
-
-    <section className="bpo-agent-kpis" aria-label="Calling agent overview">
-      <Kpi icon={<FiUsers />} tone="purple" label="Created agents" value={agents.length} />
-      <Kpi icon={<FiUserPlus />} tone="blue" label="Available slots" value={`${remainingSlots} / ${agentLimit}`} />
-      <Kpi icon={<FiKey />} tone="green" label="AI ready agents" value={readyAgents} />
-      <Kpi icon={<FiFileText />} tone="orange" label="Campaign assigned" value={assignedScripts} />
-    </section>
-
-    {message && <p className="bpo-agent-message success"><FiCheck /> {message}</p>}
-    {error && <p className="bpo-agent-message error">{error}</p>}
-
-    <section className="bpo-agent-section">
-      <header><div><h2>Your calling agents</h2><p>Agents are grouped by their assigned campaign. Open a group to view its agents.</p></div><span>{agents.length} {agents.length === 1 ? "agent" : "agents"}</span></header>
-      {agents.length ? <div>{[...new Set(agents.map(a=>a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents'))].map(group=><details className="bpo-agent-campaign-group" key={group}><summary><span className="agent-group-icon" aria-hidden="true"><FiUsers/></span><span className="agent-group-copy"><small>Campaign team</small><strong>{group}</strong></span><span className="agent-group-count">{agents.filter(a=>(a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents')===group).length}<small>agents</small></span><FiChevronDown className="agent-group-chevron" aria-hidden="true"/></summary><div className="bpo-agent-grid">{agents.filter(a=>(a.campaign_name?[a.category_name,a.campaign_name].filter(Boolean).join(' / '):'Unassigned agents')===group).map(agent=><article className={`bpo-created-agent ${agent.is_active ? "" : "is-inactive"}`} key={agent.id}>
-        <header><span className="bpo-agent-avatar">{agent.avatar_url ? <img src={agent.avatar_url} alt="" /> : agent.name.slice(0, 2).toUpperCase()}</span><div><h3>{agent.name}</h3><p>{genderLabel(agent.gender)} · {agent.accent}</p></div><em className={agent.is_active && agent.voice_status === "ACTIVE" ? "ready" : "inactive"}>{agent.is_active ? agent.voice_status === "ACTIVE" ? "Ready" : "Voice inactive" : "Inactive"}</em></header>
-        <dl>
-          <div><dt><FiMic /> AI voice</dt><dd>{agent.voice_name}</dd></div>
-          <div><dt><FiUsers /> Campaign</dt><dd>{agent.campaign_name||"Unassigned"}</dd></div>
-          <div><dt>Conversation style</dt><dd>{agent.conversation_style||"Professional"}</dd></div>
-          <div><dt><FiPhoneCall /> Dialing access</dt><dd>{dialingLabel(agent.dialing_mode)}</dd></div>
-        </dl>
-
-        <footer><span><FiPhoneCall /> {agent.telnyx_label || "No VoIP"}</span><span><FiKey /> {agent.groq_label || "No Knowledge base"}</span></footer>
-        <div className="bpo-agent-card-actions"><button className="bpo-agent-edit" type="button" onClick={() => openEdit(agent)}><FiEdit3 /> Edit agent</button><button className={`bpo-agent-activity ${agent.is_active ? "active" : "inactive"}`} type="button" disabled={activityBusy === agent.id} onClick={() => void setAgentActivity(agent)}>{activityBusy === agent.id ? "Saving..." : agent.is_active ? <><FiPause /> Set inactive</> : <><FiPlay /> Set active</>}</button></div>
-      </article>)}</div></details>)}</div>
-        : <div className="bpo-agent-empty"><FiUsers /><h3>No calling agents yet</h3><p>{blocker || "Create your first AI agent, then assign it to a campaign in VoIP."}</p>{canCreate && <button type="button" onClick={openForm}><FiUserPlus /> Create agent</button>}</div>}
-    </section>
-
-    {showForm && <div className="bpo-agent-modal-backdrop" onMouseDown={event => event.target === event.currentTarget && closeForm()}>
-      <form className="bpo-agent-modal" onSubmit={saveAgent}>
-        <button type="button" className="bpo-agent-modal-close" disabled={busy || avatarUploading} onClick={closeForm} aria-label="Close"><FiX /></button>
-        <p className="bpo-eyebrow">{editingAgent ? "EDIT CALLING AGENT" : "NEW CALLING AGENT"}</p><h2>{editingAgent ? `Edit ${editingAgent.name}` : "Set up your agent"}</h2><p>Pick a profile picture if you want—then select an AI voice and your uploaded campaign script.</p>
-        <div className="bpo-agent-photo-picker">
-          <div>{avatarPreview ? <img src={avatarPreview} alt="Agent preview" /> : <span>{form.name.trim().slice(0, 2).toUpperCase() || "AI"}</span>}</div>
-          <label><input type="file" accept="image/*" onChange={event => void uploadAvatar(event.target.files?.[0])} /><FiCamera /><span>{avatarUploading ? "Uploading picture..." : form.avatarUrl ? "Change picture" : "Add a picture"}</span><small>Optional · JPG, PNG or WEBP · max 5 MB</small></label>
+  return (
+    <main className="bpo-agent-page">
+      <div className="bpo-agent-heading">
+        <div>
+          <p className="bpo-eyebrow">DIALING TEAM</p>
+          <h1>Create calling agents</h1>
+          <p>
+            Create an AI agent with a voice and conversation style. Assign
+            campaigns in VoIP.
+          </p>
         </div>
-        <div className="bpo-agent-form-grid">
-          <label>Agent name<input required minLength={2} maxLength={80} value={form.name} onChange={event => setForm(current => ({ ...current, name: event.target.value }))} placeholder="e.g. Sarah Collections" /></label>
-          <label>Gender<CustomDropdown value={form.gender} onChange={value => setForm(current => ({ ...current, gender: value as Form["gender"] }))} ariaLabel="Agent gender" options={[{ value: "FEMALE", label: "Female" }, { value: "MALE", label: "Male" }, { value: "OTHER", label: "Other" }]} /></label>
+        <div className="bpo-agent-heading-actions">
+          <button
+            type="button"
+            className="bpo-agent-refresh"
+            onClick={() => void load()}
+          >
+            <FiRefreshCw /> Refresh
+          </button>
+          <button
+            type="button"
+            className="bpo-agent-create"
+            disabled={!canCreate}
+            data-tooltip={blocker}
+            onClick={openForm}
+          >
+            <FiUserPlus /> Create agent
+          </button>
         </div>
-        <label>Agent voice<CustomDropdown value={form.voiceId} onChange={value => {stopPreview();setForm(current => ({ ...current, voiceId: value }));}} ariaLabel="Agent voice" options={voices.map(voice => ({ value: voice.id, label: voice.is_local ? `${voice.name} · ${voice.gender} · ${voice.accent || "English"}` : `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}` }))} /></label>
-        <button type="button" className="bpo-agent-preview" disabled={(!voiceServiceReady&&!["emma","olivia"].includes(form.voiceId))||previewing||!voices.find(v=>v.id===form.voiceId)?.selectable} onClick={()=>void previewVoice()}><FiVolume2/>{previewing?'Playing preview...':'Preview voice'}</button>{!voiceServiceReady&&<p role="status">You can save your voice and preview Emma or Olivia. Live calls require the voice service.</p>}
-        <label>Conversation style<CustomDropdown value={form.conversationStyle||'Professional'} ariaLabel="Conversation style" onChange={value=>setForm(current=>({...current,conversationStyle:value}))} options={conversationStyles.map(value=>({value,label:value}))}/></label>
-        <label>Who speaks first<CustomDropdown value={form.speaksFirst||'customer'} ariaLabel="Who speaks first" onChange={value=>setForm(current=>({...current,speaksFirst:value}))} options={[{value:'customer',label:'Customer speaks first'},{value:'ai',label:'AI speaks first'}]}/></label>
-        <div className="bpo-agent-modal-actions"><button type="button" disabled={busy || avatarUploading} onClick={closeForm}>Cancel</button><button type="submit" disabled={busy || avatarUploading || !form.voiceId}>{busy ? "Saving..." : editingAgent ? "Save changes" : "Create agent"} {editingAgent ? <FiCheck /> : <FiUserPlus />}</button></div>
-      </form>
-    </div>}
-  </main>;
+      </div>
+
+      <section className="bpo-agent-kpis" aria-label="Calling agent overview">
+        <Kpi
+          icon={<FiUsers />}
+          tone="purple"
+          label="Created agents"
+          value={agents.length}
+        />
+        <Kpi
+          icon={<FiUserPlus />}
+          tone="blue"
+          label="Available slots"
+          value={`${remainingSlots} / ${agentLimit}`}
+        />
+        <Kpi
+          icon={<FiKey />}
+          tone="green"
+          label="AI ready agents"
+          value={readyAgents}
+        />
+        <Kpi
+          icon={<FiFileText />}
+          tone="orange"
+          label="Campaign assigned"
+          value={assignedScripts}
+        />
+      </section>
+
+      {message && (
+        <p className="bpo-agent-message success">
+          <FiCheck /> {message}
+        </p>
+      )}
+      {error && <p className="bpo-agent-message error">{error}</p>}
+
+      <section className="bpo-agent-section">
+        <header>
+          <div>
+            <h2>Your calling agents</h2>
+            <p>
+              Agents are grouped by their assigned campaign. Open a group to
+              view its agents.
+            </p>
+          </div>
+          <span>
+            {agents.length} {agents.length === 1 ? "agent" : "agents"}
+          </span>
+        </header>
+        {agents.length ? (
+          <div>
+            {[
+              ...new Set(
+                agents.map((a) =>
+                  a.campaign_name
+                    ? [a.category_name, a.campaign_name]
+                        .filter(Boolean)
+                        .join(" / ")
+                    : "Unassigned agents",
+                ),
+              ),
+            ].map((group) => (
+              <details className="agent-campaign-group" key={group} open>
+                <summary>
+                  <span className="agent-group-icon" aria-hidden="true">
+                    <FiUsers />
+                  </span>
+                  <span className="agent-group-copy">
+                    <small>Campaign team</small>
+                    <strong>{group}</strong>
+                  </span>
+                  <span className="agent-group-count">
+                    {
+                      agents.filter(
+                        (a) =>
+                          (a.campaign_name
+                            ? [a.category_name, a.campaign_name]
+                                .filter(Boolean)
+                                .join(" / ")
+                            : "Unassigned agents") === group,
+                      ).length
+                    }
+                    <small>agents</small>
+                  </span>
+                  <FiChevronDown
+                    className="agent-group-chevron"
+                    aria-hidden="true"
+                  />
+                </summary>
+                <div className="managed-agent-grid">
+                  {agents
+                    .filter(
+                      (a) =>
+                        (a.campaign_name
+                          ? [a.category_name, a.campaign_name]
+                              .filter(Boolean)
+                              .join(" / ")
+                          : "Unassigned agents") === group,
+                    )
+                    .map((agent) => (
+                      <article className="managed-agent-card" key={agent.id}>
+                        <header className="managed-agent-top">
+                          <span
+                            className={`badge ${agent.is_active && agent.voice_status === "ACTIVE" ? "approved" : "suspended"}`}
+                          >
+                            {agent.is_active
+                              ? agent.voice_status === "ACTIVE"
+                                ? "Ready"
+                                : "Voice inactive"
+                              : "Inactive"}
+                          </span>
+                          <button
+                            className={`bpo-agent-activity ${agent.is_active ? "active" : "inactive"}`}
+                            type="button"
+                            disabled={activityBusy === agent.id}
+                            onClick={() => void setAgentActivity(agent)}
+                          >
+                            {activityBusy === agent.id ? (
+                              "Saving..."
+                            ) : agent.is_active ? (
+                              <>
+                                <FiPause /> Set inactive
+                              </>
+                            ) : (
+                              <>
+                                <FiPlay /> Set active
+                              </>
+                            )}
+                          </button>
+                        </header>
+                        <div className="managed-agent-person">
+                          {agent.avatar_url ? (
+                            <img src={agent.avatar_url} alt="" />
+                          ) : (
+                            <span>{agent.name.slice(0, 2).toUpperCase()}</span>
+                          )}
+                          <div>
+                            <h3>{agent.name}</h3>
+                            <p>@{agent.username}</p>
+                          </div>
+                        </div>
+                        <div className="managed-agent-assignment">
+                          <i />
+                          {agent.campaign_name || "No campaign assigned"}
+                        </div>
+                        <div className="managed-agent-route">
+                          <div>
+                            <span>Remote agent</span>
+                            <strong>{agent.remote_user || "Unassigned"}</strong>
+                          </div>
+                          <div>
+                            <span>Extension</span>
+                            <strong>
+                              {agent.extension_route || "Unassigned"}
+                            </strong>
+                          </div>
+                        </div>
+                        <div className="managed-agent-stats">
+                          <div>
+                            <strong>{agent.progress.calls}</strong>
+                            <span>Calls</span>
+                          </div>
+                          <div>
+                            <strong>{agent.progress.leadsTotal}</strong>
+                            <span>Leads</span>
+                          </div>
+                          <div>
+                            <strong>
+                              {agent.voice_name || "Not selected"}
+                            </strong>
+                            <span>Voice</span>
+                          </div>
+                        </div>
+                        <footer className="managed-agent-footer">
+                          <span>
+                            {dialingLabel(agent.dialing_mode)}
+                            <small>
+                              {agent.call_limit_minutes
+                                ? `${agent.call_limit_minutes} min / call`
+                                : "Unlimited duration"}
+                            </small>
+                          </span>
+                          <div className="agent-manage-actions">
+                            <button
+                              className="admin-outline"
+                              type="button"
+                              onClick={() => openEdit(agent)}
+                            >
+                              <FiEdit3 /> Edit agent
+                            </button>
+                            <button
+                              className="admin-outline danger-button"
+                              type="button"
+                              aria-label={`Delete ${agent.name}`}
+                              title="Delete agent"
+                              onClick={() => {
+                                setDeleteError("");
+                                setDeleteAgent(agent);
+                              }}
+                            >
+                              <FiTrash2 />
+                            </button>
+                          </div>
+                        </footer>
+                      </article>
+                    ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <div className="bpo-agent-empty">
+            <FiUsers />
+            <h3>No calling agents yet</h3>
+            <p>
+              {blocker ||
+                "Create your first AI agent, then assign it to a campaign in VoIP."}
+            </p>
+            {canCreate && (
+              <button type="button" onClick={openForm}>
+                <FiUserPlus /> Create agent
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      {deleteAgent && (
+        <dialog
+          className="bpo-agent-modal bpo-agent-delete-dialog"
+          ref={deleteDialog}
+          aria-labelledby="bpo-delete-agent-title"
+          onCancel={(event) => {
+            event.preventDefault();
+            if (!deleting) setDeleteAgent(null);
+          }}
+        >
+          <h2 id="bpo-delete-agent-title">Delete {deleteAgent.name}?</h2>
+          <p>
+            This removes the agent from your team. Saved call records stay
+            available.
+          </p>
+          {deleteError && (
+            <p role="alert" className="bpo-agent-message error">
+              {deleteError}
+            </p>
+          )}
+          <div className="bpo-agent-modal-actions">
+            <button
+              type="button"
+              autoFocus
+              disabled={deleting}
+              onClick={() => setDeleteAgent(null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="bpo-agent-delete-confirm"
+              disabled={deleting}
+              onClick={() => void removeAgent()}
+            >
+              {deleting ? "Deleting…" : "Delete agent"}
+            </button>
+          </div>
+        </dialog>
+      )}
+
+      {showForm && (
+        <div
+          className="bpo-agent-modal-backdrop"
+          onMouseDown={(event) =>
+            event.target === event.currentTarget && closeForm()
+          }
+        >
+          <form className="bpo-agent-modal" onSubmit={saveAgent}>
+            <button
+              type="button"
+              className="bpo-agent-modal-close"
+              disabled={busy || avatarUploading}
+              onClick={closeForm}
+              aria-label="Close"
+            >
+              <FiX />
+            </button>
+            <p className="bpo-eyebrow">
+              {editingAgent ? "EDIT CALLING AGENT" : "NEW CALLING AGENT"}
+            </p>
+            <h2>
+              {editingAgent ? `Edit ${editingAgent.name}` : "Set up your agent"}
+            </h2>
+            <p>Select an AI voice and optionally assign a VICIdial route.</p>
+            <div className="bpo-agent-photo-picker">
+              <div>
+                {avatarPreview ? (
+                  <img src={avatarPreview} alt="Agent preview" />
+                ) : (
+                  <span>
+                    {form.name.trim().slice(0, 2).toUpperCase() || "AI"}
+                  </span>
+                )}
+              </div>
+              <label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(event) =>
+                    void uploadAvatar(event.target.files?.[0])
+                  }
+                />
+                <FiCamera />
+                <span>
+                  {avatarUploading
+                    ? "Uploading picture..."
+                    : form.avatarUrl
+                      ? "Change picture"
+                      : "Add a picture"}
+                </span>
+                <small>Optional · JPG, PNG or WEBP · max 5 MB</small>
+              </label>
+            </div>
+            <div className="bpo-agent-form-grid">
+              <label>
+                Agent name
+                <input
+                  required
+                  minLength={2}
+                  maxLength={80}
+                  value={form.name}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                  placeholder="e.g. Sarah Collections"
+                />
+              </label>
+              <label>
+                Gender
+                <CustomDropdown
+                  value={form.gender}
+                  onChange={(value) =>
+                    setForm((current) => ({
+                      ...current,
+                      gender: value as Form["gender"],
+                    }))
+                  }
+                  ariaLabel="Agent gender"
+                  options={[
+                    { value: "FEMALE", label: "Female" },
+                    { value: "MALE", label: "Male" },
+                    { value: "OTHER", label: "Other" },
+                  ]}
+                />
+              </label>
+            </div>
+            <>
+              <label>
+                VICIdial connection
+                {editingAgent?.connection_id ? (
+                  <input
+                    readOnly
+                    value={
+                      connections.find(
+                        (connection) => connection.id === form.connectionId,
+                      )?.name || "Connection unavailable"
+                    }
+                  />
+                ) : (
+                  <CustomDropdown
+                    value={form.connectionId}
+                    ariaLabel="VICIdial connection"
+                    placeholder="Select a connection"
+                    onChange={(value) =>
+                      setForm((current) => ({
+                        ...current,
+                        connectionId: value,
+                      }))
+                    }
+                    options={connections
+                      .filter((connection) => connection.enabled)
+                      .map((connection) => ({
+                        value: connection.id,
+                        label: connection.name,
+                      }))}
+                  />
+                )}
+              </label>
+              <div className="bpo-agent-form-grid">
+                <label>
+                  Remote Agent Key ID
+                  <input
+                    value={route.remoteUser}
+                    maxLength={20}
+                    minLength={2}
+                    required={Boolean(
+                      route.prefix || editingAgent?.remote_user,
+                    )}
+                    disabled={!form.connectionId}
+                    placeholder="e.g. 78618"
+                    onChange={(event) =>
+                      setRoute((current) => ({
+                        ...current,
+                        remoteUser: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label>
+                  Extension number
+                  <input
+                    value={route.prefix}
+                    maxLength={4}
+                    pattern="[0-9A-Fa-f]{4}"
+                    required={Boolean(
+                      route.remoteUser || editingAgent?.extension_route,
+                    )}
+                    disabled={!form.connectionId}
+                    placeholder="e.g. 3548"
+                    onChange={(event) =>
+                      setRoute((current) => ({
+                        ...current,
+                        prefix: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              {!form.connectionId && (
+                <p>
+                  Add an enabled VICIdial connection in VoIP to enter a route.
+                </p>
+              )}
+            </>
+            <label>
+              Agent voice
+              <CustomDropdown
+                value={form.voiceId}
+                onChange={(value) => {
+                  stopPreview();
+                  setForm((current) => ({ ...current, voiceId: value }));
+                }}
+                ariaLabel="Agent voice"
+                options={voices.map((voice) => ({
+                  value: voice.id,
+                  label: voice.is_local
+                    ? `${voice.name} · ${voice.gender} · ${voice.accent || "English"}`
+                    : `${voice.name} · ${voice.telnyx_label || "No VoIP"} / ${voice.groq_label || "No Knowledge base"}`,
+                }))}
+              />
+            </label>
+            <button
+              type="button"
+              className="bpo-agent-preview"
+              disabled={
+                (!voiceServiceReady &&
+                  !["emma", "olivia", "lauren"].includes(form.voiceId)) ||
+                previewing ||
+                !voices.find((v) => v.id === form.voiceId)?.selectable
+              }
+              onClick={() => void previewVoice()}
+            >
+              <FiVolume2 />
+              {previewing ? "Playing preview..." : "Preview voice"}
+            </button>
+            {!voiceServiceReady && (
+              <p role="status">
+                You can save your voice and preview Emma, Olivia, or Lauren.
+                Live calls require the voice service.
+              </p>
+            )}
+            <label>
+              Conversation style
+              <CustomDropdown
+                value={form.conversationStyle || "Professional"}
+                ariaLabel="Conversation style"
+                onChange={(value) =>
+                  setForm((current) => ({
+                    ...current,
+                    conversationStyle: value,
+                  }))
+                }
+                options={conversationStyles.map((value) => ({
+                  value,
+                  label: value,
+                }))}
+              />
+            </label>
+            <label>
+              Who speaks first
+              <CustomDropdown
+                value={form.speaksFirst || "customer"}
+                ariaLabel="Who speaks first"
+                onChange={(value) =>
+                  setForm((current) => ({ ...current, speaksFirst: value }))
+                }
+                options={[
+                  { value: "customer", label: "Customer speaks first" },
+                  { value: "ai", label: "AI speaks first" },
+                ]}
+              />
+            </label>
+            {error && <p role="alert">{error}</p>}
+            <div className="bpo-agent-modal-actions">
+              <button
+                type="button"
+                disabled={busy || avatarUploading}
+                onClick={closeForm}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy || avatarUploading || !form.voiceId}
+              >
+                {busy
+                  ? "Saving..."
+                  : editingAgent
+                    ? "Save changes"
+                    : "Create agent"}{" "}
+                {editingAgent ? <FiCheck /> : <FiUserPlus />}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </main>
+  );
 }
 
-function Kpi({ icon, tone, label, value }: { icon: React.ReactNode; tone: string; label: string; value: string | number }) {
-  return <article><span className={tone}>{icon}</span><div><small>{label}</small><strong>{value}</strong></div></article>;
+function Kpi({
+  icon,
+  tone,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  tone: string;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <article>
+      <span className={tone}>{icon}</span>
+      <div>
+        <small>{label}</small>
+        <strong>{value}</strong>
+      </div>
+    </article>
+  );
 }

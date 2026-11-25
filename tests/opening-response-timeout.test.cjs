@@ -10,13 +10,13 @@ async function fixture(run){
  await run({socket,advance:ms=>{offset+=ms;},get hangups(){return hangups;},get controller(){return streamController;},dir,b});
  }finally{releaseHangup?.();socket?.destroy();b.close();await wait(100);await b.flushEvents();Date.now=realNow;fs.rmSync(dir,{recursive:true,force:true});}
 }
-test('silent opening closes locally despite stuck SSE cleanup, metadata sync and an unresponsive hangup backend',async()=>fixture(async f=>{
- const closed=new Promise(r=>f.socket.once('close',r));f.advance(7500);await wait(120);assert.equal(f.socket.destroyed,false);f.advance(700);await Promise.race([closed,wait(1000).then(()=>{throw Error('Silent call exceeded opening response deadline');})]);assert.equal(f.hangups,1);assert.ok(fs.readdirSync(f.dir).some(name=>name.endsWith('.event.json')&&JSON.parse(fs.readFileSync(path.join(f.dir,name))).action==='hangup'),'Provider reconciliation must remain durably queued while the call closes');
+test('silent opening queues a native hangup at 30 seconds even if the worker is stuck',async()=>fixture(async f=>{
+ f.advance(28000);await wait(120);assert.equal(f.hangups,0);
+ f.advance(2100);
+ for(let i=0;i<50&&f.hangups===0;i++)await wait(20);
+ assert.equal(f.hangups,1);
+ assert.ok(fs.readdirSync(f.dir).some(name=>name.endsWith('.event.json')&&JSON.parse(fs.readFileSync(path.join(f.dir,name))).endInitiation?.reason==='no_customer_speech_deadline'));
 }));
 test('a recognized customer reply disables the opening cutoff even if background cleanup remains pending',async()=>fixture(async f=>{
  f.controller.enqueue(new TextEncoder().encode('{"type":"user","text":"Yes, I can hear you."}\n'));await wait(20);f.advance(30000);await wait(150);assert.equal(f.socket.destroyed,false);assert.equal(f.hangups,0);
-}));
-
-test('customer speech near the deadline gets a fresh response window instead of being cut off mid-answer',async()=>fixture(async f=>{
- f.advance(7400);const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(2400,i);f.socket.write(Buffer.concat(Array.from({length:12},()=>packet(0x10,voice))));await wait(80);f.advance(1200);await wait(150);assert.equal(f.socket.destroyed,false);assert.equal(f.hangups,0);f.controller.enqueue(new TextEncoder().encode('{"type":"user","text":"Yes, I hear you."}\n'));await wait(30);f.advance(20000);await wait(120);assert.equal(f.socket.destroyed,false);
 }));

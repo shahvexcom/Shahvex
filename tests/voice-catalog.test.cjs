@@ -6,13 +6,13 @@ new Function('require','module','exports',ts.transpileModule(fs.readFileSync('li
 test('catalog exposes provisioned clones, hides Jenifer, and keeps clone routing',async()=>{
  const original=global.fetch,prior={...process.env},calls=[];
  process.env.SHAHVEX_FAST_VOICE='1';delete process.env.SHAHVEX_PC_AI_URL;delete process.env.SHAHVEX_LOCAL_FAST_TTS;
- global.fetch=async url=>{calls.push(String(url));if(String(url).endsWith('/voices'))return Response.json({voices:[...['lissa','emma','olivia'].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),selectable:true})),{id:'af_heart',name:'Jenifer',selectable:true},{id:'jennifer',name:'Jennifer old',selectable:true}]});return new Response('audio');};
+ global.fetch=async url=>{calls.push(String(url));if(String(url).endsWith('/voices'))return Response.json({voices:[...['lissa','emma','olivia','lauren'].map(id=>({id,name:id[0].toUpperCase()+id.slice(1),selectable:true})),{id:'af_heart',name:'Jenifer',selectable:true},{id:'jennifer',name:'Jennifer old',selectable:true}]});return new Response('audio');};
  try{
   const catalog=await(await mod.exports.engine(8767,'/voices')).json();
-  assert.equal(catalog.default_voice,'lissa');assert.deepEqual(catalog.voices.map(v=>v.id),['lissa','emma','olivia']);
+  assert.equal(catalog.default_voice,'lissa');assert.deepEqual(catalog.voices.map(v=>v.id),['lissa','emma','olivia','lauren']);
   assert.ok(!calls.some(url=>url.includes('8778')));
-  assert.deepEqual((await mod.exports.localVoices()).voices.map(v=>v.name),['Lissa','Emma','Olivia']);
-  for(const voice of ['lissa','emma','olivia'])for(const path of ['/synthesize','/stream']){
+  assert.deepEqual((await mod.exports.localVoices()).voices.map(v=>v.name),['Lissa','Emma','Olivia','Lauren']);
+  for(const voice of ['lissa','emma','olivia','lauren'])for(const path of ['/synthesize','/stream']){
    await mod.exports.engine(8767,path,{method:'POST',body:new TextEncoder().encode(JSON.stringify({voice_id:voice,text:'Hello'}))});
    assert.equal(calls.at(-1),`http://127.0.0.1:${voice==='lissa'?8767:8780}`+path);
   }
@@ -31,9 +31,9 @@ test('situational fillers fit useful answers and options and skip sensitive cont
 
 test('saved approved voices remain configurable offline with readiness explicitly false',async()=>{
  const original=global.fetch;
- registryOverride={savedVoiceCatalog:async owner=>{assert.equal(owner,'voice-owner');return {defaultVoice:'lissa',voices:[{id:'lissa',name:'Lissa'},{id:'emma',name:'Emma'},{id:'olivia',name:'Olivia'}]};}};
+ registryOverride={savedVoiceCatalog:async owner=>{assert.equal(owner,'voice-owner');return {defaultVoice:'lissa',voices:[{id:'lissa',name:'Lissa'},{id:'emma',name:'Emma'},{id:'olivia',name:'Olivia'},{id:'lauren',name:'Lauren'}]};}};
  global.fetch=async()=>{throw Error('offline');};
- try{const result=await mod.exports.localVoices('voice-owner');assert.equal(result.serviceReady,false);assert.equal(result.defaultVoice,'lissa');assert.deepEqual(result.voices.map(v=>v.id),['lissa','emma','olivia']);}
+ try{const result=await mod.exports.localVoices('voice-owner');assert.equal(result.serviceReady,false);assert.equal(result.defaultVoice,'lissa');assert.deepEqual(result.voices.map(v=>v.id),['lissa','emma','olivia','lauren']);}
  finally{global.fetch=original;registryOverride=undefined;}
 });
 

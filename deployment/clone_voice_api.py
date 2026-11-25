@@ -1,4 +1,4 @@
-"""Independent GPU Emma/Olivia engine; leaves the Lissa service unchanged."""
+"""Independent GPU engine for shared voice clones."""
 import io
 import json
 import os
@@ -14,6 +14,8 @@ os.environ.setdefault('TRITON_CACHE_DIR', '/tmp/shahvex-clone-triton')
 os.environ.setdefault('MPLCONFIGDIR', '/tmp/shahvex-matplotlib')
 os.environ.setdefault('NUMBA_CACHE_DIR', '/tmp/shahvex-numba')
 BACKEND = Path(os.environ.get('SHAHVEX_CLONE_BACKEND_ROOT', str(Path(__file__).resolve().parents[3] / 'linux-root/home/nazeer_ahmed/shahvex-ai')))
+LAUREN_REFERENCE = Path(__file__).resolve().parents[1] / '.data/voice-clones-lauren'
+CLONE_VOICE_IDS = ('emma', 'olivia', 'lauren')
 sys.path.insert(0, str(BACKEND / 'CosyVoice'))
 sys.path.insert(0, str(BACKEND / 'CosyVoice/third_party/Matcha-TTS'))
 import torch
@@ -28,7 +30,7 @@ from starlette.concurrency import run_in_threadpool
 from tts_stream_worker import threaded_pcm
 from tts_native_lifecycle import configure_native_lifecycle, cancellation_scope
 from tts_polling import configure_stream_polling
-
+# maximum limit of 4 threads for inference, to avoid over-subscription of cpu resources when multiple requests are being p4rocessed in parallel. This is especially important for CPU inference, where the default number of threads can be very high and lead to performance degradation.
 torch.set_num_threads(4)
 _snapshot = normalization.snapshot_download
 def local_snapshot(*args, **kwargs):
@@ -57,7 +59,7 @@ def pcm(text, voice_id, stopped=None):
         voice = voices[voice_id]
         cache_id = 'independent_' + voice_id
         if cache_id not in cached:
-            model.add_zero_shot_spk('You are a helpful assistant.<|endofprompt|>' + voice['reference_transcript'], str(BACKEND / 'gateway/voices' / voice_id / 'reference.wav'), cache_id)
+            model.add_zero_shot_spk('You are a helpful assistant.<|endofprompt|>' + voice['reference_transcript'], str(voice_reference_dir(voice_id) / 'reference.wav'), cache_id)
             cached.add(cache_id)
         model.model.token_hop_len = 25
         with cancellation_scope(model.model, stopped):
@@ -67,17 +69,31 @@ def pcm(text, voice_id, stopped=None):
                 yield item['tts_speech'].detach().cpu().squeeze().clamp(-1, 1).mul(32767).to(torch.int16).numpy().tobytes()
 
 
+def voice_reference_dir(voice_id):
+    if voice_id == 'lauren' and (LAUREN_REFERENCE / 'metadata.json').is_file() and (LAUREN_REFERENCE / 'reference.wav').is_file():
+        return LAUREN_REFERENCE
+    return BACKEND / 'gateway/voices' / voice_id
+
+
 @asynccontextmanager
 async def lifespan(app):
     global model
+    configured_voices = os.environ.get('SHAHVEX_CLONE_VOICE_IDS')
+    voice_ids = (tuple(dict.fromkeys(voice.strip() for voice in configured_voices.split(',')))
+                 if configured_voices is not None else CLONE_VOICE_IDS)
+    if any(voice_id not in CLONE_VOICE_IDS for voice_id in voice_ids):
+        raise RuntimeError('SHAHVEX_CLONE_VOICE_IDS contains an unknown clone voice')
+    for voice_id in voice_ids:
+        metadata = voice_reference_dir(voice_id) / 'metadata.json'
+        if configured_voices is None and voice_id == 'lauren' and not metadata.is_file():
+            continue
+        voices[voice_id] = json.loads(metadata.read_text())
     if not torch.cuda.is_available():
         raise RuntimeError("Live clone voices require CUDA; refusing slow CPU fallback")
     model = AutoModel(model_dir=str(BACKEND / 'CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B-HF'), load_trt=False, fp16=False)
     configure_stream_polling(model.model)
     configure_native_lifecycle(model.model)
-    for voice_id in ('emma', 'olivia'):
-        voices[voice_id] = json.loads((BACKEND / 'gateway/voices' / voice_id / 'metadata.json').read_text())
-    # Warm only these two independent speaker caches and GPU kernels before readiness.
+    # Warm speaker caches and GPU kernels before readiness.
     for voice_id in voices:
         for _ in pcm('Ready.', voice_id):
             pass
@@ -94,7 +110,7 @@ def health():
 
 @app.get('/voices')
 def catalog():
-    return {'default_voice': 'emma', 'voices': [dict(id=key, name=v['name'], gender=v['gender'], language='English', accent=v['accent'], selectable=True) for key, v in voices.items()]}
+    return {'default_voice': next(iter(voices), None), 'voices': [dict(id=key, name=v['name'], gender=v['gender'], language='English', accent=v['accent'], selectable=True) for key, v in voices.items()]}
 
 
 @app.post('/stream')

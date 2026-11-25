@@ -1,0 +1,1108 @@
+{
+  "rebate": [
+    {
+      "customer": "I think so, can you check?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you look at my account and tell me?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you see if I'm getting one?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Maybe, can you check for me?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Not sure, can you find out?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Check my statement please.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I don't know, you tell me.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Let me check my app.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Hold on, let me look.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "I'm not sure. Do you have my details?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you tell me how much I get?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Which card am I getting it on?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, I do get one.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "No, I don't.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I think my husband handles that.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Sorry, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Pardon?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Say that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't catch that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you say?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Come again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Could you repeat the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Repeat please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Hello? I can't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "You're breaking up.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The line is bad, say again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak louder?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak slower?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak more clearly?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I couldn't understand you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you say that one more time?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Wait, what was that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Huh?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Excuse me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I missed that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Sorry, I was distracted. What did you ask?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The TV was loud, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What are you asking?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Ask me again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "One more time please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you ask me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat? Actually, just put me through to someone.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, every month.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I get a credit on my grocery card.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "It comes quarterly.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I got one last year, but it stopped.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Only once, when I enrolled.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "The amount changes from month to month.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "No, nothing goes onto a card.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I get a premium reduction instead.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I have a card, but it hasn't been funded.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "My old plan did, my current one doesn't.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm not sure.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I think so.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Maybe, I haven't seen the latest statement.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I don't track the balance.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I get money back but I don't use a card.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "It started this month.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "The card is for prescriptions only.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Can you verify if the credit is active?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Could you look up my rebate?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Would you check my balance for me?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Please tell me whether my plan includes it.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you pull up my card details?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "No, can you check my account anyway?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I think it stopped. Would you find out for me?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Give me a second to open the app.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Let me grab the card.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Hang on while I read the statement.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "I'll check my records.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Could you ring me back later?",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "I'm driving at the moment.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "I'm in the middle of a meeting.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "My partner takes care of that.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "That's the wrong number.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm not interested.",
+      "action": "END"
+    },
+    {
+      "customer": "Please take my number off your list.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Don't contact me again.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Stop calling this number.",
+      "action": "DNC"
+    },
+    {
+      "customer": "What do you mean by rebate?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Is this the same as cashback?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Are you asking about my grocery card?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Who are you calling for?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "How did you get my number?",
+      "action": "CONTEXT"
+    }
+  ],
+  "age": [
+    {
+      "customer": "Yes.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Yes, I am.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Yeah.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Yep.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Correct.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 62.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 65.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 70.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 75.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 80.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 79.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm exactly 60.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm 68 years old.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Yes, I'm 72.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "No.",
+      "action": "END"
+    },
+    {
+      "customer": "No, I'm 59.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 55.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 45.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 81.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 85.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 90.",
+      "action": "END"
+    },
+    {
+      "customer": "Not yet, I'm turning 60 next month.",
+      "action": "END"
+    },
+    {
+      "customer": "No, I'm older than that.",
+      "action": "END"
+    },
+    {
+      "customer": "No, I'm younger.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm 20.",
+      "action": "END"
+    },
+    {
+      "customer": "About 70.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "Around 65, I think.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm retired.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I'm a senior citizen.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I'm over 60.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Born in 1955.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Born in 1950.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Yes... no... I'm not sure.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I'm in my sixties.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm in my seventies.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "I'm in my eighties.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Can you check my age?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you look it up? You should have it.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can I talk to someone?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Put me through to an agent.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Why do you ask?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "What is this about?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Is this about Medicare?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Does my age matter?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Is this free?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Who is this?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Are you from Medicare or the government?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "How did you get my number?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Are you a robot?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Is this a real person?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "It's my mom's phone, she's 72.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "My husband is 68, I'm 66.",
+      "action": "NEXT"
+    },
+    {
+      "customer": "My wife is 70.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Wrong number.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm busy right now.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Call me later.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "I'm driving.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Not interested.",
+      "action": "END"
+    },
+    {
+      "customer": "Stop calling me.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Remove my number.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Don't call me again.",
+      "action": "DNC"
+    },
+    {
+      "customer": "None of your business.",
+      "action": "END"
+    },
+    {
+      "customer": "I don't want to tell you my age.",
+      "action": "END"
+    },
+    {
+      "customer": "Sorry, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Pardon?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Say that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't catch that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you say?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Come again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Could you repeat the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Repeat please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Hello? I can't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "You're breaking up.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The line is bad, say again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak louder?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak slower?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak more clearly?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I couldn't understand you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you say that one more time?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Wait, what was that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Huh?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Excuse me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I missed that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Sorry, I was distracted. What did you ask?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The TV was loud, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What are you asking?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Ask me again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "One more time please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you ask me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat? Actually, just put me through to someone.",
+      "action": "TRANSFER"
+    }
+  ],
+  "coverage": [
+    {
+      "customer": "Yes.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, I do.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, I have both.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have Part A.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Just Part B.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Part A and Part B.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have Medicaid.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Medicare and Medicaid both.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have Medicare.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, I'm on Medicare.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have Original Medicare.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have the red, white and blue card.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have a Medicare card.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have Medicare Advantage.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have a Medicare supplement.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I'm dual eligible.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I have a Humana plan.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I have UnitedHealthcare Medicare.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, I just got it recently.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Yes, and I need help with my plan.",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "I only have Part D.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I have a plan through my employer.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Yes, I think so.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Maybe.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I don't know.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I think my daughter handles it.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Not sure what Part A is.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "What's Part B?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "What's the difference?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Which one? Is that Medicare?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "No.",
+      "action": "END"
+    },
+    {
+      "customer": "No, I don't.",
+      "action": "END"
+    },
+    {
+      "customer": "Nope.",
+      "action": "END"
+    },
+    {
+      "customer": "I have private insurance.",
+      "action": "END"
+    },
+    {
+      "customer": "I have Obamacare.",
+      "action": "END"
+    },
+    {
+      "customer": "I have insurance through work.",
+      "action": "END"
+    },
+    {
+      "customer": "I have VA or Tricare.",
+      "action": "END"
+    },
+    {
+      "customer": "I have no insurance.",
+      "action": "END"
+    },
+    {
+      "customer": "I'm not eligible.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I'm getting it next month.",
+      "action": "END"
+    },
+    {
+      "customer": "I turn 65 soon.",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Can you check?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you check if I have it?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Can you look it up with my name?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Let me check my card.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Hold on, let me look.",
+      "action": "WAIT"
+    },
+    {
+      "customer": "Do you need my Medicare number?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Can I talk to a person?",
+      "action": "TRANSFER"
+    },
+    {
+      "customer": "Why do you ask?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Who are you with?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Are you from Medicare?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Is this a sales call?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "Are you a robot?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "How did you get my number?",
+      "action": "CONTEXT"
+    },
+    {
+      "customer": "I'm busy.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Call me later.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "I'm driving.",
+      "action": "CALLBACK"
+    },
+    {
+      "customer": "Not interested.",
+      "action": "END"
+    },
+    {
+      "customer": "Stop calling me.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Remove my number.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Don't call me again.",
+      "action": "DNC"
+    },
+    {
+      "customer": "Wrong number.",
+      "action": "END"
+    },
+    {
+      "customer": "Sorry, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Pardon?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Say that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't catch that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I didn't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you say?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Come again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Could you repeat the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was the question?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Repeat please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What was that?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Hello? I can't hear you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "You're breaking up.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The line is bad, say again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak louder?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak slower?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you speak more clearly?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I couldn't understand you.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you say that one more time?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Wait, what was that again?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Huh?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Excuse me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "I missed that.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Sorry, I was distracted. What did you ask?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "The TV was loud, what?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What are you asking?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Ask me again.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "One more time please.",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "What did you ask me?",
+      "action": "REPEAT"
+    },
+    {
+      "customer": "Can you repeat? Actually, just put me through to someone.",
+      "action": "TRANSFER"
+    }
+  ]
+}

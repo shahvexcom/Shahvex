@@ -25,7 +25,7 @@ export async function GET() {
       client.query(`SELECT ${purchaseFields} FROM bpo_plan_purchases WHERE bpo_id=$1 AND is_active=TRUE ORDER BY purchased_at DESC`, [session.agentId]),
       client.query("SELECT COALESCE(remaining_credits,0)::float8 remaining_credits FROM agents WHERE id=$1 AND role='BPO'", [session.agentId]),
       bpoLeadUsage(client, session.agentId),
-      client.query("SELECT COUNT(*)::int agents FROM bpo_created_agents WHERE bpo_id=$1", [session.agentId]),
+      client.query("SELECT COUNT(*)::int agents FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id WHERE b.bpo_id=$1 AND a.deleted_at IS NULL", [session.agentId]),
       getBpoStorageSummary(client, session.agentId),
       bpoEntitlements(client, session.agentId),
       bpoUsagePricing(client),

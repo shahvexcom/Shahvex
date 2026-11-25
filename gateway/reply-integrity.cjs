@@ -71,7 +71,7 @@ function scriptQuestions(script, instructions = '', knowledge = '') {
   for (const match of spoken.matchAll(questionPattern)) {
    const question = match[0];
    const prefix = spoken.slice(0,match.index).split(/[.!?]/).at(-1).trim().replace(/["“*]+$/,'').trim();
-   if (prefix && !/^(?:(?:ask|question)(?:\s+(?:the )?customer)?\s*[:,-]?|(?:thank you|thanks|got it|great|perfect|okay|ok|so|and|sir|ma'am)[, ]*|(?:then |now )?ask(?: them)?[: ]*)$/i.test(prefix)) continue;
+   if (prefix && !/^(?:(?:ask|question)(?:\s+(?:the )?customer)?\s*[:,-]?|(?:thank you|thanks|got it|great|perfect|okay|ok|so|and|sir|ma'am)[, ]*|(?:then |now )?ask(?: them)?[: ]*|(?:(?:so|and|now)[, ]+)?(?:please |just )?(?:let me know|tell me)[,: ]*)$/i.test(prefix)) continue;
    if (/^(?:are you today|are you doing|are you feeling)\b/i.test(question) ||
        /\b(?:how are you|how is your day|good time|time to talk|connect|transfer|can you hear|are you (?:still )?there)\b/i.test(question)) continue;
    const id = questionKey(question);
@@ -104,8 +104,9 @@ function scriptQuestionProgress(script,memory,{instructions='',knowledge='',outc
   let applicability='required';
   if(entry.condition){
    const parent=memory.completed.find(item=>questionKey(item.question)===questionKey(entry.condition.question));
-   const outcome=outcomes?.get(questionKey(entry.condition.question)) || (parent && branchAnswer(parent.question,parent.response));
-   applicability=!outcome || !entry.condition.answer ? 'unresolved' : (entry.condition.answer.startsWith('not:') ? outcome!==entry.condition.answer.slice(4) : outcome===entry.condition.answer || entry.condition.answer==='yes' && outcome==='both') ? 'required' : 'not_applicable';
+   const recorded = outcomes.get(questionKey(entry.condition.question));
+   const outcome=recorded || (parent && branchAnswer(parent.question,parent.response));
+   applicability=['unclear','unanswered'].includes(recorded) ? 'not_applicable' : !outcome || !entry.condition.answer ? 'unresolved' : (entry.condition.answer.startsWith('not:') ? outcome!==entry.condition.answer.slice(4) : outcome===entry.condition.answer || entry.condition.answer==='yes' && outcome==='both') ? 'required' : 'not_applicable';
   }
   return {...entry,applicability,status:answer || outcomes?.has(entry.id)?'answered':'pending',
    speech:missingQuestion(entry.question,entry.parts,supplied),

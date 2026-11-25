@@ -6,7 +6,7 @@ import { savedVoiceCatalog } from "./local-voice-registry";
 const files = new Map<string, Promise<Uint8Array>>();
 /** Preview the approved recording immediately; never queue a new model job. */
 export async function cloneVoicePreview(owner: string, voice: string): Promise<Response | undefined> {
-  if (voice !== "emma" && voice !== "olivia") return;
+  if (voice !== "emma" && voice !== "olivia" && voice !== "lauren") return;
   const catalog = await savedVoiceCatalog(owner);
   if (!catalog.voices.some(item => item.id === voice)) return;
   let pending = files.get(voice);

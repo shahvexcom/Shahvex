@@ -13,4 +13,39 @@ class ConversationSilence {
   this.quietSince=undefined;return ++this.checks;
  }
 }
-module.exports={ConversationSilence};
+
+class CustomerSilence {
+  constructor() { this.reset(); }
+  reset() {
+    this.elapsed = 0;
+    this.waitingSince = undefined;
+    this.recoveryAttempted = false;
+    this.continuationAttempted = false;
+  }
+  speech() { this.reset(); }
+  pause(now) {
+    if (this.waitingSince === undefined) return;
+    this.elapsed += now - this.waitingSince;
+    this.waitingSince = undefined;
+  }
+  tick(now, blocked) {
+    if (blocked) {
+      this.pause(now);
+      return;
+    }
+    this.waitingSince ??= now;
+    const elapsed = this.elapsed + now - this.waitingSince;
+    if (elapsed >= 20000) return 'timeout';
+    if (elapsed >= 15000 && this.recoveryAttempted && !this.continuationAttempted) {
+      this.continuationAttempted = true;
+      this.pause(now);
+      return 'continue';
+    }
+    if (elapsed >= 10000 && !this.recoveryAttempted) {
+      this.recoveryAttempted = true;
+      this.pause(now);
+      return 'recover';
+    }
+  }
+}
+module.exports = {ConversationSilence, CustomerSilence};

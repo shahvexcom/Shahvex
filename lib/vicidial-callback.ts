@@ -1,7 +1,8 @@
+import { scenarioAnnouncement } from "../gateway/scenario-policy.cjs";
 import { configuredTransferAnnouncement, requestedTransferAnnouncement, requiresTransferAcceptance, transferConsent } from "../gateway/handoff-intent.cjs";
 import { rememberQuestions } from "../gateway/question-memory.cjs";
 import { scriptQuestionProgress } from "../gateway/reply-integrity.cjs";
-import { FLOW_REVISION, applySalutation, knownSalutation } from "../gateway/conversation-resume.cjs";
+import { FLOW_REVISION, applySalutation, knownSalutation, conversationalPolarity } from "../gateway/conversation-resume.cjs";
 import {
   directPrefixReadSql,
   directAdmissionSql,
@@ -85,7 +86,10 @@ const message = z
     turnFinal:z.boolean().optional(),
     completedTurnId:z.string().min(1).max(80).optional(),
     opening: z.boolean().optional(),
+    silenceOpening: z.boolean().optional(),
     handoffFailed: z.boolean().optional(),
+    interruptedHandoff: z.string().uuid().optional(),
+    retryFailedSpeech: z.boolean().optional(),
     silenceStep: z.number().int().min(1).max(4).optional(),
     recordingUrl: z.string().url().max(2000).optional(),
     recordingId: z.string().max(100).optional(),
@@ -93,15 +97,27 @@ const message = z
     recordingSize: z.number().int().min(44).max(1000000044).optional(),
     durationSeconds: z.number().int().min(0).max(86400).optional(),
     endInitiation: z.object({
-      reason: z.enum(["voicemail_detected", "customer_request", "audio_link_timeout", "media_pipeline_failure", "no_speech_timeout"]),
+      reason: z.enum(["call_answer_detection", "voicemail_detected", "customer_request", "audio_link_timeout", "media_pipeline_failure", "no_speech_timeout", "initial_no_speech_timeout", "no_customer_speech_deadline", "script_duration_limit", "call_duration_limit", "audio_bridge_failure", "no_business_outcome_timeout", "customer_silence_timeout", "abusive_language"]),
       decidedAt: z.string().datetime(),
       evidence: z.string().max(100),
+      disposition: z.string().regex(/^[A-Z0-9]{1,6}$/).optional(),
     }).strict().optional(),
   })
   .strict();
 const json = (value: unknown, status = 200) =>
   Response.json(value, { status, headers: { "cache-control": "no-store", "x-shahvex-callback-revision": FLOW_REVISION, "x-shahvex-call-cleanup-revision": "REC444-1" } });
-type ConversationTurn = { role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string; handoffTurnId?: string; handoffPlayed?: boolean; handoffFailedTurnId?: string };
+function businessQuestionCount(snapshot: { script?: string; instructions?: string; knowledge?: string }, history: ConversationTurn[] = []) {
+  const questions = scriptQuestionProgress(snapshot.script, rememberQuestions(history.map(turn => turn.businessResponse
+    ? {...turn, content:turn.businessResponse, conversationOnly:false} : turn)), {
+    instructions: snapshot.instructions,
+    knowledge: snapshot.knowledge,
+    outcomes: new Map(history.flatMap(turn => (turn.questionDispositions || []).map(step => [step.questionId, step.outcome]))),
+  });
+  return new Set(questions.filter((step: { applicability: string }) => step.applicability !== "not_applicable")
+    .map((step: { id: string }) => step.id)).size;
+}
+type QuestionDisposition = { questionId: string; outcome: "unclear" | "unanswered" };
+type ConversationTurn = { businessOutcome?: boolean; questionDispositions?: QuestionDisposition[]; role: "user" | "assistant"; content: string; conversationOnly?: boolean; businessResponse?: string; handoffTurnId?: string; handoffAnnouncement?: string; scenarioHandoff?: "assistance" | "requested" | "repeat"; handoffPlayed?: boolean; handoffFailedTurnId?: string };
 // Installed VICIdial builds use either callerid or call_id for the same native call code.
 async function stopCallVoice(call: { id: string; voice_session_id?: string }) {
   const sessionId = call.voice_session_id;
@@ -131,7 +147,7 @@ function nativeStatusReader(body: string) {
 
 async function startVoice(callId: string, agentId: string, config: TestConfig) {
   const owner = `vici-${callId}`,
-    voiceConfig = testConfig.parse({...config, first:"ai"});
+    voiceConfig = testConfig.parse(config);
   if (process.env.SHAHVEX_PC_AI_URL) {
     const response = await pcAiRequest(
       "/tester/start",
@@ -189,10 +205,17 @@ export async function vicidialCallback(request: Request) {
           await pool.query(
             prefixRead
               ? directPrefixReadSql
-              : "SELECT * FROM voip_connections WHERE id=$1",
+              : v.action === "listen"
+                ? `SELECT c.*, (
+                    SELECT row_to_json(a) FROM (
+                      SELECT id,status,transfer_status,voice_session_id,vicidial_call_id,direct_audio_uuid,ai_leg_released
+                      FROM agent_calls WHERE id=$2 AND voip_connection_id=c.id
+                    ) a
+                  ) AS listen_call FROM voip_connections c WHERE c.id=$1`
+                : "SELECT * FROM voip_connections WHERE id=$1",
             prefixRead
               ? [connectionId, v.audioUuid!.slice(0, 4)]
-              : [connectionId],
+              : v.action === "listen" ? [connectionId, v.callId || null] : [connectionId],
           )
         ).rows[0];
   const signed = () =>
@@ -249,12 +272,7 @@ export async function vicidialCallback(request: Request) {
   // durable mutation ledger or transcript writes while the caller is speaking.
   if (v.action === "listen") {
     if (!v.callId) return json({ error: "Call ID required" }, 400);
-    const call = (
-      await pool.query(
-        "SELECT id,status,transfer_status,voice_session_id,vicidial_call_id,direct_audio_uuid,ai_leg_released FROM agent_calls WHERE id=$1 AND voip_connection_id=$2",
-        [v.callId, c.id],
-      )
-    ).rows[0];
+    const call = c.listen_call;
     const direct = call?.direct_audio_uuid
       ? "direct-" + String(call.direct_audio_uuid).replaceAll("-", "")
       : "";
@@ -316,11 +334,13 @@ export async function vicidialCallback(request: Request) {
       v.externalCallId !== direct
     )
       return json({ error: "Call identity mismatch" }, 409);
-    return json(
-      await (
-        await import("./vicidial-call-state")
-      ).observeNativeCustomer(call, c, key),
-    );
+    const snapshot = call.script_snapshot || {};
+    return json({
+      ...await (await import("./vicidial-call-state")).observeNativeCustomer(call, c, key),
+      connectedAt: call.answered_at,
+      businessQuestionCount: businessQuestionCount(snapshot, call.conversation_history || []),
+      businessOutcome: call.conversation_history?.some((turn: ConversationTurn) => turn.businessOutcome === true) === true,
+    });
   }
   if (v.action === "resolve-prefix") {
     if (!c.enabled || !live.enabled || !c.media_verified_at || !v.audioUuid)
@@ -498,9 +518,11 @@ export async function vicidialCallback(request: Request) {
           return call.voice_session_id
             ? finish({
                 callId: call.id,
-                first: "ai",
+                first: call.script_snapshot?.first === "customer" ? "customer" : "ai",
                 status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
                 mediaReady: call.status === "ANSWERED",
+                connectedAt: call.answered_at,
+                businessQuestionCount: businessQuestionCount(call.script_snapshot || {}),
               })
             : finish(
                 {
@@ -513,9 +535,10 @@ export async function vicidialCallback(request: Request) {
           const config = testConfig.parse(call.script_snapshot),
             payload = {
               callId: call.id,
-              first: "ai",
+              first: config.first,
               mediaReady: true,
               maxCallDurationSeconds: call.max_call_duration_seconds || 0,
+              businessQuestionCount: businessQuestionCount(config),
             },
             session = await startVoice(call.id, call.agent_id, config);
           if (
@@ -680,7 +703,7 @@ export async function vicidialCallback(request: Request) {
         return call.voice_session_id
           ? json({
               callId: call.id,
-              first: "ai",
+              first: call.script_snapshot?.first === "customer" ? "customer" : "ai",
               status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
               mediaReady: call.status === "ANSWERED",
             })
@@ -726,14 +749,14 @@ export async function vicidialCallback(request: Request) {
             return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: prior.id,
-            first: "ai",
+            first: prior.script_snapshot?.first === "customer" ? "customer" : "ai",
             status,
             mediaReady: status === "ANSWERED",
           });
         }
         const a = (
           await tx.query(
-            `SELECT a.id,a.name,a.local_voice_id,q.config,q.max_call_duration_seconds,d.id campaign_id,d.external_campaign_id,d.script,b.bpo_id
+            `SELECT a.id,a.name,a.local_voice_id,a.speaks_first,q.config,q.max_call_duration_seconds,d.id campaign_id,d.external_campaign_id,d.script,b.bpo_id
         FROM agents a JOIN campaign_agent_assignments x ON x.agent_id=a.id AND x.enabled
         JOIN campaign_definitions d ON d.id=x.campaign_id AND d.connection_id=$2 AND d.owner_id=$3
         JOIN voip_agent_assignments va ON va.agent_id=a.id AND va.connection_id=d.connection_id AND va.owner_id=d.owner_id AND va.campaign_id=d.external_campaign_id
@@ -772,6 +795,7 @@ export async function vicidialCallback(request: Request) {
           ...a.config,
           name: a.name,
           voice: a.local_voice_id,
+          first: a.speaks_first === "customer" ? "customer" : "ai",
           script: a.script,
         });
         const id = randomUUID();
@@ -818,9 +842,10 @@ export async function vicidialCallback(request: Request) {
         }
         return json({
           callId: id,
-          first: "ai",
+          first: config.first,
           mediaReady: true,
           maxCallDurationSeconds: a.max_call_duration_seconds || 0,
+          businessQuestionCount: businessQuestionCount(config),
         });
       } catch (error) {
         if (!released) await tx.query("ROLLBACK");
@@ -834,7 +859,7 @@ export async function vicidialCallback(request: Request) {
         return call.voice_session_id
           ? json({
               callId: call.id,
-              first: "ai",
+              first: call.script_snapshot?.first === "customer" ? "customer" : "ai",
               status: call.ai_leg_released || call.customer_ended ? "COMPLETED" : call.status,
               mediaReady: call.status === "ANSWERED",
             })
@@ -922,7 +947,7 @@ export async function vicidialCallback(request: Request) {
             return json({ error: "Assignment is awaiting voice readiness", retryable: true }, 409);
           return json({
             callId: duplicate.id,
-            first: "ai",
+            first: duplicate.script_snapshot?.first === "customer" ? "customer" : "ai",
             status,
             mediaReady: status === "ANSWERED",
           });
@@ -931,7 +956,7 @@ export async function vicidialCallback(request: Request) {
         const excluded: string[] = [];
         while (excluded.length <= 1000) {
           const available = await tx.query(
-            `SELECT q.*,a.daily_call_limit,b.bpo_id,rs.last_assigned_at FROM vicidial_pool_agents q JOIN agents a ON a.id=q.agent_id
+            `SELECT q.*,a.speaks_first,a.daily_call_limit,b.bpo_id,rs.last_assigned_at FROM vicidial_pool_agents q JOIN agents a ON a.id=q.agent_id
         LEFT JOIN bpo_created_agents b ON b.agent_id=a.id
         JOIN ai_agent_runtime_states rs ON rs.agent_id=a.id AND rs.state='READY' AND rs.call_id IS NULL
         JOIN vicidial_pools p ON p.id=q.pool_id
@@ -990,6 +1015,10 @@ export async function vicidialCallback(request: Request) {
           )
             throw Error("Workspace calling allowance exhausted");
         }
+        const config = testConfig.parse({
+          ...a.config,
+          first: a.speaks_first === "customer" ? "customer" : "ai",
+        });
         const id = randomUUID();
         await tx.query(
           `INSERT INTO agent_calls(id,agent_id,status,telephony_provider,voip_connection_id,vicidial_call_id,vicidial_lead_id,vicidial_agent_user,lead_number,script_snapshot,answered_at,conversation_state,dialing_source,max_call_duration_seconds)
@@ -1002,7 +1031,7 @@ export async function vicidialCallback(request: Request) {
             get("lead_id"),
             v.agentUser,
             number,
-            JSON.stringify(a.config),
+            JSON.stringify(config),
             a.dialing_source,
             a.max_call_duration_seconds,
           ],
@@ -1032,7 +1061,7 @@ export async function vicidialCallback(request: Request) {
         tx.release();
         released = true;
         try {
-          const sessionId = await startVoice(id, a.agent_id, a.config);
+          const sessionId = await startVoice(id, a.agent_id, config);
           if (!(await mediaReady(id, sessionId)))
             throw Error("Media reservation unavailable");
           // agent_status already verified the answered call and lead identity.
@@ -1068,9 +1097,10 @@ export async function vicidialCallback(request: Request) {
         }
         return json({
           callId: id,
-          first: "ai",
+          first: config.first,
           mediaReady: true,
           maxCallDurationSeconds: a.max_call_duration_seconds,
+          businessQuestionCount: businessQuestionCount(config),
         });
       } catch (error) {
         if (!released) await tx.query("ROLLBACK");
@@ -1081,13 +1111,49 @@ export async function vicidialCallback(request: Request) {
     }
     if (!call || v.callId !== call.id)
       return json({ error: "Call not found" }, 404);
+    if (v.action === "hangup" && v.endInitiation?.reason === "no_business_outcome_timeout" &&
+        (call.conversation_busy || call.conversation_history?.some((turn: ConversationTurn) => turn.businessOutcome === true))) {
+      return json({saved:true, syncPending:call.conversation_busy, watchdogCancelled:!call.conversation_busy});
+    }
+    const answerDetection = v.action === "hangup" && v.endInitiation?.reason === "call_answer_detection";
+    if (answerDetection && !v.endInitiation?.disposition)
+      return json({ error: "Missing call-answer disposition" }, 400);
+    const silenceDeadline = v.action === "hangup" &&
+      ["initial_no_speech_timeout", "no_customer_speech_deadline"].includes(v.endInitiation?.reason || "");
+    const scriptDeadline = v.action === "hangup" && v.endInitiation?.reason === "script_duration_limit";
+    if (scriptDeadline && call.conversation_history?.some((turn: ConversationTurn) => turn.businessOutcome === true))
+      return json({saved:true,watchdogCancelled:true});
+    if (scriptDeadline && call.transfer_status === "PREPARING") {
+      // The native command is armed only by PREPARING -> UNCERTAIN.
+      // Claim this deadline only if the transfer has yet to reach that boundary.
+      const cancelled = await pool.query(
+        `UPDATE agent_calls SET transfer_status='FAILED',ending_requested=TRUE,conversation_state='ENDING',
+          end_initiation=COALESCE(end_initiation,$2::jsonb)
+          WHERE id=$1 AND status='ANSWERED' AND NOT customer_ended AND transfer_status='PREPARING' RETURNING *`,
+        [call.id, JSON.stringify({...v.endInitiation,source:"audio_bridge"})],
+      );
+      if (!cancelled.rowCount) return json({saved:true,syncPending:true});
+      call = cancelled.rows[0];
+      void stopCallVoice(call).catch(() => {});
+    }
     if (v.endInitiation && v.action === "hangup") {
-      await pool.query(
-        `UPDATE agent_calls SET end_initiation=$2::jsonb WHERE id=$1 AND end_initiation IS NULL
+      const initiation = await pool.query(
+        `UPDATE agent_calls SET end_initiation=$2::jsonb,
+         ending_requested=ending_requested OR $3::boolean,
+         conversation_state=CASE WHEN $3::boolean THEN 'ENDING' ELSE conversation_state END
+         WHERE id=$1 AND end_initiation IS NULL
          AND NOT customer_ended AND NOT ai_leg_released AND status IN ('INITIATED','RINGING','ANSWERED')
          AND COALESCE(transfer_status,'') NOT IN ('PREPARING','SUBMITTED','UNCERTAIN','ANSWERED')`,
-        [call.id, JSON.stringify({ ...v.endInitiation, source: "audio_bridge" })],
+        [call.id, JSON.stringify({ ...v.endInitiation, source: "audio_bridge" }),
+          scriptDeadline || silenceDeadline || answerDetection || ["customer_silence_timeout","abusive_language","call_duration_limit"].includes(v.endInitiation.reason)],
       );
+      if (answerDetection) {
+        if (!initiation.rowCount && (call.end_initiation?.reason !== "call_answer_detection" ||
+            call.end_initiation?.disposition !== v.endInitiation.disposition))
+          return json({ saved: true, answerDetectionCancelled: true });
+        if (initiation.rowCount) await stopCallVoice(call).catch(() => {});
+      }
+      if ((scriptDeadline || silenceDeadline) && initiation.rowCount) void stopCallVoice(call).catch(() => {});
     }
     const owner = `vici-${call.id}`,
       sessionId = call.voice_session_id;
@@ -1122,6 +1188,7 @@ export async function vicidialCallback(request: Request) {
           return json({
             saved: true,
             nativeSync: "NOT_APPLICABLE",
+            syncPending: true,
             nativeLinkPending: true,
           });
       }
@@ -1129,7 +1196,8 @@ export async function vicidialCallback(request: Request) {
         if (call.customer_ended || ["COMPLETED", "FAILED"].includes(call.status))
           return json({ ended: true });
         // A delayed terminal event cannot attach a new customer to this audio UUID.
-        return json({ saved: true, syncPending: true, cleanupPending: true });
+        return json({ saved: true, syncPending: true, cleanupPending: true,
+          ...(scriptDeadline || silenceDeadline || answerDetection ? { nativeHangupPending: true } : {}) });
       }
       if (
         !call.vicidial_call_id &&
@@ -1211,22 +1279,36 @@ export async function vicidialCallback(request: Request) {
       return json({ saved: true, humanConnected: true });
     }
     if (v.action === "hangup") {
+      const reconcilesBridgeFailure = scriptDeadline || silenceDeadline || answerDetection || v.endInitiation?.reason === "audio_bridge_failure" ||
+        ["no_business_outcome_timeout","customer_silence_timeout","abusive_language"].includes(v.endInitiation?.reason || "");
+      const confirmEnded = async () => {
+        const released = await releaseConfirmedAgent(call.id);
+        return json(reconcilesBridgeFailure && !released
+          ? {ended:true,syncPending:true,cleanupPending:true}
+          : {ended:true});
+      };
       if (["SUBMITTED", "ANSWERED"].includes(call.transfer_status)) return json({ ended: true, aiDetached: true });
       if (["PREPARING", "UNCERTAIN"].includes(call.transfer_status))
         return json({ saved: true, syncPending: true, awaitingHuman: true });
       if (call.customer_ended || ["COMPLETED", "FAILED"].includes(call.status))
-        return json({ ended: true });
+        return reconcilesBridgeFailure ? confirmEnded() : json({ended:true});
       const { observeNativeCustomer } = await import("./vicidial-call-state");
-      if (!(await observeNativeCustomer(call, c, key)).customerEnded) {
+      const observe = () => observeNativeCustomer(call, c, key).catch(() => {
+        // A status transport failure does not prevent an exact-ID command.
+        return { customerEnded: false };
+      });
+      if (!(await observe()).customerEnded) {
+        if (answerDetection && call.end_initiation?.nativeSubmitted)
+          return json({ saved: true, syncPending: true, hangupSubmitted: true });
         const response = await (
           await import("./vicidial-controls")
-        ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
+        ).vicidialCallCommand(call.id, "hangup", call.agent_id, false, true,
+          answerDetection ? v.endInitiation?.disposition : undefined);
         if (!response?.ok) return response || json({ error: "Call not found" }, 404);
-        if (!(await observeNativeCustomer(call, c, key)).customerEnded)
+        if (!(await observe()).customerEnded)
           return json({ saved: true, syncPending: true, hangupSubmitted: true });
       }
-      await releaseConfirmedAgent(call.id);
-      return json({ ended: true });
+      return confirmEnded();
     }
     if (v.action === "playback-complete" && v.completedTurnId) {
       let history: ConversationTurn[] = call.conversation_history || [];
@@ -1242,9 +1324,11 @@ export async function vicidialCallback(request: Request) {
         const script = call.script_snapshot?.script || "";
         const rules = call.script_snapshot?.campaignSettings?.transferConditions || "";
         const accepted = transferConsent(history.slice(0,-1));
-        const expectedAnnouncement = accepted ? requestedTransferAnnouncement(script) : configuredTransferAnnouncement(script);
-        if (!expectedAnnouncement || last.content !== applySalutation(expectedAnnouncement, knownSalutation(history)) ||
-            (requiresTransferAcceptance(script + "\n" + rules) && !accepted))
+        const scenarioHandoff = last.scenarioHandoff;
+        const expectedAnnouncement = scenarioHandoff ? scenarioAnnouncement(script,scenarioHandoff) :
+          accepted ? requestedTransferAnnouncement(script) : configuredTransferAnnouncement(script);
+        if (!expectedAnnouncement || (last.handoffAnnouncement || last.content) !== applySalutation(expectedAnnouncement, knownSalutation(history)) ||
+            (requiresTransferAcceptance(script + "\n" + rules) && !accepted && !scenarioHandoff))
           return json({transferFailed:true});
         if (!last.handoffPlayed) {
           const before = JSON.stringify(history);
@@ -1326,8 +1410,11 @@ export async function vicidialCallback(request: Request) {
             JSON.stringify({
               text: v.text || "",
               opening: v.opening === true,
+              silenceOpening: v.silenceOpening === true,
+              ...(v.interruptedHandoff ? {interruptedHandoff:v.interruptedHandoff} : {}),
               ...(v.handoffFailed === true && Boolean(call.conversation_history?.at(-1)?.handoffFailedTurnId) ? {handoffFailed:true} : {}),
               ...(v.completedTurnId?{completedTurnId:v.completedTurnId}:{}),
+              ...(v.retryFailedSpeech ? {retryFailedSpeech:true} : {}),
               ...(v.silenceStep ? { silenceStep: v.silenceStep } : {}),
             }),
           );
@@ -1412,8 +1499,12 @@ export async function vicidialCallback(request: Request) {
         user = "",
         userConversationOnly = false,
         businessResponse = "",
+        businessOutcome = false,
+        questionDispositions: QuestionDisposition[] = [],
         done = false,
-        handoffAnnouncement = false;
+        handoffAnnouncement: string | undefined,
+        scenarioHandoff: ConversationTurn["scenarioHandoff"],
+        suppressionWrite: Promise<unknown> | undefined;
       const decoder = new TextDecoder();
       const history: ConversationTurn[] = Array.isArray(
         call.conversation_history,
@@ -1424,13 +1515,39 @@ export async function vicidialCallback(request: Request) {
         if (!line.trim()) return;
         const e = JSON.parse(line);
         if (e.type === "user") {user = e.text;userConversationOnly=e.conversationOnly===true;}
+        if (e.type === "business-outcome") businessOutcome = true;
+        if (e.type === "question-disposition" && typeof e.questionId === "string" &&
+            ["unclear","unanswered"].includes(e.outcome)) {
+          questionDispositions.push({questionId:e.questionId,outcome:e.outcome});
+        }
         if (e.type === "conversation-only") userConversationOnly = true;
-        if (e.type === "business-answer" && typeof e.response === "string" && user.startsWith(e.response)) {
-          businessResponse = e.response;
+        if (e.type === "business-answer" && typeof e.response === "string" && user.includes(e.response)) {
+          const polarity = conversationalPolarity(e.response);
+          businessResponse = polarity && e.interpretedAs === polarity
+            ? polarity === "yes" ? "Yes." : "No."
+            : e.response;
           userConversationOnly = false;
         }
         if (e.type === "delta") answer += e.text;
-        if (e.type === "handoff-announcement" && e.turnId === v.eventId) handoffAnnouncement = true;
+        if (e.type === "handoff-announcement" && e.turnId === v.eventId && typeof e.announcement === "string") {
+          handoffAnnouncement = e.announcement;
+          if (e.scenarioHandoff === "assistance" || e.scenarioHandoff === "requested" || e.scenarioHandoff === "repeat")
+            scenarioHandoff = e.scenarioHandoff;
+          if (answer && !/\s$/.test(answer)) answer += " ";
+        }
+        if (e.type === "dnc-request" && !suppressionWrite) {
+          const suppression = {
+            text: `INSERT INTO do_not_call (phone_number,source_call_id,reason)
+              SELECT lead_number,id,'Customer requested no further calls' FROM agent_calls
+              WHERE id=$1 AND voip_connection_id=$2 AND COALESCE(lead_number,'')<>''
+              ON CONFLICT (phone_number) DO UPDATE SET source_call_id=EXCLUDED.source_call_id,reason=EXCLUDED.reason`,
+            values: [call.id,c.id],
+            query_timeout: 2000,
+          };
+          suppressionWrite = pool.query(suppression).then(result => {
+            if (!result.rowCount) console.warn("[Shahvex] DNC request has no verified lead number",call.id);
+          }).catch(() => console.error("[Shahvex] DNC suppression write unavailable",call.id));
+        }
         if (e.type === "done") done = true;
       };
       // Publish the current turn while audio is streaming, without releasing its lease.
@@ -1473,6 +1590,7 @@ export async function vicidialCallback(request: Request) {
                 consume(pending.slice(0, at));
                 pending = pending.slice(at + 1);
               }
+              if (suppressionWrite) await suppressionWrite;
               controller.enqueue(chunk);
               if (!progressWrite && Date.now() - lastPublished >= 750)
                 progressWrite = publishProgress().finally(() => {
@@ -1484,9 +1602,17 @@ export async function vicidialCallback(request: Request) {
           } catch {
             /* Disconnects preserve only the received transcript; no restart. */
           } finally {
+            await suppressionWrite;
             await progressWrite;
             if (user) history.push({ role: "user", content: user,...(userConversationOnly?{conversationOnly:true}:{}),...(businessResponse?{businessResponse}:{}) });
-            if (answer) history.push({ role: "assistant", content: answer, ...(done && handoffAnnouncement ? {handoffTurnId:v.eventId} : {}) });
+            if (answer) history.push({ role: "assistant", content: answer, ...(done && handoffAnnouncement && answer.endsWith(handoffAnnouncement) ? {handoffTurnId:v.eventId,handoffAnnouncement,...(scenarioHandoff?{scenarioHandoff}:{})} : {}) });
+            const last = history.at(-1);
+            if (last && (businessOutcome || questionDispositions.length)) {
+              history[history.length - 1] = {...last,
+                ...(businessOutcome ? {businessOutcome:true} : {}),
+                ...(questionDispositions.length ? {questionDispositions:[...(last.questionDispositions || []), ...questionDispositions]} : {}),
+              };
+            }
             await pool.query(turnCompletionSql, [
               JSON.stringify(history),
               history
@@ -1555,12 +1681,27 @@ export async function vicidialCallback(request: Request) {
       if (!transferred && v.action !== "customer-ended" && !call.customer_ended &&
           !["COMPLETED", "FAILED"].includes(call.status)) {
         const { observeNativeCustomer } = await import("./vicidial-call-state");
-        const native = await observeNativeCustomer(call, c, key);
-        if (v.action === "ended" && native.customerActive) {
-          // The audio socket closed while the exact linked customer was still
-          // connected. Keep the terminal event pending until native confirmation.
+        const bridgeFailed = v.endInitiation?.reason === "audio_bridge_failure";
+        const observe = () => observeNativeCustomer(call, c, key).catch(() => ({
+          customerEnded: false, customerActive: false,
+        }));
+        const native = await observe();
+        if (!native.customerEnded && call.end_initiation?.reason !== "call_answer_detection" &&
+            (bridgeFailed || (native.customerActive && v.action === "ended"))) {
+          // A bridge failure can use the already-verified caller code even when status readback is unavailable.
+          if (v.endInitiation?.reason === "audio_bridge_failure") {
+            await pool.query(
+              `UPDATE agent_calls SET end_initiation=$2::jsonb,
+               ending_requested=TRUE,conversation_state='ENDING'
+               WHERE id=$1 AND end_initiation IS NULL
+               AND NOT customer_ended AND status='ANSWERED' AND NOT ending_requested
+               AND COALESCE(transfer_status,'') NOT IN ('PREPARING','SUBMITTED','UNCERTAIN','ANSWERED')`,
+              [call.id, JSON.stringify({...v.endInitiation, source:"audio_bridge"})],
+            );
+          }
           const { vicidialCallCommand } = await import("./vicidial-controls");
-          await vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
+          const submitted = await vicidialCallCommand(call.id, "hangup", call.agent_id, false, true);
+          if (submitted?.ok) await observe();
         }
       }
       cleanupPending = !(await releaseConfirmedAgent(call.id));
@@ -1606,6 +1747,8 @@ export async function vicidialCallback(request: Request) {
             verificationPending: true,
             transferConsent: false,
           });
+        if (call.end_initiation?.reason === "call_answer_detection" && call.end_initiation?.nativeSubmitted)
+          return json({ saved: true });
         const history: ConversationTurn[] = call.conversation_history || [],
           audit = call.qualification;
         const currentAudit =
@@ -1616,7 +1759,8 @@ export async function vicidialCallback(request: Request) {
         const scriptComplete = !scriptQuestionProgress(
           snapshot.script, rememberQuestions(history.map(turn => turn.businessResponse
             ? {...turn, content:turn.businessResponse, conversationOnly:false} : turn)),
-          {instructions:snapshot.instructions, knowledge:snapshot.knowledge},
+          {instructions:snapshot.instructions, knowledge:snapshot.knowledge,
+            outcomes:new Map(history.flatMap(turn => (turn.questionDispositions || []).map(step => [step.questionId,step.outcome] as const)))},
         ).some((step: {applicability: string; status: string}) =>
           step.applicability !== "not_applicable" && step.status !== "answered");
         if (v.action === "retry-sync" && call.status === "ANSWERED" && !scriptComplete)

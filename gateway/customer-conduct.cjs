@@ -5,11 +5,23 @@
 function normalize(text) {
   return String(text || '').normalize('NFKC').replace(/[’]/g, "'").trim().slice(0, 16000);
 }
+function isDirectedAbuse(customer) {
+  const text = normalize(customer);
+  // Require a direct address at the start of the utterance. A quote or report
+  // can otherwise contain the same words as a direct insult.
+  if (/["“”‘]|(?:^|\s)'[^']+'(?:[.!?]|\s|$)|\b(?:said|says|called|quoted|told|heard|reporting|means)\b/i.test(text)) return false;
+  const slur = "(?:bitch(?:es)?|assholes?|motherfuckers?|dickheads?|douchebags?|bastards?|whore|slut|cunt|jackass|dumbass)";
+  const insult = "(?:(?:fucking|little) )?(?:" + slur + "|idiot|moron|piece of shit)";
+  const directed = new RegExp("(?:^|[,.!?]\\s*)\\s*(?:(?:oh|hey|well|no|okay)[, ]+)*(?:fuck(?:ing)? (?:you|off)|go fuck yourself|shut the fuck up|you(?:'re| are)?[, ]+(?:a |an )?" + insult +
+    "|chup (?:kar|kr) (?:sali|saali))\\b", "i");
+  const standalone = new RegExp("^(?:(?:oh|hey|well)[, ]+)*(?:fucking )?" + slur + "[.!? ,]*$", "i");
+  const vocative = new RegExp(",\\s*(?:you )?(?:fucking )?" + slur + "[.!? ]*$", "i");
+  return directed.test(text) || standalone.test(text) || vocative.test(text);
+}
 function isHarassment(customer) {
   const text = normalize(customer);
   if (/\b(?:he|she|they|someone|customer|caller)\s+(?:said|says|called|asked|told)\b|\b(?:reporting|harassed me|abused me)\b/i.test(text)) return false;
-  return /\b(?:fuck you|fuck off|shut (?:the fuck )?up|you(?:'re| are)? (?:a |an )?(?:bitch|whore|slut|fucking idiot)|(?:show|send) me (?:your )?(?:boobs|tits|nudes)|(?:have sex|sleep) with me|(?:talk dirty|moan) (?:to|for) me|what are you wearing|you sound sexy|are you naked)\b/i.test(text)
-    || /\b(?:chup (?:kar|kr) (?:sali|saali)|apn[ei] (?:boobs|tits) dikhao|mere sath sex|sexy awaz)\b/i.test(text);
+  return /\b(?:(?:show|send) me (?:your )?(?:boobs|tits|nudes)|(?:have sex|sleep) with me|(?:talk dirty|moan) (?:to|for) me|what are you wearing|you sound sexy|are you naked|apn[ei] (?:boobs|tits) dikhao|mere sath sex|sexy awaz)\b/i.test(text);
 }
 function explicitlyEndsCall(customer) {
   const text = normalize(customer);
@@ -34,10 +46,11 @@ function declinesHangup(text) {
 /**
  * @param {string} customer
  * @param {boolean} warned
- * @returns {{kind:'offer',text:string}|{kind:'warn',text:string}|{kind:'end',reason:'harassment'|'customer_request',text:string,immediate?:boolean}|null}
+ * @returns {{kind:'offer',text:string}|{kind:'warn',text:string}|{kind:'end',reason:'abusive_language'|'harassment'|'customer_request',text:string,immediate?:boolean}|null}
  */
 function conductDecision(customer, warned = false, endOfferMade, awaitingEndDecision = endOfferMade) {
   const text = normalize(customer);
+  if (isDirectedAbuse(text)) return {kind:"end", reason:"abusive_language", text:"", immediate:true};
   const stopNow = /\b(?:stop calling|don't call|do not call|remove (?:me|my number)|leave me alone|stop immediately)\b/i.test(text);
   if (awaitingEndDecision && declinesHangup(text)) return null;
   if (awaitingEndDecision && (explicitlyEndsCall(text) || confirmsHangup(text))) {
@@ -52,5 +65,5 @@ function conductDecision(customer, warned = false, endOfferMade, awaitingEndDeci
     ? { kind: 'end', reason: 'harassment', text: "The comments have continued, so I'm ending the call now. Goodbye." }
     : { kind: 'warn', text: "I'm here to help with your enquiry. Please keep the conversation respectful." };
 }
-module.exports = { isHarassment, explicitlyEndsCall, conductDecision, declinesHangup };
+module.exports = { isDirectedAbuse, isHarassment, explicitlyEndsCall, conductDecision, declinesHangup };
 

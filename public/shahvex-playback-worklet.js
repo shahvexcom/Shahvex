@@ -3,8 +3,9 @@ class ShahvexPlayback extends AudioWorkletProcessor {
   constructor() {
     super(); this.ring = new Float32Array(24000 * 4); this.read = 0; this.count = 0;
     this.epoch = 0; this.playing = false; this.ending = false; this.clock = 0; this.underruns = 0; this.audible = false; this.reference = new Float32Array(320); this.referenceOffset = 0;
+    this.fadeIn = 0;
     this.port.onmessage = ({ data }) => {
-      if (data.type === "clear") { this.epoch = data.epoch; this.read = 0; this.count = 0; this.playing = false; this.audible = false; this.ending = false; this.referenceOffset = 0; this.port.postMessage({ type: "cleared", epoch: this.epoch }); return; }
+      if (data.type === "clear") { this.epoch = data.epoch; this.read = 0; this.count = 0; this.playing = false; this.audible = false; this.ending = false; this.underruns = 0; this.referenceOffset = 0; this.port.postMessage({ type: "cleared", epoch: this.epoch }); return; }
       if (data.epoch !== this.epoch) return;
       if (data.type === "end") { this.ending = true; return; }
       if (data.type !== "pcm") return;
@@ -18,8 +19,12 @@ class ShahvexPlayback extends AudioWorkletProcessor {
   process(inputs, outputs) {
     const output = outputs[0]?.[0]; if (!output) return true;
     output.fill(0); let exhausted = false; const step = 24000 / sampleRate;
-    if (!this.playing && (this.count >= 24000 * .06 || (this.ending && this.count > 0))) {
+    // Absorb chunk delivery jitter, and rebuild a larger reserve after a stall.
+    const startSamples = 24000 * (this.underruns ? 0.20 : 0.12);
+    const fadeSamples = Math.ceil(sampleRate * 0.004);
+    if (!this.playing && (this.count >= startSamples || (this.ending && this.count > 0))) {
       this.playing = true;
+      this.fadeIn = 0;
     }
     if (this.playing) for (let i = 0; i < output.length; i++) {
       if (this.count < step) {
@@ -28,7 +33,10 @@ class ShahvexPlayback extends AudioWorkletProcessor {
         break;
       }
       const at = Math.floor(this.read), fraction = this.read - at;
-      output[i] = this.ring[at] * (1 - fraction) + (this.count > 1 ? this.ring[(at + 1) % this.ring.length] : 0) * fraction;
+      const sample = this.ring[at] * (1 - fraction) + (this.count > 1 ? this.ring[(at + 1) % this.ring.length] : 0) * fraction;
+      const gain = Math.min(1, this.fadeIn / fadeSamples, (this.count / step - 1) / fadeSamples);
+      output[i] = sample * gain;
+      if (this.fadeIn < fadeSamples) this.fadeIn++;
       this.read = (this.read + step) % this.ring.length; this.count -= step;
     }
     let energy = 0; for (const x of output) energy += x * x;

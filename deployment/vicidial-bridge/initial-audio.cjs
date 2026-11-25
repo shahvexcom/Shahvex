@@ -3,7 +3,27 @@
 const sampleRate = 8000;
 const frameSamples = 256;
 const contextSamples = 32;
-const decisionMs = 10000;
+const noCustomerSpeechMs = 30000;
+
+function speechBlock(pcm, probability) {
+  if (probability < 0.12) return false;
+  let signalSamples = 0;
+  for (let i = 0; i < pcm.length; i += 2) {
+    if (pcm.readInt16LE(i) !== 0) signalSamples++;
+  }
+  return signalSamples >= 16;
+}
+
+async function hasSpeech(pcm, score) {
+  let consecutive = 0;
+  for (let offset = 0; offset + frameSamples * 2 <= pcm.length; offset += frameSamples * 2) {
+    const frame = pcm.subarray(offset, offset + frameSamples * 2);
+    const probability = await score(frame);
+    consecutive = probability >= 0.20 && speechBlock(frame, probability) ? consecutive + 1 : 0;
+    if (consecutive >= 2) return true;
+  }
+  return false;
+}
 
 // The ONNX session is shared. Each caller has its own context and recurrent state.
 // Use Silero's dual-rate model with input, state, sr, output and stateN tensors.
@@ -36,7 +56,7 @@ async function loadSilero(modelPath, ort = require('onnxruntime-node')) {
 }
 
 function initialAudio(connectedAt, score) {
-  const deadline = connectedAt + decisionMs;
+  const deadline = connectedAt + noCustomerSpeechMs;
   let bytes = 0;
   let lastPacketAt = 0;
   let done = false;
@@ -44,6 +64,7 @@ function initialAudio(connectedAt, score) {
   let modelUncertain = !score;
   let speechFrames = 0;
   let uncertainFrames = 0;
+  let playbackOverlap = false;
   let maxProbability = 0;
   let running = false;
   let queued = Buffer.alloc(0);
@@ -58,11 +79,7 @@ function initialAudio(connectedAt, score) {
         maxProbability = Math.max(maxProbability, probability);
         // A transient can leave elevated probabilities in the model state.
         // Require signal in the current block before counting that probability.
-        let signalSamples = 0;
-        for (let i = 0; i < frame.length; i += 2) {
-          if (frame.readInt16LE(i) !== 0) signalSamples++;
-        }
-        const hasSignal = signalSamples >= 16;
+        const hasSignal = speechBlock(frame, probability);
         speechFrames = hasSignal && probability >= 0.20 ? speechFrames + 1 : 0;
         if (hasSignal && probability >= 0.12) uncertainFrames++;
         if (speechFrames >= 2) speech = true;
@@ -76,9 +93,11 @@ function initialAudio(connectedAt, score) {
   }
 
   return {
-    receive(pcm, now) {
+    get speech() { return speech; },
+    receive(pcm, now, overlap = false) {
       if (done || speech) return;
       if (now > deadline + 180) return;
+      playbackOverlap ||= overlap;
       lastPacketAt = now;
       bytes += pcm.length;
       if (modelUncertain) return;
@@ -104,8 +123,8 @@ function initialAudio(connectedAt, score) {
       // and any credible speech, including speech below the transcript threshold.
       let result = 'preserve';
       if (!bytes) result = 'missing_pcm';
-      else if (!speech && uncertainFrames < 2 && !modelUncertain && !running &&
-        audioMs >= 9000 && deadline - lastPacketAt <= 200) result = 'no_speech_timeout';
+      else if (!speech && !playbackOverlap && uncertainFrames < 2 && !modelUncertain && !running &&
+        audioMs >= noCustomerSpeechMs - 1000 && deadline - lastPacketAt <= 200) result = 'no_speech_timeout';
       queued = Buffer.alloc(0);
       return { result, audioMs, decisionDelayMs: now - deadline, speech, modelUncertain, maxProbability };
     },
@@ -116,4 +135,4 @@ function initialAudio(connectedAt, score) {
   };
 }
 
-module.exports = { initialAudio, loadSilero };
+module.exports = { initialAudio, loadSilero, hasSpeech, noCustomerSpeechMs };

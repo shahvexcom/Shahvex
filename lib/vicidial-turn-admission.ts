@@ -59,7 +59,7 @@ export const directAdmissionSql = `WITH supported AS (
 ), claimed AS (SELECT event_id FROM incoming UNION ALL SELECT event_id FROM retried), previous AS (
  SELECT * FROM agent_calls WHERE voip_connection_id=$1 AND direct_audio_uuid=$5 AND telephony_provider='AUDIOSOCKET'
 ), eligible AS MATERIALIZED (
- SELECT a.id,a.name,a.local_voice_id,q.config,q.max_call_duration_seconds,d.id campaign_id,d.external_campaign_id,d.script
+ SELECT a.id,a.name,a.local_voice_id,a.speaks_first,q.config,q.max_call_duration_seconds,d.id campaign_id,d.external_campaign_id,d.script
  FROM agents a JOIN campaign_agent_assignments x ON x.agent_id=a.id AND x.enabled
  JOIN campaign_definitions d ON d.id=x.campaign_id AND d.connection_id=$1 AND d.owner_id=$8
  JOIN voip_agent_assignments va ON va.agent_id=a.id AND va.connection_id=d.connection_id AND va.owner_id=d.owner_id AND va.campaign_id=d.external_campaign_id
@@ -74,7 +74,7 @@ export const directAdmissionSql = `WITH supported AS (
 ), inserted AS (
  INSERT INTO agent_calls(id,agent_id,status,telephony_provider,voip_connection_id,direct_audio_uuid,direct_audio_line,campaign_definition_id,external_campaign_id,script_snapshot,conversation_state,dialing_source,max_call_duration_seconds,vicidial_sync_status)
  SELECT $9,e.id,'INITIATED','AUDIOSOCKET',$1,$5,$10,e.campaign_id,e.external_campaign_id,
- e.config||jsonb_build_object('name',e.name,'voice',e.local_voice_id,'script',e.script),'LISTENING','DIRECT',COALESCE(e.max_call_duration_seconds,0),'NOT_APPLICABLE'
+ e.config||jsonb_build_object('name',e.name,'voice',e.local_voice_id,'script',e.script,'first',CASE WHEN e.speaks_first='customer' THEN 'customer' ELSE 'ai' END),'LISTENING','DIRECT',COALESCE(e.max_call_duration_seconds,0),'NOT_APPLICABLE'
  FROM eligible e RETURNING *
 ), reserved AS (
  UPDATE ai_agent_runtime_states r SET state='RESERVED',call_id=i.id,campaign_id=i.campaign_definition_id,

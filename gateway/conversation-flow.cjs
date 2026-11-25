@@ -13,7 +13,8 @@ function hearingRecoveryIntent(text, awaitingConfirmation = false) {
   if (/^(?:(?:hello|hi|hey|uh|um|are you there) )*(?:can|could|do) you (?:hear|here) me(?: clearly| now| okay)?(?: good)?$/i.test(value))
     return "check";
   if (/^(?:(?:yes|yeah|yep|yup|okay|ok|sure) )?(?:I(?:'m| am) (?:still )?here|I (?:can )?hear you)(?: now| clearly)?(?: (?:and )?I (?:can )?hear you(?: now| clearly)?)?$/i.test(value) ||
-      awaitingConfirmation && /^(?:yes|yeah|yep|yup|okay|ok|sure|I am|I can)$/i.test(value))
+      awaitingConfirmation && (/^(?:yes|yeah|yep|yup|okay|ok|sure|I am|I can)$/i.test(value) ||
+        /^(?:(?:yes|yeah|yep|yup|okay|ok|sure) )?(?:I(?:'m| am) (?:still )?(?:here|listening)|I (?:can )?hear you)\b/i.test(value)))
     return "confirmation";
 }
 const isGreetingOnly = (text) =>
@@ -259,6 +260,7 @@ function acknowledgmentReply(config, text, history, memory) {
     return `Before we finish, ${missing[0].toLowerCase() + missing.slice(1)}`;
 }
 const asksToWait = (text) =>
+  require("./scenario-policy.cjs").customerChecking(text) ||
   !/\b(?:why|who|where|what|how|are you|do you)\b/i.test(String(text || "")) &&
   /^(?:(?:please|just|okay|ok|um|uh|yeah|yes|yep)[, ]+)*(?:(?:wait|hold on|hang on)(?:\b[^?]*)|(?:give me|just|one|a) (?:a |one )?(?:sec(?:ond)?|moment|minute)\b[^?]*)[.! ]*$/i.test(
     String(text || "").trim(),

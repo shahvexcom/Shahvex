@@ -135,8 +135,14 @@ test('AudioSocket bridge authenticates control, sends real PCM through the share
   const b=bridge.createBridge({siteUrl:'https://website.example.test/',connectionId,secret,spoolDir:folder,logger:()=>{},fetchImpl:async(url,init)=>{
     assert.equal(signing.verifyBridgeSignature(secret,init.headers['x-shahvex-timestamp'],init.headers['x-shahvex-signature'],'POST','/api/telephony/vicidial',init.body),true);
     const value=JSON.parse(init.body);events.push(value);
-    if(value.action==='connected')return Response.json({callId:'11111111-1111-4111-8111-111111111111',first:'customer'});
-    if(value.action==='turn'){if(value.opening){assert.equal(value.audio,undefined);}else{assert.ok(value.audio);const audio=Buffer.from(value.audio,'base64');assert.equal(audio.toString('ascii',0,4),'RIFF');assert.equal(audio.readUInt32LE(24),16000);}return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n'+JSON.stringify({type:'done'})+'\n');}
+    if(value.action==='connected')return Response.json({callId:'11111111-1111-4111-8111-111111111111',first:'ai'});
+    if(value.action==='listen'){
+      const audio=Buffer.from(value.audio,'base64');
+      assert.equal(audio.toString('ascii',0,4),'RIFF');
+      assert.equal(audio.readUInt32LE(24),16000);
+      return Response.json({text:'Hello, who is calling?',confidence:0.99});
+    }
+    if(value.action==='turn')return new Response(JSON.stringify({type:'pcm',sampleRate:24000,data:Buffer.alloc(1920,12).toString('base64')})+'\n'+JSON.stringify({type:'done'})+'\n');
     return Response.json({saved:true});
   }});
   await Promise.all([new Promise(r=>b.control.listen(0,'127.0.0.1',r)),new Promise(r=>b.audio.listen(0,'127.0.0.1',r))]);
@@ -152,12 +158,12 @@ test('AudioSocket bridge authenticates control, sends real PCM through the share
     const voice=Buffer.alloc(320);for(let i=0;i<320;i+=2)voice.writeInt16LE(3000,i);
     const deadline=Date.now()+4000;while(received.length<2&&Date.now()<deadline)await new Promise(r=>setTimeout(r,10));
     assert.ok(events.some(e=>e.action==='turn'));assert.equal(received.length,2);assert.ok(received[1].at-received[0].at>=10);
-    assert.equal(events.find(e=>e.action==='turn').opening,true, 'Customer-first calls introduce themselves without waiting for speech');
+    assert.equal(events.find(e=>e.action==='turn').opening,true, 'AI-first calls introduce themselves immediately');
     socket.write(Buffer.concat([...Array.from({length:12},()=>bridge.packet(0x10,voice)),...Array.from({length:38},()=>bridge.packet(0x10,Buffer.alloc(320)))]));
-    const audioDeadline=Date.now()+2000;while(!events.some(e=>e.action==='turn'&&e.audio)&&Date.now()<audioDeadline)await new Promise(r=>setTimeout(r,10));
-    assert.ok(events.some(e=>e.action==='turn'&&e.audio));
+    const audioDeadline=Date.now()+2000;while(!events.some(e=>e.action==='turn'&&e.text==='Hello, who is calling?')&&Date.now()<audioDeadline)await new Promise(r=>setTimeout(r,10));
+    assert.ok(events.some(e=>e.action==='turn'&&e.text==='Hello, who is calling?'));
     const prepare=await post('/command',{callId:'11111111-1111-4111-8111-111111111111',action:'handoff-prepare'});assert.equal(prepare.status,200);
-    const aiFile=path.join(folder,'recordings',uuid+'.wav'),before=fs.readFileSync(aiFile);
+    const aiFile=path.join(folder,'recordings',uuid+'.part'),before=fs.readFileSync(aiFile);
     socket.write(bridge.packet(0x10,Buffer.alloc(320,44)));await new Promise(r=>setTimeout(r,40));assert.deepEqual(fs.readFileSync(aiFile),before);
     const disconnected=new Promise(r=>socket.once('close',r));
     const handoff=await post('/handoff-event',{action:'human-answered',externalCallId:'Y0316001655000402028',humanUser:'human-1'});assert.equal(handoff.status,200);await disconnected;

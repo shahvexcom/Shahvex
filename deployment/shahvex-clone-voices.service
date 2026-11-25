@@ -1,0 +1,13 @@
+[Unit]
+Description=Shahvex local CosyVoice clone voices
+
+[Service]
+Type=simple
+ExecStart=/bin/bash %h/shahvex/restore/website/Shahvex/deployment/Start-CloneVoices.sh
+Environment=PYTHONDONTWRITEBYTECODE=1
+Restart=on-failure
+RestartSec=15
+UMask=0077
+
+[Install]
+WantedBy=default.target

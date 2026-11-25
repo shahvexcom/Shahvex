@@ -332,6 +332,8 @@ test('native session announces immediately after the real last answer and preser
   if(extra)session.messages.push(A('May I connect you with a licensed specialist?'),U('Mm-hmm.'));
   session.messages.push(A(question));
   session.questionLedger=new Map([[require('../gateway/reply-integrity.cjs').questionKey(question),{status:'delivered'}]]);
+  const key=require('../gateway/reply-integrity.cjs').questionKey(question);
+  session.nativeQuestionAsks=new Map([[key,key]]);
   return async(action,body)=>call(action,id,body);
  }
  try{
@@ -362,14 +364,20 @@ test('native session announces immediately after the real last answer and preser
   assert.equal(spoken(ageAnswer),announcement);
   const requested = await start();
   const beforeAge=(await (await requested('turn',{text:'Please transfer me now.'})).text()).trim().split('\n').map(JSON.parse);
-  assert.equal(spoken(beforeAge),question);
-  assert.ok(!beforeAge.some(e=>e.type==='handoff-announcement'));
-  const bareYes=(await (await requested('turn',{text:'Yes.'})).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(spoken(beforeAge),announcement);
+  assert.ok(beforeAge.some(e=>e.type==='handoff-announcement'&&e.scenarioHandoff==='requested'));
+  await ids.pop()();
+  const withoutRequest=await start();
+  const bareYes=(await (await withoutRequest('turn',{text:'Yes.'})).text()).trim().split('\n').map(JSON.parse);
   assert.ok(!bareYes.some(e=>e.type==='handoff-announcement'));
-  assert.equal(spoken(bareYes),question);
-  const transfer=(await (await requested('turn',{text:'67'})).text()).trim().split('\n').map(JSON.parse);
+  assert.equal(spoken(bareYes),'');
+  assert.ok(bareYes.some(e=>e.type==='question-disposition'&&e.outcome==='unclear'));
+  await ids.pop()();
+  const qualified=await start();
+  const transfer=(await (await qualified('turn',{text:'67'})).text()).trim().split('\n').map(JSON.parse);
   assert.equal(spoken(transfer),announcement);
   assert.equal(transfer.filter(e=>e.type==='handoff-announcement').length,1);
+  await ids.pop()();
   for (const text of ['Yes', 'Yep', 'Mm', 'Ok', 'Great', 'Why not?', 'Why nit', 'Yes I am', 'Yes iam']) {
    const offered = await start('','May I connect you with a licensed specialist?\n');
    const offer=(await (await offered('turn',{text:'67'})).text()).trim().split('\n').map(JSON.parse);
@@ -389,4 +397,101 @@ test('native session announces immediately after the real last answer and preser
   assert.equal(declined.filter(e=>e.type==='delta').map(e=>e.text).join(''),'What is your ZIP code?');
   assert.ok(!declined.some(e=>e.type==='handoff-announcement'));
  }finally{await Promise.all(ids.map(stop=>stop()));global.fetch=original;}
+});
+
+test('scenario handoffs call the native executor only after acknowledged playback', async () => {
+ const {scenarioAnnouncement}=require('../gateway/scenario-policy.cjs');
+ for (const scenarioHandoff of ['assistance','repeat','requested']) {
+  const script='Are you getting any rebate?\nLet me connect you with a licensed specialist.';
+  const handoffAnnouncement=scenarioAnnouncement(script,scenarioHandoff);
+  const turnId=crypto.randomUUID();
+  const call={
+   id:crypto.randomUUID(),status:'ANSWERED',vicidial_call_id:'Y0316001655000402028',
+   script_snapshot:{script,campaignSettings:{transferConditions:'Obtain permission to transfer.'}},
+   conversation_history:[U('Could you say that again?'),{
+    ...A(handoffAnnouncement),handoffAnnouncement,scenarioHandoff,handoffTurnId:turnId,
+   }],
+  };
+  const connection={id:crypto.randomUUID(),enabled:true,bridge_secret_ciphertext:'fixture',live_config:{enabled:true}};
+  const query=async (sql,args)=>{
+   if(sql.startsWith('SELECT * FROM voip_connections'))return {rows:[connection]};
+   if(sql.startsWith('SELECT * FROM agent_calls'))return {rows:[call]};
+   if(sql.startsWith('UPDATE agent_calls SET conversation_history=$2::jsonb WHERE')){
+    call.conversation_history=JSON.parse(args[1]);
+    return {rowCount:1,rows:[call]};
+   }
+   return {rowCount:1,rows:[]};
+  };
+  let prepares=0,transfers=0;
+  const callback=load('lib/vicidial-callback.ts',{
+   './database':{db:async()=>({query})},'./credential-crypto':{decryptCredential:v=>v},
+   './vicidial-bridge':{verifyBridgeSignature:()=>true},'./vicidial-config':{vicidialLiveConfig:{parse:v=>v}},
+   './agent-test':{},'./agent-test-speculative':{},'./pc-ai-engine':{},'./vicidial':{},
+   './vicidial-queue':{},'./vicidial-recording':{},'./agent-runtime':{},'./vicidial-handoff':{},'./bpo-entitlements':{},
+   './vicidial-results':{
+    prepareRequestedHumanHandoff:async(id,history)=>{
+     assert.equal(id,call.id);
+     assert.equal(history.at(-1).handoffPlayed,true);
+     prepares++;
+    },
+    transferVicidialCall:async id=>{
+     assert.equal(id,call.id);
+     transfers++;
+     call.transfer_status='SUBMITTED';
+    },
+    syncVicidialComments:async()=>{},
+   },
+  }).vicidialCallback;
+  const ack=()=>callback(new Request('http://localhost/api/telephony/vicidial',{method:'POST',
+   headers:{'x-shahvex-connection':connection.id},body:JSON.stringify({action:'playback-complete',
+    eventId:crypto.randomUUID(),externalCallId:call.vicidial_call_id,callId:call.id,completedTurnId:turnId}),
+  }));
+  assert.equal(prepares,0);
+  assert.equal(transfers,0);
+  assert.equal((await (await ack()).json()).transferSubmitted,true);
+  assert.equal((await (await ack()).json()).transferSubmitted,true);
+  assert.equal(prepares,1);
+  assert.equal(transfers,1);
+ }
+});
+
+test('a native opt-out reaches the database suppression executor before the native end event', async () => {
+ const call={id:crypto.randomUUID(),status:'ANSWERED',voice_session_id:'fixture-session',
+  vicidial_call_id:'Y0316001655000402028',conversation_history:[]};
+ const connection={id:crypto.randomUUID(),enabled:true,bridge_secret_ciphertext:'fixture',live_config:{enabled:true}};
+ const eventId=crypto.randomUUID();
+ const queries=[];
+ const query=async (sql,args)=>{
+  if(typeof sql==='object'){
+   assert.match(sql.text,/INSERT INTO do_not_call/);
+   assert.match(sql.text,/SELECT lead_number,id/);
+   assert.deepEqual(sql.values,[call.id,connection.id]);
+   queries.push('dnc');
+   return {rowCount:1};
+  }
+  if(sql.startsWith('SELECT * FROM voip_connections'))return {rows:[connection]};
+  if(sql.includes('WITH verified_connection'))return {rows:[{connection_current:true,claimed:true,admitted_call:call}]};
+  return {rowCount:1,rows:[]};
+ };
+ const callback=load('lib/vicidial-callback.ts',{
+  './database':{db:async()=>({query})},'./credential-crypto':{decryptCredential:v=>v},
+  './vicidial-bridge':{verifyBridgeSignature:()=>true},'./vicidial-config':{vicidialLiveConfig:{parse:v=>v}},
+  './agent-test':{sessions:new Map([[call.voice_session_id,{}]])},
+  './agent-test-speculative':{handleTestSession:async()=>new Response([
+   {type:'user',text:"Don't call me again."},{type:'dnc-request'},
+   {type:'end_call',reason:'customer_request'},{type:'done'},
+  ].map(e=>JSON.stringify({...e,turnId:eventId})).join('\n')+'\n')},
+  './pc-ai-engine':{},'./vicidial':{},'./vicidial-queue':{},'./vicidial-recording':{},
+  './agent-runtime':{},'./vicidial-handoff':{},'./bpo-entitlements':{},'./vicidial-results':{},
+ }).vicidialCallback;
+ const response=await callback(new Request('http://localhost/api/telephony/vicidial',{method:'POST',
+  headers:{'x-shahvex-connection':connection.id},body:JSON.stringify({action:'turn',eventId,
+   externalCallId:call.vicidial_call_id,callId:call.id,text:"Don't call me again.",
+  }),
+ }));
+ assert.equal(response.status,200);
+ const events=(await response.text()).trim().split('\n').map(JSON.parse);
+ assert.deepEqual(queries,['dnc']);
+ assert.equal(events.find(e=>e.type==='end_call').reason,'customer_request');
+ assert.ok(!events.some(e=>e.type==='handoff-announcement'));
 });

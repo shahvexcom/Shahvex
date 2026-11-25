@@ -2,6 +2,14 @@ const {test}=require('node:test'),assert=require('node:assert/strict'),fs=requir
 function load(file){const mod={exports:{}};const code=ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;new Function('require','module','exports',code)(name=>name==='./agent-test-audio'?load('lib/agent-test-audio.ts'):require(name),mod,mod.exports);return mod.exports;}
 const {BrowserSpeechCapture}=load('lib/browser-speech-capture.ts');
 const speech=()=>new Int16Array(320).fill(2000),silence=()=>new Int16Array(320);
+test('demo capture finalizes at 540 ms and tolerates a 500 ms pause', () => {
+  const capture = new BrowserSpeechCapture(true, 27);
+  for (let i = 0; i < 20; i++) capture.feed(speech(), false);
+  for (let i = 0; i < 25; i++) assert.equal(capture.feed(silence(), false).recording, undefined);
+  assert.equal(capture.feed(speech(), false).draftInvalidated, true);
+  for (let i = 0; i < 26; i++) assert.equal(capture.feed(silence(), false).recording, undefined);
+  assert.equal(capture.feed(silence(), false).recording.voicedMs, 420);
+});
 test('early draft waits for 700ms silence before finalizing speech capture',()=>{
  const c=new BrowserSpeechCapture(true);for(let i=0;i<20;i++)c.feed(speech(),false);
  let draft;for(let i=0;i<5;i++){const e=c.feed(silence(),false);assert.equal(e.recording,undefined);draft=e.draft||draft;}

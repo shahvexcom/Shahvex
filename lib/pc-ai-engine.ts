@@ -5,13 +5,14 @@ export async function pcAiEngine(port: number, path: string, init: RequestInit =
   const allowed: Record<number, string[]> = {
     11434: ["/api/chat"], 8766: ["/transcribe"],
     8767: ["/voices", "/health", "/synthesize", "/stream"],
+    8780: ["/health"],
   };
   if (!allowed[port]?.includes(path)) throw Error("Unsupported PC AI operation");
   return pcAiRequest(`/engine/${port}${path}`, init);
 }
 
 export async function pcAiRequest(path: string, init: RequestInit = {}, owner?: string) {
-  if (!/^\/internal\/capacity$/.test(path) && !/^\/engine\/(?:11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.test(path) && !/^\/tester\/(?:start|prepare-opening|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.test(path)) throw Error("Unsupported PC AI operation");
+  if (!/^\/internal\/capacity$/.test(path) && !/^\/engine\/(?:11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream)|8780\/health)$/.test(path) && !/^\/tester\/(?:start|prepare-opening|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.test(path)) throw Error("Unsupported PC AI operation");
   const base = new URL(process.env.SHAHVEX_PC_AI_URL || "");
   const key = process.env.SHAHVEX_PC_AI_SECRET;
   const clientId = process.env.SHAHVEX_CF_CLIENT_ID;

@@ -1,3 +1,5 @@
+import { isSameRequestOrigin } from "@/lib/request-origin";
+import { agentRouteFields } from "@/lib/voip-controller";
 import { saveBpoAgentProfile } from "@/lib/bpo-agent-profile";
 import { conversationStyles } from "@/lib/agent-script-details";
 import { saveAgentCampaign } from "@/lib/agent-campaign-assignment";
@@ -22,11 +24,12 @@ const agentFormSchema = z.object({
   avatarUrl: z.string().url().max(500).optional().or(z.literal("")),
 });
 const profileSchema=z.object({profileOnly:z.literal(true),name:z.string().trim().min(2).max(80),gender:z.enum(['MALE','FEMALE','OTHER']),voiceId:z.string().min(1).max(64),conversationStyle:z.enum(conversationStyles).default('Professional'),speaksFirst:z.enum(['ai','customer']).default('customer'),avatarUrl:z.string().url().max(500).optional().or(z.literal(''))});
-const createSchema = z.union([profileSchema,agentFormSchema]);
+const createProfileSchema = profileSchema.extend({ route: agentRouteFields.optional() });
+const editProfileSchema = createProfileSchema.extend({ action: z.literal("edit"), agentId: z.string().uuid() });
 const activitySchema = z.object({ action: z.literal("activity"), agentId: z.string().uuid(), isActive: z.boolean() });
 const editSchema = agentFormSchema.extend({ action: z.literal("edit"), agentId: z.string().uuid() });
 
-const agentFields = `a.conversation_style,a.speaks_first,(SELECT d.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id WHERE x.agent_id=a.id) campaign_name,(SELECT k.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id JOIN campaign_categories k ON k.id=d.category_id WHERE x.agent_id=a.id) category_name,(SELECT campaign_id FROM campaign_agent_assignments x WHERE x.agent_id=a.id AND x.enabled) campaign_definition_id,a.id,a.name,a.gender,a.accent,a.status,a.created_at,COALESCE(a.avatar_url,'') avatar_url,
+const agentFields = `a.conversation_style,a.speaks_first,(SELECT d.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id WHERE x.agent_id=a.id) campaign_name,(SELECT k.name FROM campaign_agent_assignments x JOIN campaign_definitions d ON d.id=x.campaign_id JOIN campaign_categories k ON k.id=d.category_id WHERE x.agent_id=a.id) category_name,(SELECT campaign_id FROM campaign_agent_assignments x WHERE x.agent_id=a.id AND x.enabled) campaign_definition_id,a.id,a.name,a.username,a.daily_call_limit,a.call_limit_minutes,a.gender,a.accent,a.status,a.created_at,COALESCE(a.avatar_url,'') avatar_url,
   COALESCE(a.local_voice_id,b.voice_id) voice_id,b.voice_name,b.source_script_id,b.script_name,b.source_lead_id,b.lead_file_name,b.is_active,b.dialing_mode,
   COALESCE(lv.status,v.status,'INACTIVE') voice_status,
   tc.label telnyx_label,gc.label groq_label,
@@ -92,7 +95,7 @@ export async function GET() {
         LEFT JOIN ai_credentials tc ON tc.id=at.credential_id
         LEFT JOIN agent_credentials ag ON ag.agent_id=a.id AND ag.provider='GROQ'
         LEFT JOIN ai_credentials gc ON gc.id=ag.credential_id
-        WHERE b.bpo_id=$1
+        WHERE b.bpo_id=$1 AND a.deleted_at IS NULL
         ORDER BY b.created_at DESC`, [session.agentId]),
       client.query(`SELECT v.id,v.name,v.gender,v.accent,tc.label telnyx_label,gc.label groq_label
         FROM bpo_voice_assignments x
@@ -114,7 +117,13 @@ export async function GET() {
     return Response.json({
       agents: agents.rows.map(row => {
         const { script_text, task_evidence, customer_transcripts, ...agent } = row;
-        const voip=voipAssignments.rows.find(v=>v.agent_id===row.id); return { ...agent,connection_id:voip?.connection_id||"",campaign_id:voip?.campaign_id||"", progress: progressFrom(row) };
+        const voip = voipAssignments.rows.find(v => v.agent_id === row.id);
+        const routeConnection = connections.rows.find(c => voip
+          ? c.id === voip.connection_id
+          : c.live_config?.directAudioLines?.some((line: {agentId:string}) => line.agentId === row.id));
+        const line = routeConnection?.live_config?.directAudioLines?.find((item: {agentId:string}) => item.agentId === row.id);
+        return { ...agent, connection_id: voip?.connection_id || routeConnection?.id || "", campaign_id: voip?.campaign_id || "",
+          remote_user: line?.remoteUser || "", extension_route: line?.prefix || "", progress: progressFrom(row) };
       }),
       voices: voices.rows,
       voiceServiceReady:local.serviceReady,
@@ -130,10 +139,18 @@ export async function GET() {
 export async function POST(request: Request) {
   const session = await requireApprovedBpo();
   if (!session) return Response.json({ message: "Unauthenticated" }, { status: 401 });
-  const parsed = createSchema.safeParse(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  if (body?.profileOnly === true) {
+    const profile = createProfileSchema.safeParse(body);
+    if (!profile.success) {
+      const routeError = profile.error.issues.some(issue => issue.path[0] === "route");
+      return Response.json({ message: routeError ? "Select a connection and enter a valid Remote Agent Key ID and four-character extension." : "Enter valid agent details." }, { status: 400 });
+    }
+    return saveBpoAgentProfile(session.agentId, profile.data);
+  }
+  const parsed = agentFormSchema.safeParse(body);
   if (!parsed.success) return Response.json({ message: parsed.error.issues[0]?.message || "Enter valid agent details." }, { status: 400 });
 
-  if('profileOnly' in parsed.data)return saveBpoAgentProfile(session.agentId,parsed.data);
   const agentId = randomUUID();
   const username = `bpo-${agentId.replaceAll("-", "").slice(0, 20)}`;
   const passwordHash = await hash(randomUUID(), 12);
@@ -151,7 +168,7 @@ export async function POST(request: Request) {
     if(!voip.rows[0]){await client.query("ROLLBACK");return Response.json({message:"Save an enabled VoIP connection in your BPO workspace before creating an agent."},{status:400});}
     const [plan, existing, voice, sourceScript, sourceLeads, duplicateName] = await Promise.all([
       bpoEntitlements(client, session.agentId),
-      client.query("SELECT COUNT(*)::int agents FROM bpo_created_agents WHERE bpo_id=$1", [session.agentId]),
+      client.query("SELECT COUNT(*)::int agents FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id WHERE b.bpo_id=$1 AND a.deleted_at IS NULL", [session.agentId]),
       client.query(`SELECT v.id,v.name,v.accent,v.telnyx_credential_id,v.groq_credential_id,FALSE is_local
         FROM bpo_voice_assignments x JOIN admin_voices v ON v.id=x.voice_id
         WHERE x.bpo_id=$1 AND x.is_active=TRUE AND v.id=$2 AND v.status='ACTIVE'
@@ -232,8 +249,11 @@ export async function PATCH(request: Request) {
   const session = await requireApprovedBpo();
   if (!session) return Response.json({ message: "Unauthenticated" }, { status: 401 });
   const body = await request.json().catch(() => null);
-  const profileEdit=profileSchema.extend({action:z.literal('edit'),agentId:z.string().uuid()}).safeParse(body);
-  if(profileEdit.success)return saveBpoAgentProfile(session.agentId,profileEdit.data,profileEdit.data.agentId);
+  if (body?.profileOnly === true) {
+    const profile = editProfileSchema.safeParse(body);
+    if(!profile.success) return Response.json({ message: "Enter valid agent details and a four-character extension if assigning a route." }, { status: 400 });
+    return saveBpoAgentProfile(session.agentId, profile.data, profile.data.agentId);
+  }
   const parsedActivity = activitySchema.safeParse(body);
   const parsedEdit = parsedActivity.success ? null : editSchema.safeParse(body);
   if (!parsedActivity.success && !parsedEdit?.success) return Response.json({ message: "Choose valid calling agent details." }, { status: 400 });
@@ -243,7 +263,7 @@ export async function PATCH(request: Request) {
   try {
     await client.query("BEGIN");
     if (parsedActivity.success) {
-      const updated = await client.query("UPDATE bpo_created_agents SET is_active=$1 WHERE agent_id=$2 AND bpo_id=$3 RETURNING agent_id", [parsedActivity.data.isActive, parsedActivity.data.agentId, session.agentId]);
+      const updated = await client.query("UPDATE bpo_created_agents b SET is_active=$1 WHERE agent_id=$2 AND bpo_id=$3 AND EXISTS(SELECT 1 FROM agents a WHERE a.id=b.agent_id AND a.deleted_at IS NULL) RETURNING agent_id", [parsedActivity.data.isActive, parsedActivity.data.agentId, session.agentId]);
       if (!updated.rows[0]) {
         await client.query("ROLLBACK");
         return Response.json({ message: "Calling agent not found." }, { status: 404 });
@@ -256,7 +276,7 @@ export async function PATCH(request: Request) {
     // The validation guard above makes this the edit payload (activity requests
     // return from the branch above).
     const data = parsedEdit!.data!;
-    const current = await client.query("SELECT b.agent_id FROM bpo_created_agents b WHERE b.agent_id=$1 AND b.bpo_id=$2 FOR UPDATE", [data.agentId, session.agentId]);
+    const current = await client.query("SELECT b.agent_id FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id WHERE b.agent_id=$1 AND b.bpo_id=$2 AND a.deleted_at IS NULL FOR UPDATE OF b", [data.agentId, session.agentId]);
     if (!current.rows[0]) {
       await client.query("ROLLBACK");
       return Response.json({ message: "Calling agent not found." }, { status: 404 });
@@ -322,4 +342,57 @@ export async function PATCH(request: Request) {
 async function campaignSource(client:import('pg').PoolClient,owner:string,input:{campaignDefinitionId?:string;connectionId:string;campaignId:string}){
  return client.query(`SELECT NULL::text id,name script_file_name,NULL::text script_file_url,NULL::text script_file_type,script script_text,0 script_file_size
  FROM campaign_definitions WHERE id=$1 AND owner_id=$2 AND connection_id=$3 AND external_campaign_id=$4 AND enabled=TRUE AND LENGTH(TRIM(script))>0 FOR SHARE`,[input.campaignDefinitionId,owner,input.connectionId,input.campaignId]);
+}
+
+export async function DELETE(request: Request) {
+  const session = await requireApprovedBpo();
+  if (!session) return Response.json({ message: "Unauthenticated" }, { status: 401 });
+  if (!isSameRequestOrigin(request)) return Response.json({ message: "Same-origin request required" }, { status: 403 });
+  const parsed = z.object({ agentId: z.string().uuid() }).safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return Response.json({ message: "Select an agent to delete." }, { status: 400 });
+
+  const { agentId } = parsed.data;
+  const tx = await (await db()).connect();
+  let committed = false;
+  try {
+    await tx.query("BEGIN");
+    const owned = await tx.query(`SELECT a.id,a.deleted_at FROM bpo_created_agents b JOIN agents a ON a.id=b.agent_id
+      WHERE b.agent_id=$1 AND b.bpo_id=$2 AND a.role='AGENT' FOR UPDATE OF b`, [agentId, session.agentId]);
+    if (!owned.rows[0]) return Response.json({ message: "Calling agent not found." }, { status: 404 });
+    if (owned.rows[0].deleted_at) return Response.json({ message: "Agent deleted." });
+
+    const connections = await tx.query(`SELECT c.id FROM voip_connections c WHERE c.owner_id=$2 AND (
+      EXISTS(SELECT 1 FROM voip_agent_assignments va WHERE va.agent_id=$1 AND va.connection_id=c.id)
+      OR EXISTS(SELECT 1 FROM vicidial_pool_agents q JOIN vicidial_pools p ON p.id=q.pool_id WHERE q.agent_id=$1 AND p.connection_id=c.id)
+      OR COALESCE(c.live_config->'directAudioLines','[]'::jsonb) @> jsonb_build_array(jsonb_build_object('agentId',$1::text))
+    ) ORDER BY c.id`, [agentId, session.agentId]);
+    for (const connection of connections.rows) {
+      await tx.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`vicidial:${connection.id}`]);
+    }
+    const activeCall = async () => Boolean((await tx.query(`SELECT 1 FROM agent_calls WHERE agent_id=$1
+      AND status IN ('INITIATED','RINGING','ANSWERED')
+      UNION ALL SELECT 1 FROM ai_agent_runtime_states WHERE agent_id=$1 AND call_id IS NOT NULL LIMIT 1`, [agentId])).rowCount);
+    if (await activeCall()) return Response.json({ message: "Finish this agent’s active call before deleting." }, { status: 409 });
+    await (await import("@/lib/vicidial-live")).stopVicidialAgent(agentId);
+    if (await activeCall()) return Response.json({ message: "Finish this agent’s active call before deleting." }, { status: 409 });
+
+    await tx.query("UPDATE agents SET deleted_at=NOW(),status='SUSPENDED',updated_at=NOW() WHERE id=$1", [agentId]);
+    await tx.query("UPDATE bpo_created_agents SET is_active=FALSE WHERE agent_id=$1 AND bpo_id=$2", [agentId, session.agentId]);
+    await tx.query("DELETE FROM campaign_agent_assignments WHERE agent_id=$1 AND owner_id=$2", [agentId, session.agentId]);
+    await tx.query("DELETE FROM voip_agent_assignments WHERE agent_id=$1 AND owner_id=$2", [agentId, session.agentId]);
+    for (const connection of connections.rows) {
+      await tx.query(`UPDATE voip_connections SET live_config=jsonb_set(live_config,'{directAudioLines}',(
+        SELECT COALESCE(jsonb_agg(line),'[]'::jsonb) FROM jsonb_array_elements(live_config->'directAudioLines') line
+        WHERE line->>'agentId' IS DISTINCT FROM $2::text
+      )),revision=revision+1,updated_at=NOW() WHERE id=$1
+        AND live_config->'directAudioLines' @> jsonb_build_array(jsonb_build_object('agentId',$2::text))`, [connection.id, agentId]);
+    }
+    await tx.query("COMMIT");
+    committed = true;
+    return Response.json({ message: "Agent deleted." });
+  } catch {
+    return Response.json({ message: "Unable to delete this agent. Check its calling connection and try again." }, { status: 503 });
+  } finally {
+    try { if (!committed) await tx.query("ROLLBACK"); } finally { tx.release(); }
+  }
 }

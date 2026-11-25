@@ -1,7 +1,7 @@
 'use strict';
 const fs=require('node:fs'),path=require('node:path');
 const {createPcmCache}=require('./tts-pcm-cache.cjs');
-// Only deterministic introductions use this persistent cache. No customer audio.
+// Only prepared fixed script audio uses this persistent cache. No customer audio.
 const memory=createPcmCache({ttlMs:24*60*60*1000});
 const revision=String(process.env.SHAHVEX_OPENING_CACHE_REVISION||'v1').replace(/[^a-zA-Z0-9_-]/g,'');
 const directory=path.resolve(process.cwd(),'.data/opening-pcm-'+revision);

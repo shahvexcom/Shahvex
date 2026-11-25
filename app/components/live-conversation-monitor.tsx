@@ -22,13 +22,14 @@ type Call = {
 const active = (call: Call) => ["INITIATED", "RINGING", "ANSWERED"].includes(call.status);
 
 const transferred = (call: Call) => call.transfer_status === "SUBMITTED" || call.transfer_status === "ANSWERED" || call.conversation_state === "HANDED_OFF";
-const awaitingHangup = (call: Call) => call.ai_leg_released && !transferred(call) && !["PREPARING", "UNCERTAIN"].includes(call.transfer_status || "");
+const awaitingHangup = (call: Call) => !call.native_only && call.ai_leg_released && !transferred(call) && !["PREPARING", "UNCERTAIN"].includes(call.transfer_status || "");
 const hangupConfirmationHint = "Awaiting hangup confirmation";
 const callFilters = { all: "All calls", live: "Live", ended: "Ended", transfer: "Transfer" } as const;
 
 function callStatus(call: Call) {
   if (!active(call)) return call.status === "FAILED" ? "Failed" : "Ended";
-  if (call.ending_requested || awaitingHangup(call)) return "Ending";
+  if (awaitingHangup(call)) return "Dialer confirmation pending";
+  if (call.ending_requested) return "Ending";
   if (call.transfer_status === "ANSWERED") return "Transferred";
   if (call.transfer_status === "SUBMITTED") return "Transferring";
   if (call.native_only) return "Audio unlinked";
@@ -51,6 +52,14 @@ function outcomeLabel(call: Call) {
     audio_link_timeout: "Audio link failed",
     media_pipeline_failure: "Media pipeline failed",
     no_speech_timeout: "No speech detected",
+    initial_no_speech_timeout: "No speech during the initial guard",
+    no_customer_speech_deadline: "No customer speech before the call deadline",
+    customer_silence_timeout: "Customer stopped responding",
+    abusive_language: "Directed abusive language",
+    audio_bridge_failure: "Audio bridge failed",
+    script_duration_limit: "Script duration limit reached",
+    call_duration_limit: "Call duration limit reached",
+    no_business_outcome_timeout: "No business answer received",
   };
   const reason = call.end_initiation?.reason;
   return reason ? labels[reason] : undefined;
@@ -320,7 +329,7 @@ export default function LiveConversationMonitor({ portal }: { portal: "admin" | 
           {call ? <><header>
             <div className="monitor-conversation-title"><AgentAvatar name={call.agent_name} url={call.agent_avatar} large /><div><h2>{call.agent_name}</h2><p>{call.lead_name ? `${call.lead_name} · ` : ""}{call.lead_number || "Unavailable"}</p></div><span className={active(call) ? "monitor-session-state live" : "monitor-session-state"} title={active(call) && awaitingHangup(call) ? hangupConfirmationHint : undefined}><i />{callStatus(call)}</span></div>
             <div className="monitor-call-meta"><div><small>Campaign</small><strong>{call.external_campaign_id || (source === "local" ? "Local test" : "—")}</strong></div><div><small>Extension</small><strong>{call.direct_audio_line || "—"}</strong></div><div><small>Remote agent</small><strong>{call.vicidial_agent_user || "—"}</strong></div><div><small>Call state</small><strong>{(call.conversation_state || call.status).replaceAll("_"," ").toLowerCase()}</strong></div></div>
-            <div className="monitor-call-meta"><div><small>Started</small><strong>{callTime(call.created_at)}</strong></div><div><small>Ended</small><strong>{active(call) ? "In progress" : callTime(call.ended_at)}</strong></div><div><small>Duration</small><strong>{elapsed(call, now)}</strong></div></div>
+            <div className="monitor-call-meta"><div><small>Started</small><strong>{callTime(call.created_at)}</strong></div><div><small>{active(call) && awaitingHangup(call) ? "AI audio ended" : "Ended"}</small><strong>{active(call) && !awaitingHangup(call) ? "In progress" : callTime(call.ended_at || call.ai_media_ended_at)}</strong></div><div><small>Duration</small><strong>{elapsed(call, now)}</strong></div></div>
             {outcomeLabel(call) && <p>{call.transfer_status === "ANSWERED" ? outcomeLabel(call) : `Hangup initiated · ${outcomeLabel(call)}`}</p>}
             <div className="monitor-call-controls" aria-label="Selected call controls">
               {call.lead_number && <button onClick={() => void navigator.clipboard.writeText(call.lead_number).then(() => toast.success("Number copied.")).catch(() => toast.error("Unable to copy the number."))}>Copy number</button>}

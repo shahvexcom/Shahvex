@@ -53,11 +53,11 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
       finally{capacityChanging=false;}
     }
     const match = /^\/tester\/(start|prepare-opening|extract|listen|turn|draft|commit|cancel|interrupt|stop|ping|playback-complete)$/.exec(url.pathname);
-    const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream))$/.exec(url.pathname);
+    const engineMatch = /^\/engine\/(11434\/api\/chat|8766\/transcribe|8767\/(?:voices|health|synthesize|stream)|8780\/health)$/.exec(url.pathname);
     if (url.search || (!match && !engineMatch)) return json(404, { error: 'Unsupported operation' });
     if (engineMatch) {
       const operation = engineMatch[1];
-      const method = /8767\/(voices|health)$/.test(operation) ? 'GET' : 'POST';
+      const method = /\/(voices|health)$/.test(operation) ? 'GET' : 'POST';
       if (request.method !== method) return json(404, { error: 'Unsupported operation' });
       const chunks = []; let size = 0;
       if (request.body) for await (const chunk of request.body) {
@@ -105,6 +105,30 @@ function createTesterService({ secret, maxSessions = 1, leaseMs = 90000, now = D
           messages:[], fixedSpeech:text, voice:parsed.data.voice, openingAudio:true, cacheAudio:true,
           signal:request.signal, engine:ai.engine, send:async()=>{}, timing:async()=>{}, onText:()=>{},
         });
+        if (parsed.data.voice === 'lauren' && input.prepareScript === true) {
+          const {scriptQuestionProgress} = require('./reply-integrity.cjs');
+          const {rephraseQuestion,questionContinuation} = require('./conversation-resume.cjs');
+          const questions = scriptQuestionProgress(parsed.data.script, {completed:[]}, parsed.data).slice(0,6);
+          const phrases = new Set(questions.flatMap(({speech}) => [
+            speech, 'Great, '+speech, 'Got it, '+speech,
+            'Of course, '+rephraseQuestion(speech), questionContinuation(speech),
+          ]));
+          phrases.add('It helps me understand which part of the review applies to you.');
+          for (const reply of require('./health-side-topic.cjs').preparedSideReplies) phrases.add(reply);
+          const purpose = require('./conversation-flow.cjs').scriptPurpose(parsed.data);
+          if (purpose) {
+            phrases.add('Great, '+purpose);
+            phrases.add("I'm doing well, thank you for asking. "+purpose);
+          }
+          const {configuredTransferOffer,configuredTransferAnnouncement,requestedTransferAnnouncement} = require('./handoff-intent.cjs');
+          for (const line of [configuredTransferOffer(parsed.data.script), configuredTransferAnnouncement(parsed.data.script),
+            requestedTransferAnnouncement(parsed.data.script)].filter(Boolean)) phrases.add(line);
+          for (const text of phrases) await load('agent-test-stream').streamAgentReply({
+            messages:[],fixedSpeech:text,voice:'lauren',preparedAudio:true,signal:request.signal,
+            engine:ai.engine,send:async()=>{},timing:async()=>{},onText:()=>{},
+          });
+          return json(200, {cached:openings.length>0,preparedScriptPhrases:phrases.size});
+        }
         return json(200, {cached:openings.length>0});
       } catch { return json(503, {error:'Opening audio preparation failed'}); }
     }

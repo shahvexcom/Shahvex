@@ -27,7 +27,7 @@ async function localRequest(base: string, secret: string, agent?: object) {
   return data;
 }
 const form = z.object({ url: z.string().max(300), secret: z.string().min(32).max(2000).optional(),
-  name: z.string().trim().min(1).max(80), voice: z.string().refine(isLocalTestVoice, "Select Lissa, Emma or Olivia"), first: z.enum(["ai", "customer"]) }).strict();
+  name: z.string().trim().min(1).max(80), voice: z.string().refine(isLocalTestVoice, "Select a local voice"), first: z.enum(["ai", "customer"]) }).strict();
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: { "Cache-Control": "no-store" } });
 export async function localMonitorConnection(portal: "admin" | "bpo", request?: Request) {
   const owner = await principal(portal);
@@ -39,7 +39,7 @@ export async function localMonitorConnection(portal: "admin" | "bpo", request?: 
   try {
     if (request) {
       const parsed = form.safeParse(await request.json().catch(() => null));
-      if (!parsed.success) return json({ error: "Enter the localhost URL, bridge secret, agent name and select Lissa, Emma or Olivia." }, 400);
+      if (!parsed.success) return json({ error: "Enter the localhost URL, bridge secret, agent name and select a local voice." }, 400);
       const v = parsed.data, url = localBridgeURL(v.url);
       if (!(await savedVoiceCatalog(owner)).voices.some(voice => voice.id === v.voice))
         return json({ error: "This voice is not approved for your account." }, 403);

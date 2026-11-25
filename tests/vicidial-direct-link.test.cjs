@@ -7,3 +7,35 @@ function fixture(statuses){let writes=0;const original={id:'call',agent_id:'agen
 const native={status:'INCALL',campaign_id:'DIALER',lead_id:'12',callerid:'Y0316001655000402028'};
 test('direct remote audio links only after stable native customer and exact campaign readback',async()=>{const f=fixture([native,native]);const c=await f.run();assert.equal(c.vicidial_call_id,native.callerid);assert.equal(f.writes(),1);});
 test('READY, wrong campaign, or a changing native call cannot be linked or transferred',async()=>{for(const statuses of [[{...native,status:'READY'}],[{...native,campaign_id:'OTHER'}],[native,{...native,lead_id:'13'}]]){const f=fixture(statuses);assert.equal(await f.run(),f.original);assert.equal(f.writes(),0);}});
+
+test('native-only hangup sends the historical call code and refuses an unlinked or transferred leg', async()=>{
+ const call={id:'old-call',status:'ANSWERED',telephony_provider:'AUDIOSOCKET',vicidial_agent_user:'78603',vicidial_call_id:native.callerid};
+ const commands=[];
+ const deps={
+  './database':{db:async()=>({query:async(sql,params)=>{
+   assert.equal(params[0],call.id);
+   return {rows:sql.startsWith('SELECT')?[call]:[]};
+  }})},
+  './credential-crypto':{decryptCredential:value=>value},
+  './vicidial':{vicidialRequest:async(_server,_user,_key,fields)=>{
+   commands.push(fields);
+   return 'ERROR: no active call found';
+  }},
+  './vicidial-config':{},
+  './vicidial-bridge':{requestBridge:async()=>assert.fail('Native-only hangup must not close AudioSocket')},
+  './vicidial-results':{},
+ };
+ const m={exports:{}};
+ new Function('require','module','exports',ts.transpileModule(fs.readFileSync('lib/vicidial-controls.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(name=>deps[name],m,m.exports);
+ const hangup=()=>m.exports.vicidialCallCommand(call.id,'hangup',undefined,false,true);
+ assert.equal((await hangup()).status,200);
+ assert.deepEqual(commands,[{function:'ra_call_control',agent_user:'78603',value:native.callerid,stage:'HANGUP'}]);
+ call.transfer_status='SUBMITTED';
+ assert.equal((await hangup()).status,409);
+ call.transfer_status='';
+ call.vicidial_call_id=null;
+ const unlinked=await hangup();
+ assert.equal(unlinked.status,409);
+ assert.equal((await unlinked.json()).nativeHangupPending,true);
+ assert.equal(commands.length,1);
+});

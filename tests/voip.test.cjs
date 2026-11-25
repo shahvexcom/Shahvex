@@ -66,3 +66,93 @@ test('Test connection accepts actual browser Host when the internal Next URL use
  const c=load('lib/voip-controller.ts',{'server-only':{},'next/headers':{cookies:async()=>({get:()=>({value:'fixture'})})},'./session':{ADMIN_SESSION_COOKIE:'admin',readSession:async()=>({role:'ADMIN',agentId:'owner'})},'./database':{db:async()=>pool},'./credential-crypto':{decryptCredential:()=> 'secret'},'./vicidial':{...vici,testVicidial:async()=>{tests++;return{status:'CONNECTED',message:'API verified'};},readVicidialVersion:async()=>({})}});
  const r=await c.postVoip(new Request('http://0.0.0.0:3000/api/admin/voip',{method:'POST',headers:{host:'localhost:3000',origin:'http://localhost:3000','content-type':'application/json'},body:JSON.stringify({action:'test',id:'connection'})}),'admin');assert.notEqual(r.status,403);assert.equal(tests,1);
 });
+
+test('server bridge defaults override client values and are never returned as plaintext', async () => {
+  const previous = { ...process.env };
+  const secret = 'fixture-server-bridge-secret-with-32-characters';
+  process.env.SHAHVEX_VICIDIAL_BRIDGE_URL = 'https://bridge.example.test';
+  process.env.SHAHVEX_VICIDIAL_BRIDGE_SECRET = secret;
+  process.env.CREDENTIAL_ENCRYPTION_KEY = 'fixture-encryption-key';
+  const queries = [];
+  const tx = { release() {}, async query(sql, params) {
+    queries.push({ sql, params });
+    if (sql.startsWith('INSERT INTO voip_connections')) return { rows: [{ id: params[0] }] };
+    if (sql.startsWith('UPDATE voip_connections')) return { rows: [{ id: params[2], hasBridgeSecret: true }] };
+    return { rows: [] };
+  } };
+  const pool = { connect: async () => tx, query: async sql => ({
+    rows: sql.startsWith('SELECT id,admin_role') ? [{ admin_role: 'SUPER_ADMIN' }] : [],
+  }) };
+  const controller = load('lib/voip-controller.ts', {
+    'server-only': {}, 'next/headers': { cookies: async () => ({ get: () => ({ value: 'fixture' }) }) },
+    './session': { readSession: async () => ({ role: 'ADMIN', agentId: 'owner' }) },
+    './database': { db: async () => pool }, './vicidial': vici,
+    './credential-crypto': { encryptCredential: value => value === secret ? 'encrypted-default' : 'encrypted-api' },
+  });
+  try {
+    const get = await controller.getVoip(new Request('https://site.example.test/api/admin/voip'), 'admin');
+    const response = await get.text();
+    assert.equal(response.includes(secret), false);
+    assert.deepEqual(JSON.parse(response).bridgeDefaults, { url: 'https://bridge.example.test', configured: true });
+    const post = await controller.postVoip(new Request('https://site.example.test/api/admin/voip', {
+      method: 'POST', headers: { origin: 'https://site.example.test' },
+      body: JSON.stringify({
+        action: 'save', name: 'Dialer', serverUrl: 'https://dialer.example.test', username: 'dialer',
+        secret: 'api-secret', method: 'NON_AGENT_API', enabled: true, bridgeSecret: 'client-value',
+        liveConfig: { enabled: true, remoteUsers: ['78618'], transferInGroup: 'SALES', bridgeUrl: 'https://client.example.test' },
+      }),
+    }), 'admin');
+    assert.equal(post.status, 201);
+    const update = queries.find(entry => entry.sql.startsWith('UPDATE voip_connections'));
+    assert.equal(update.params[1], 'encrypted-default');
+    assert.equal(update.params[5], 'https://bridge.example.test');
+    assert.equal(JSON.parse(update.params[0]).bridgeUrl, undefined);
+    assert.equal(queries.at(-1).sql, 'COMMIT');
+  } finally {
+    for (const key of ['SHAHVEX_VICIDIAL_BRIDGE_URL', 'SHAHVEX_VICIDIAL_BRIDGE_SECRET', 'CREDENTIAL_ENCRYPTION_KEY']) {
+      if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
+    }
+  }
+});
+
+test('controller can save a BPO extension route when eligible and rejects conflicts and active queues', async () => {
+  const liveConfig = {
+    enabled: true, directAudioMode: true, remoteUsers: ['78618'],
+    directAudioLines: [{ agentId: 'other', prefix: '3548', remoteUser: '78618' }],
+  };
+  let eligible = true, active = false, saved;
+  const tx = { release() {}, async query(sql, params) {
+    if (sql.startsWith('SELECT c.id,c.live_config')) {
+      assert.equal(params[3], true);
+      assert.match(sql, /b\.agent_id=candidate\.id/);
+      return { rows: eligible ? [{ id: 'bpo-connection', live_config: liveConfig }] : [] };
+    }
+    if (sql.startsWith('SELECT 1 FROM vicidial_pool_agents')) return { rowCount: Number(active) };
+    if (sql.startsWith('UPDATE voip_connections')) saved = JSON.parse(params[1]);
+    return { rows: [] };
+  } };
+  const pool = { connect: async () => tx, query: async sql => {
+    if (sql.startsWith('SELECT id,admin_role')) return { rows: [{ admin_permissions: ['voip'] }] };
+    return { rowCount: 1 };
+  } };
+  const controller = load('lib/voip-controller.ts', {
+    'server-only': {}, 'next/headers': { cookies: async () => ({ get: () => ({ value: 'fixture' }) }) },
+    './session': { readSession: async () => ({ role: 'ADMIN', agentId: 'controller' }) },
+    './database': { db: async () => pool }, './vicidial': vici, './credential-crypto': {},
+  });
+  const assign = prefix => controller.postVoip(new Request('https://site.example.test/api/admin/voip', {
+    method: 'POST', headers: { origin: 'https://site.example.test' },
+    body: JSON.stringify({ action: 'save-direct-route', connectionId: 'bpo-connection', agentId: 'bpo-agent', remoteUser: '78619', prefix }),
+  }), 'admin');
+  assert.equal((await assign('3548')).status, 409);
+  active = true;
+  assert.equal((await assign('3549')).status, 409);
+  active = false;
+  eligible = false;
+  assert.equal((await assign('3549')).status, 404);
+  assert.equal(saved, undefined);
+  eligible = true;
+  assert.equal((await assign('3549')).status, 200);
+  assert.deepEqual(saved.directAudioLines.at(-1), { agentId: 'bpo-agent', prefix: '3549', remoteUser: '78619' });
+  assert.deepEqual(saved.remoteUsers, ['78618', '78619']);
+});

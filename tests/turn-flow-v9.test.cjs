@@ -7,21 +7,21 @@ const wait=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(f,limit=4000){const end=Date.now()+limit;while(!f()){if(Date.now()>end)throw Error('Timed out');await wait(10);}}
 const q1='Are you getting any money back on a card each month?',q2='Do you have Medicare Part A or Part B or Medicaid?',q3='Are you between 60 and 80 years old?';
 const config={name:'Lauren',voice:'v9-fixture',first:'customer',goal:'Discuss coverage review',task:'Ask the configured questions',instructions:'',script:'Hi, this is Lauren from Wellness Team. I am calling to discuss a coverage review.\n'+q1+'\n'+q2+'\n'+q3+'\nLet me connect you with a licensed specialist.',knowledge:'',style:'Natural'};
-function fixture({tts, stt, confidence}={}){
+function fixture({tts, stt, confidence, model, owner='v9-owner',maxSessions=1}={}){
  const original=global.fetch,secret='v9-fixture-'.repeat(4);let models=0,recognitions=0,id;
  global.fetch=async (url,init)=>{
   if(String(url).includes('11434')){
    models++;
    const customer=JSON.parse(init.body).messages.findLast(message=>message.role==='user')?.content;
-   const content=/You know\?/i.test(customer||'')?'':'A licensed specialist reviews the details. '+q2;
+   const content=model ? model(customer) : /You know\?/i.test(customer||'')?'':'A licensed specialist reviews the details. '+q2;
    return new Response(JSON.stringify({message:{content},done:true})+'\n');
   }
   if(String(url).includes('8766')){recognitions++;return Response.json({text:stt?.() ?? 'Hello',confidence});}
   if (tts) return tts(url,init);
   return new Response(new Uint8Array(4800).fill(12),{headers:{'x-audio-format':'pcm_s16le','x-sample-rate':'24000','x-channels':'1'}});
  };
- const service=createTesterService({secret,testHooks:true});
- const request=(action,body,headers={})=>new Request('http://fixture/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':secret,'x-shahvex-owner':'v9-owner','x-shahvex-session':id||'none','x-shahvex-turn':crypto.randomUUID(),'content-type':'application/json',...headers},body:body instanceof Buffer?body:JSON.stringify(body)});
+ const service=createTesterService({secret,testHooks:true,maxSessions});
+ const request=(action,body,headers={})=>new Request('http://fixture/tester/'+action,{method:'POST',headers:{'x-shahvex-ai-key':secret,'x-shahvex-owner':owner,'x-shahvex-session':id||'none','x-shahvex-turn':crypto.randomUUID(),'content-type':'application/json',...headers},body:body instanceof Buffer?body:JSON.stringify(body)});
  const dispatch=(action,body,headers)=>service.dispatch(request(action,body,headers));
  const turn=async (body,{ack=true}={})=>{const r=await dispatch('turn',body);assert.equal(r.status,200);const events=(await r.text()).trim().split('\n').filter(Boolean).map(JSON.parse);assert.deepEqual(events.filter(e=>e.type==='error'),[]);if(ack&&events.some(e=>e.type==='pcm'))await dispatch('playback-complete',{completedTurnId:events.find(e=>e.type==='done')?.turnId});return {text:events.filter(e=>e.type==='delta').map(e=>e.text).join(''),id:events.find(e=>e.type==='done')?.turnId,events};};
  return {service,dispatch,turn,async start(first='customer',overrides={}){id=(await(await dispatch('start',{agentId:'v9-agent',requirePlaybackAck:true,config:{...config,first,...overrides}})).json()).id;return service.sessionStore.get(id);},async close(){if(id)await dispatch('stop',{});global.fetch=original;},get models(){return models;},get recognitions(){return recognitions;}};
@@ -652,4 +652,370 @@ test('a cancelled hearing replay releases the worker and retries once', async ()
   } finally {
     await f.close();
   }
+});
+
+test('native scripted turns accept short answers and resume the pending question after an identity question', async()=>{
+ const spoken=[];
+ const f=fixture({owner:'vici-repair-fixture',tts:(_url,init)=>{
+  spoken.push(JSON.parse(init.body).text);
+  return new Response(sourcePcm(400,120),{headers:pcmHeaders});
+ }});
+ try{
+  const session=await f.start('ai');
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  const first=await f.turn({text:'Okay'},{ack:false});
+  assert(first.events.some(e=>e.type==='pcm'));
+  await f.dispatch('interrupt',{});
+  const next=await f.turn({text:'No'});
+  assert(next.events.some(e=>e.type==='business-outcome'));
+  assert.equal(session.questionLedger.get(questionKey(q1)).response,'No');
+  assert.match(next.text,/Medicare Part A/);
+  const third=await f.turn({text:'Yes'});
+  assert(third.events.some(e=>e.type==='business-outcome'));
+  assert.match(third.text,/between 60/);
+  const side=await f.turn({text:'Who are you?'});
+  assert.match(side.text,/Lauren.*Wellness Team/i);
+  assert(!side.events.some(e=>e.type==='question-disposition'&&e.outcome==='unclear'));
+  assert.match(side.text,/between 60/);
+  for(const q of [q1,q2])assert.equal(spoken.filter(text=>text.includes(q)).length,1,q);
+  assert.equal(spoken.filter(text=>text.includes(q3)).length,1);
+  assert.match(side.text,/could you tell me whether you are between 60/i);
+ }finally{await f.close();}
+});
+
+test('native silence advances the script and records the unanswered question', async()=>{
+ const f=fixture({owner:'vici-silent-continuation'});
+ try{
+  const session=await f.start('ai');
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  assert.equal((await f.turn({text:'Okay'})).text,q1);
+  const continuation=await f.turn({silenceStep:1});
+  assert.equal(continuation.text,q2);
+  assert(continuation.events.some(e=>e.type==='question-disposition'&&e.questionId===questionKey(q1)&&e.outcome==='unanswered'));
+  assert.equal(session.questionLedger.get(questionKey(q2)).status,'delivered');
+  assert.equal((await f.turn({text:'Yes'})).text,q3);
+ }finally{await f.close();}
+});
+
+test('native transfer discussion resumes the same announcement without asking permission again', async()=>{
+ const f=fixture({owner:'vici-transfer-followup'});
+ try{
+  await f.start('ai');
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  await f.turn({text:'Okay'});
+  await f.turn({text:'No'});
+  await f.turn({text:'Yes'});
+  const handoff=await f.turn({text:'Yes'});
+  assert(handoff.events.some(e=>e.type==='handoff-announcement'));
+  const stale=await f.dispatch('turn',{text:'Who is the specialist?',interruptedHandoff:crypto.randomUUID()});
+  assert.equal(stale.status,409);
+  const followup=await f.turn({text:'Who is the specialist?',interruptedHandoff:handoff.id});
+  assert(followup.text.endsWith('Let me connect you with a licensed specialist.'),followup.text);
+  assert(!followup.text.includes('?'));
+  assert(followup.events.some(e=>e.type==='handoff-announcement'&&e.turnId===followup.id));
+ }finally{await f.close();}
+});
+
+test('a directed insult ends the native voice turn immediately without TTS', async()=>{
+ const f=fixture({owner:'vici-abuse-fixture'});
+ try{
+  await f.start('ai');
+  await f.turn({opening:true});
+  const reply=await f.turn({text:'You are an asshole.'});
+  assert(!reply.events.some(e=>e.type==='pcm'||e.type==='delta'));
+  assert(reply.events.some(e=>e.type==='end_call'&&e.reason==='abusive_language'&&e.immediate));
+ }finally{await f.close();}
+});
+
+test('native progression writes each scripted question once to an AudioSocket peer', async()=>{
+ const originalTempo=process.env.SHAHVEX_SPEECH_TEMPO;
+ process.env.SHAHVEX_SPEECH_TEMPO='1';
+ let socket, received=Buffer.alloc(0), heard='', opening=0;
+ const frames=[], requests=[], playback=new Set();
+ const waveCodes=new Map([[q1,1010],[q2,1420],[q3,1830]]);
+ const f=fixture({owner:'vici-socket-repair-fixture',stt:()=>heard,confidence:0.99,
+  tts:(_url,init)=>{
+   const text=JSON.parse(init.body).text;
+   requests.push(text);
+   return new Response(sourcePcm(waveCodes.get(text)||530,120),{headers:pcmHeaders});
+  },
+ });
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'repair-native-audiosocket-'));
+ const bridge=createBridge({siteUrl:'https://fixture.invalid',connectionId:crypto.randomUUID(),
+  secret:'repair-socket-fixture-'.repeat(4),spoolDir:dir,testOnly:true,allowUnregisteredManualAudio:true,logger:()=>{},
+  fetchImpl:async(_url,init)=>{
+   const e=JSON.parse(init.body);
+   if(e.action==='connected')return Response.json({callId:crypto.randomUUID(),first:'ai',mediaReady:true});
+   if(e.opening)opening++;
+   if(e.action==='playback-complete')playback.add(e.completedTurnId);
+   return ['turn','listen','interrupt','playback-complete'].includes(e.action)
+    ? f.dispatch(e.action,e.audio?Buffer.from(e.audio,'base64'):e,{
+      'content-type':e.audio?'audio/wav':'application/json','x-shahvex-turn':e.eventId,
+      'x-shahvex-completed-turn':e.completedTurnId||'',
+    })
+    : Response.json({saved:true});
+  },
+ });
+ async function say(text, expectedCode){
+  const previous=frames.length, previousPlayback=playback.size;
+  heard=text;
+  socket.write(Buffer.concat([
+   ...Array.from({length:10},()=>packet(0x10,sourcePcm(3000,20).subarray(0,320))),
+   ...Array.from({length:35},()=>packet(0x10,Buffer.alloc(320))),
+  ]));
+  await until(()=>playback.size>previousPlayback && frames.slice(previous).some(frame=>frame.readInt16LE(100)===expectedCode));
+ }
+ try{
+  const session=await f.start('ai');
+  await new Promise((resolve,reject)=>{bridge.audio.once('error',reject);bridge.audio.listen(0,'127.0.0.1',resolve);});
+  socket=net.connect(bridge.audio.address().port,'127.0.0.1');
+  socket.on('data',data=>{
+   received=Buffer.concat([received,data]);
+   while(received.length>=3&&received.length>=3+received.readUInt16BE(1)){
+    const end=3+received.readUInt16BE(1);
+    if(received[0]===0x10)frames.push(received.subarray(3,end));
+    received=received.subarray(end);
+   }
+  });
+  await new Promise((resolve,reject)=>{socket.once('error',reject);socket.once('connect',resolve);});
+  socket.write(packet(1,crypto.randomBytes(16)));
+  await until(()=>session.introPlaybackComplete);
+  await say('Okay',530);
+  await say('Okay',1010);
+  await say('No',1420);
+  await say('Yes',1830);
+  assert.equal(opening,1);
+  for(const question of waveCodes.keys())assert.equal(requests.filter(text=>text===question).length,1);
+ }finally{
+  socket?.destroy();bridge.close();await wait(50);await f.close();fs.rmSync(dir,{recursive:true,force:true});
+  if(originalTempo===undefined)delete process.env.SHAHVEX_SPEECH_TEMPO;
+  else process.env.SHAHVEX_SPEECH_TEMPO=originalTempo;
+ }
+});
+
+test('scenario actions use the native worker event path', async () => {
+ const cases = [
+  {text:'I think so, can you check?', event:'handoff-announcement', reason:'assistance', retained:'I think so'},
+  {text:'Maybe, would you verify it for me?', event:'handoff-announcement', reason:'assistance', retained:'Maybe'},
+  {text:'Let me check', spoken:/take your time/, pending:true},
+  {text:'No', event:'business-answer', spoken:/Medicare Part A/},
+  {text:'Yes', event:'business-answer', spoken:/Medicare Part A/},
+  {text:"I can't tell", event:'question-disposition', spoken:/Medicare Part A/},
+  {text:'Hello?', pending:true},
+  {text:'Just put me through to someone', event:'handoff-announcement', reason:'requested'},
+  {text:'Not interested, please transfer me', event:'end_call', reason:'customer_request'},
+  {text:"Don't call me again, can you transfer me?", event:'dnc-request', also:'end_call'},
+  {text:'Call me later', event:'end_call', spoken:/can't schedule a callback/},
+  {text:'[TRANSFER]', event:'question-disposition', spoken:/Medicare Part A/},
+ ];
+ for (const item of cases) {
+  const f=fixture({owner:'vici-scenario-action'});
+  try {
+   const session=await f.start('ai');
+   await f.turn({opening:true});
+   await f.turn({text:'Okay'});
+   assert.equal((await f.turn({text:'Okay'})).text,q1);
+   const {events,text}=await f.turn({text:item.text});
+   const event=events.find(e=>e.type===item.event);
+   if(item.event) assert.ok(event,item.text);
+   if(item.also) assert.ok(events.some(e=>e.type===item.also),item.text);
+   if(item.reason) assert.equal(event.scenarioHandoff || event.reason,item.reason,item.text);
+   if(item.retained) assert.ok(events.some(e=>e.type==='business-answer'&&e.response===item.retained),item.text);
+   if(item.spoken) assert.match(text,item.spoken,item.text);
+   if(item.pending) assert.equal(session.questionOutcomes.has(questionKey(q1)),false,item.text);
+   assert(!text.includes(q1),item.text);
+   assert(!text.includes('[TRANSFER]'),item.text);
+   assert.equal(events.filter(e=>e.type==='handoff-announcement').length,item.event==='handoff-announcement'?1:0,item.text);
+   assert.equal(f.models,0,item.text);
+  } finally { await f.close(); }
+ }
+});
+
+test('Lauren rephrases a question once and advances on a second clarification request', async () => {
+ const f=fixture({owner:'vici-scenario-repeat'});
+ try {
+  const session=await f.start('ai');
+  await f.turn({opening:true});
+  const replay=await f.turn({text:'Hello?'});
+  assert.match(replay.text,/^Hi, this is Lauren/);
+  await f.turn({text:'Okay'});
+  assert.equal((await f.turn({text:'Okay'})).text,q1);
+  const first=await f.turn({text:'What then?'});
+  assert.equal(first.text,'Of course, could you tell me whether you are getting any money back on a card each month?');
+  assert.equal(session.rephrasedQuestions.size,1);
+  const second=await f.turn({text:'I say what?'});
+  assert.equal(second.text,q2);
+  assert(second.events.some(e=>e.type==='question-disposition'&&e.questionId===questionKey(q1)&&e.outcome==='unclear'));
+  assert.equal(f.models,0);
+ } finally { await f.close(); }
+});
+
+test('REC-001170 mmm-hmm counts as yes on a pending yes/no question and advances',async()=>{
+ const f=fixture({owner:'vici-lauren-mmm-hmm'});
+ try{
+  const second='Do you live in Texas?';
+  await f.start('ai',{script:config.script.replace(q2,second)});
+  await f.turn({opening:true});
+  await f.turn({text:'Okay.'});
+  assert.equal((await f.turn({text:'Okay.'})).text,q1);
+  const why=await f.turn({text:'Why I tell you'});
+  assert.match(why.text,/helps me understand.*could you tell me whether/i);
+  assert(!why.events.some(event=>event.type==='business-answer'));
+  const acknowledgment=await f.turn({text:'Mmm-hmm.'});
+  assert.equal(acknowledgment.text,second);
+  assert(acknowledgment.events.some(event=>event.type==='pcm'));
+  assert(acknowledgment.events.some(event=>event.type==='business-answer'&&event.response==='Mmm-hmm.'&&event.interpretedAs==='yes'));
+  assert(!acknowledgment.events.some(event=>event.type==='question-disposition'));
+  const negative=await f.turn({text:'Uh, no.'});
+  assert.equal(negative.text,q3);
+  assert(negative.events.some(event=>event.type==='business-answer'&&event.interpretedAs==='no'));
+  assert.equal(f.models,0);
+ }finally{await f.close();}
+});
+
+test('REC-001170 clipped wellbeing delivers purpose and waits before screening',async()=>{
+ const f=fixture({owner:'vici-lauren-clipped-intro'});
+ try{
+  await f.start('ai');
+  await f.turn({opening:true});
+  await f.turn({text:'Hello.'});
+  const purpose=await f.turn({text:"I'm good at"});
+  assert.match(purpose.text,/calling to discuss a coverage review/i);
+  assert(!purpose.text.includes(q1));
+  assert.equal((await f.turn({text:'Okay.'})).text,q1);
+  assert.equal(f.models,0);
+ }finally{await f.close();}
+});
+
+test('Lauren answers a side question and stays on the rebate step through an unrelated reply',async()=>{
+ const f=fixture({owner:'vici-lauren-detour',model:input=>input.includes('at work')
+  ? 'I understand you are at work.' : 'I can only explain the review process.'});
+ try{
+  await f.start('ai');
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  assert.equal((await f.turn({text:'Okay'})).text,q1);
+  for (const [text,reply] of [["I'm at work right now.",'I understand you are at work.'],
+                           ['Can you explain what this means?','I can only explain the review process.']]) {
+   const turn=await f.turn({text});
+   assert.ok(turn.text.startsWith(reply),turn.text);
+   assert.match(turn.text,/could you tell me whether you are getting any money back/i);
+   assert(!turn.events.some(event=>['business-answer','question-disposition','handoff-announcement'].includes(event.type)));
+  }
+  assert.equal((await f.turn({text:'No.'})).text,q2);
+ }finally{await f.close();}
+});
+
+test('Lauren gives fast health and personal replies and resumes the correct script step',async()=>{
+ const f=fixture({owner:'vici-lauren-health-personal'});
+ const age='Are you in the age of 50 to 80?';
+ try{
+  await f.start('ai',{script:config.script.replace(q2+'\n'+q3,age)});
+  await f.turn({opening:true});
+  await f.turn({text:'Okay.'});
+  assert.equal((await f.turn({text:'Okay.'})).text,q1);
+  for(const [text,answer] of [['Are you a smoker?',/don't smoke.*lung cancer/i],
+                               ['Are you drinking?',/don't drink alcohol.*liver/i],
+                               ['Are you getting nicotine?',/don't use nicotine.*addictive/i]]){
+   const reply=await f.turn({text});
+   assert.match(reply.text,answer);
+   assert.match(reply.text,/could you tell me whether you are getting any money back/i);
+   assert(!reply.events.some(e=>e.type==='business-answer'||e.type==='handoff-announcement'));
+  }
+  const compound=await f.turn({text:'No are you married?'});
+  assert.match(compound.text,/don't have a spouse.*are you in the age of 50 to 80/i);
+  assert(compound.events.some(e=>e.type==='business-answer'&&/^no/i.test(e.response)));
+  const final=await f.turn({text:'Yes do you have any kids?'});
+  assert.match(final.text,/don't have a family.*let me connect/i);
+  assert(final.events.some(e=>e.type==='handoff-announcement'&&e.turnId===final.id));
+  assert.equal(f.models,0);
+ }finally{await f.close();}
+});
+
+test('Lauren asks the age question after the rephrased rebate question before transfer', async () => {
+ const f=fixture({owner:'vici-lauren-checklist'});
+ const rebate='Are you currently getting any rebate or money back on a card each month?';
+ const age='are you in the age of 50 to 80?';
+ const script=`Hi there, this is Lauren with Wellness Team. I am calling about a coverage review. ${rebate}
+ Perfect, it looks like you may have a refund owed.
+ so just let me know ${age}
+ VOICEMAIL RESTRICTION:
+ End the call silently if it is confirmed as voicemail.
+ Let me connect you with a licensed specialist.`;
+ try {
+  assert.deepEqual(scriptQuestionProgress(script,{completed:[]}).map(step=>step.question),[rebate,age]);
+  await f.start('ai',{script});
+  await f.turn({opening:true});
+  await f.turn({text:'Okay'});
+  assert.equal((await f.turn({text:'Okay'})).text,rebate);
+  assert.match((await f.turn({text:'What?'})).text,/could you tell me whether/);
+  const ageTurn=await f.turn({text:'No.'});
+  assert.equal(ageTurn.text.toLowerCase(),age);
+  assert(!ageTurn.events.some(event=>event.type==='handoff-announcement'));
+  assert((await f.turn({text:'Yes.'})).events.some(event=>event.type==='handoff-announcement'));
+  assert.equal(f.models,0);
+ } finally { await f.close(); }
+});
+
+test('scenario no branches are scoped and a coverage explanation never replays the question', async () => {
+ for (const [question, input, event, speech] of [
+  [q3, 'No.', 'end_call', /Goodbye/],
+  [q2, 'No.', 'end_call', /Goodbye/],
+  [q2, "What's Part B?", 'question-disposition', /Part B is Medicare medical coverage/],
+ ]) {
+  const f=fixture({owner:'vici-scenario-scope'});
+  try {
+   await f.start('ai',{script:config.script.replace([q1,q2,q3].join('\n'),question+'\n'+q1)});
+   await f.turn({opening:true});
+   await f.turn({text:'Okay'});
+   assert.equal((await f.turn({text:'Okay'})).text,question);
+   const turn=await f.turn({text:input});
+   assert.ok(turn.events.some(e=>e.type===event));
+   assert.match(turn.text,speech);
+   assert(!turn.text.includes(question));
+  } finally { await f.close(); }
+ }
+});
+
+test('concurrent native calls do not share question rephrase budgets', async () => {
+ const f1=fixture({owner:'vici-scenario-first',maxSessions:2}),f2=fixture({owner:'vici-scenario-second',maxSessions:2});
+ try {
+  const ready=async f=>{
+   const session=await f.start('ai');
+   await f.turn({opening:true});
+   await f.turn({text:'Okay'});
+   await f.turn({text:'Okay'});
+   return session;
+  };
+  const [first,second]=await Promise.all([ready(f1),ready(f2)]);
+  await f1.turn({text:'Repeat please.'});
+  await f1.turn({text:'What did you ask?'});
+  assert.equal(first.rephrasedQuestions.size,1);
+  assert.equal(second.rephrasedQuestions,undefined);
+  const replay=await f2.turn({text:'Repeat please.'});
+  assert.match(replay.text,/^Of course, could you tell me whether/);
+  assert.equal(second.rephrasedQuestions.size,1);
+  assert.equal((await f2.turn({text:"Yes."})).text,q2);
+  assert.equal(first.rephrasedQuestions.size,1);
+ } finally {
+  await f2.close();
+  await f1.close();
+ }
+});
+
+test('native customer-first opens only when the bridge requests a silence introduction', async () => {
+ const f = fixture({owner:'vici-customer-first'});
+ try {
+  await f.start();
+  assert.equal((await f.turn({opening:true})).text, '');
+  const intro = await f.turn({opening:true,silenceOpening:true});
+  assert.match(intro.text,/Lauren.*Wellness Team/);
+  assert.ok(intro.events.some(event => event.type === 'pcm'));
+  assert.ok((await f.turn({text:'Doing well, thanks.'})).text);
+ } finally {
+  await f.close();
+ }
 });

@@ -78,3 +78,28 @@ body .quick-dial-billing { padding: 16px 20px; border: 1px solid #e0cdbb; backgr
   body .bpo-agent-modal { padding: 26px 22px; }
   body .bpo-agent-card-actions { flex-wrap: wrap; }
 }
+
+
+body .bpo-dial-agent dl {
+  gap: 8px;
+  margin-block: 14px;
+  padding-block: 10px;
+}
+
+body .bpo-dial-agent dl > div {
+  padding-block: 2px;
+}
+
+body .bpo-dial-agent .bpo-dial-blocker {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff3e2;
+  color: #714517;
+  font-size: 13px;
+}
+
+body .bpo-call-progress-empty {
+  min-height: 0;
+  padding-block: 26px;
+}

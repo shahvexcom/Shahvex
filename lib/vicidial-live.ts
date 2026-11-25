@@ -94,6 +94,10 @@ export async function startVicidialAgent(
     await client.query("SELECT pg_advisory_lock(hashtextextended($1,0))", [
       lock,
     ]);
+    const latest = await assignedVicidial(agentId, client);
+    if (!latest || latest.id !== c.id || latest.revision !== c.revision || latest.campaign_id !== c.campaign_id) {
+      throw Error("The VICIdial route changed during startup. Retry from the current campaign.");
+    }
     const found = await client.query(
       `SELECT a.id,a.name,a.local_voice_id,a.speaks_first,a.conversation_style,a.daily_call_limit,
       COALESCE(NULLIF(BTRIM(a.agent_script),''),s.script_text,'') script_text,b.bpo_id,b.is_active,b.dialing_mode
@@ -210,7 +214,7 @@ export async function startVicidialAgent(
       {
         name: a.name,
         voice: a.local_voice_id,
-        first: "ai",
+        first: a.speaks_first === "customer" ? "customer" : "ai",
         script: a.script_text,
         style: a.conversation_style || "Professional",
       },

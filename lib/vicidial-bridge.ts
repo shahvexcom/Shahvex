@@ -38,7 +38,7 @@ export function verifyBridgeSignature(secret: string, timestamp: string, signatu
   return timingSafeEqual(Buffer.from(signature, "hex"), Buffer.from(bridgeSignature(secret, timestamp, method, path, body), "hex"));
 }
 /** Pinned, bounded transport; never forwards credentials on redirects. */
-export async function requestBridge(base: string, secret: string, path: "/health" | "/prepare" | "/command", value?: unknown) {
+export async function requestBridge(base: string, secret: string, path: "/health" | "/prepare" | "/command", value?: unknown, timeoutMs = 12000) {
   const url = new URL(base);
   vicidialURL(`${url.origin}/`); // Same explicit private-host/HTTP policy as the dialer.
   if (url.username || url.password || url.search || url.hash || url.pathname !== "/") throw Error("Use the audio bridge origin URL without a path");
@@ -65,7 +65,7 @@ export async function requestBridge(base: string, secret: string, path: "/health
       response.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { reject(Error("Invalid bridge response")); } });
       response.on("error", () => reject(Error("Audio bridge response failed")));
     });
-    const timer = setTimeout(() => req.destroy(Error("Audio bridge timed out")), 12000);
+    const timer = setTimeout(() => req.destroy(Error("Audio bridge timed out")), timeoutMs);
     req.on("close", () => clearTimeout(timer)); req.on("error", () => reject(Error("Audio bridge unavailable; check the URL, secret and firewall"))); req.end(body);
   });
 }

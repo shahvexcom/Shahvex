@@ -17,7 +17,7 @@ test('incoming local calls use each selected voice; authenticated selections per
  try{
   const port=server.bridge.control.address().port;
   assert.equal((await signed(port,null,'wrong-key')).status,401);
-  for(const id of ['lissa','emma','olivia']){
+  for(const id of ['lissa','emma','olivia','lauren']){
    const agent={...initial(),name:id[0].toUpperCase()+id.slice(1),voice:id};
    assert.equal((await signed(port,agent)).status,200);
    assert.equal(JSON.parse(fs.readFileSync(configPath)).agent.voice,id);
@@ -33,7 +33,7 @@ test('incoming local calls use each selected voice; authenticated selections per
    await wait(async()=>{await server.bridge.flushEvents();return !(await(await signed(port)).json()).calls.some(c=>c.status==='ANSWERED');});
   }
   const invalid=await signed(port,{...initial(),voice:'af_heart'});assert.equal(invalid.status,400);
-  assert.equal((await(await signed(port)).json()).agent.voice,'olivia');
+  assert.equal((await(await signed(port)).json()).agent.voice,'lauren');
  }finally{socket?.destroy();await server.close();fs.rmSync(folder,{recursive:true,force:true});}
 });
 test('failed selection persistence restores the old in-memory agent',async()=>{
@@ -43,15 +43,15 @@ test('failed selection persistence restores the old in-memory agent',async()=>{
 });
 function apiHarness({allowed=true,owner='owner',row={initial_script:'Use your configured name and answer naturally.',local_url:'http://127.0.0.1:8792',local_secret_ciphertext:'stored-secret'}}={}){
  const m={exports:{}},queries=[];
- const deps={'./database':{db:async()=>({query:async(sql,args)=>{queries.push({sql,args});return {rows:[row]};}})},'./voip-controller':{principal:async()=>owner},'./credential-crypto':{encryptCredential:v=>'encrypted:'+v,decryptCredential:()=>secret},'./agent-script-details':{defaultInitialScript:'Default initial script'},'./local-voice-registry':{savedVoiceCatalog:async id=>{assert.equal(id,'owner');return {voices:allowed?[{id:'lissa'},{id:'emma'},{id:'olivia'}]:[]};}}};
+ const deps={'./database':{db:async()=>({query:async(sql,args)=>{queries.push({sql,args});return {rows:[row]};}})},'./voip-controller':{principal:async()=>owner},'./credential-crypto':{encryptCredential:v=>'encrypted:'+v,decryptCredential:()=>secret},'./agent-script-details':{defaultInitialScript:'Default initial script'},'./local-voice-registry':{savedVoiceCatalog:async id=>{assert.equal(id,'owner');return {voices:allowed?[{id:'lissa'},{id:'emma'},{id:'olivia'},{id:'lauren'}]:[]};}}};
  new Function('require','module','exports',ts.transpileModule(fs.readFileSync('lib/local-monitor-connection.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText)(n=>deps[n]||require(n),m,m.exports);return {api:m.exports,queries};
 }
 const req=(voice,extra={})=>new Request('http://localhost/api/admin/live-monitor/local',{method:'POST',headers:{'content-type':'application/json',origin:'http://localhost'},body:JSON.stringify({url:'http://127.0.0.1:8792',name:'Voice agent',voice,first:'ai',...extra})});
-test('website API forwards all three approved choices using the authenticated owner and rejects unknown, unapproved or spoofed choices',async()=>{
+test('website API forwards all four approved choices using the authenticated owner and rejects unknown, unapproved or spoofed choices',async()=>{
  const original=global.fetch,requests=[];
  global.fetch=async(url,init)=>{requests.push({url,init});const {agent}=JSON.parse(init.body);return Response.json({testOnly:true,calls:[],agent});};
  try{
-  for(const voice of ['lissa','emma','olivia']){const h=apiHarness();const response=await h.api.localMonitorConnection('admin',req(voice));assert.equal(response.status,200);assert.equal(JSON.parse(requests.at(-1).init.body).agent.voice,voice);assert.equal(h.queries.at(-1).args[0],'owner');}
+  for(const voice of ['lissa','emma','olivia','lauren']){const h=apiHarness();const response=await h.api.localMonitorConnection('admin',req(voice));assert.equal(response.status,200);assert.equal(JSON.parse(requests.at(-1).init.body).agent.voice,voice);assert.equal(h.queries.at(-1).args[0],'owner');}
   const prior=requests.length;
   assert.equal((await apiHarness().api.localMonitorConnection('admin',req('af_heart'))).status,400);
   assert.equal((await apiHarness().api.localMonitorConnection('admin',req('emma',{owner:'foreign'}))).status,400);

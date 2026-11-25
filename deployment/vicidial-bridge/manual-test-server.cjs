@@ -53,7 +53,7 @@ function manualCallbacks({agent,request,callLimitSeconds=120,maxCalls=1}){
     if(v.action==='interrupt')return request('interrupt',{method:'POST',headers:{'content-type':'application/json','x-shahvex-session':c.sessionId},body:'{}',signal:init.signal},c.owner);
     if(v.action==='turn'){
       if(Date.now()>c.expires)return new Response('{"type":"end_call"}\n',{headers:{'content-type':'application/x-ndjson'}});
-      const body=v.audio?Buffer.from(v.audio,'base64'):JSON.stringify({text:v.text||'',opening:v.opening===true,...(v.silenceStep?{silenceStep:v.silenceStep}:{})});
+      const body=v.audio?Buffer.from(v.audio,'base64'):JSON.stringify({text:v.text||'',opening:v.opening===true,silenceOpening:v.silenceOpening===true,...(v.silenceStep?{silenceStep:v.silenceStep}:{})});
       const response=await request('turn',{method:'POST',headers:{'content-type':v.audio?'audio/wav':'application/json','x-shahvex-session':c.sessionId,'x-shahvex-turn':v.eventId},body,signal:init.signal},c.owner);
       if(!response.ok||!response.body)return response;
       c.conversation_state='THINKING';
